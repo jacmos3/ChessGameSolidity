@@ -13,14 +13,28 @@ contract ChessCore {
     int8 constant ROOK = ChessMediaLibrary.ROOK;
     int8 constant QUEEN = ChessMediaLibrary.QUEEN;
     int8 constant KING = ChessMediaLibrary.KING;
+    
+    uint8 constant ROW_BLACK_PIECES = 0;
+    uint8 constant ROW_BLACK_PAWNS = 1;
+    uint8 constant ROW_BLACK_PAWNS_LONG_OPENING = 3;
+    uint8 constant ROW_WHITE_PAWNS_LONG_OPENING = 4;
+    uint8 constant ROW_WHITE_PAWNS = 6;
+    uint8 constant ROW_WHITE_PIECES = 7;
+    uint8 constant COL_SHORTW_LONGB_ROOK = 0;
+    uint8 constant COL_LONGW_SHORTB_ROOK = 7;
+    uint8 constant COL_BISHOP = 2;
+    uint8 constant COL_QUEEN = 3;
+    uint8 constant COL_KING = 4;
+    uint8 constant COL_KNIGHT = 6;
+    
 
     bool private whiteKingMoved;
-    bool private whiteLeftRookMoved;
-    bool private whiteRightRookMoved;
+    bool private whiteShortRookMoved;
+    bool private whiteLongRookMoved;
 
     bool private blackKingMoved;
-    bool private blackLeftRookMoved;
-    bool private blackRightRookMoved;
+    bool private blackLongRookMoved;
+    bool private blackShortRookMoved;
     uint public betting;
 
     event Debug(int8 player, uint8 startX, uint8 startY, uint8 endX, uint8 endY, string comment);
@@ -40,7 +54,15 @@ contract ChessCore {
         currentPlayer = _whitePlayer;
         betting = _value;
     }
-   
+    
+    /* //for debugging
+    constructor(){
+        initializeBoard();
+        whitePlayer = 0x5B38Da6a701c568545dCfcB03FcB875f56beddC4;
+        currentPlayer = 0x5B38Da6a701c568545dCfcB03FcB875f56beddC4;
+        betting = address(this).balance;
+    }
+   */
    receive() external payable {
         require(gameState == GameState.NotStarted, "Game has already started");
     }
@@ -67,7 +89,7 @@ contract ChessCore {
         board[0][6] = -KNIGHT;
         board[0][7] = -ROOK;
         for (uint8 i = 0; i < 8; i++) {
-            board[1][i] = -PAWN;
+            board[ROW_BLACK_PAWNS][i] = -PAWN;
         }
 
         // Set up black pieces
@@ -80,15 +102,15 @@ contract ChessCore {
         board[7][6] = KNIGHT;
         board[7][7] = ROOK;
         for (uint8 i = 0; i < 8; i++) {
-            board[6][i] = PAWN;
+            board[ROW_WHITE_PAWNS][i] = PAWN;
         }
 
         whiteKingMoved = false;
-        whiteLeftRookMoved = false;
-        whiteRightRookMoved = false;
+        whiteShortRookMoved = false;
+        whiteLongRookMoved = false;
         blackKingMoved = false;
-        blackLeftRookMoved = false;
-        blackRightRookMoved = false;
+        blackLongRookMoved = false;
+        blackShortRookMoved = false;
         
     }
 
@@ -99,13 +121,13 @@ contract ChessCore {
     function isPawnMoveValid(uint8 startX, uint8 startY, uint8 endX, uint8 endY, int8 piece, int8 target) private pure returns (bool) {
         // Check if pawn is moving forward
         if (startY == endY && target == 0) {
-            if (piece == PAWN) { // White pawn
-                if (endX == startX + 1 || (startX == 1 && endX == 3)) {
+            if (piece == -PAWN) { // black pawn
+                if (endX == startX + 1 || (startX == ROW_BLACK_PAWNS && endX == ROW_BLACK_PAWNS_LONG_OPENING)) {
                     return true;
                 }
             } 
-            else { // Black pawn
-                if (endX == startX - 1 || (startX == 6 && endX == 4)) {
+            else { // white pawn
+                if (endX == startX - 1 || (startX == ROW_WHITE_PAWNS && endX == COL_KING)) {
                     return true;
                 }
             }
@@ -113,14 +135,17 @@ contract ChessCore {
 
         // Check if pawn is capturing diagonally
         if (abs(int8(endY) - int8(startY)) == 1) {
-            if (piece == 1 && endX == startX + 1 && target < 0) { // White pawn captures black piece
+            if (piece == PAWN && endX == startX + 1 && target < 0) { // White pawn captures black piece
                 return true;
             } 
             else
-            if (piece == -1 && endX == startX - 1 && target > 0) { // Black pawn captures white piece
+            if (piece == -PAWN && endX == startX - 1 && target > 0) { // Black pawn captures white piece
                 return true;
             }
         }
+
+
+        //TODO: to add the en-passant move
         
         return false;
     }
@@ -254,8 +279,8 @@ contract ChessCore {
         }
 
         // Verifica se le caselle attraversate sono libere
-        if (startY == 4 && (endY == 2 || endY == 6)) {
-            uint8 rookY = (endY == 2) ? 0 : 7;
+        if (startY == COL_KING && (endY == COL_BISHOP || endY == COL_KNIGHT)) {
+            uint8 rookY = (endY == COL_KNIGHT) ? COL_SHORTW_LONGB_ROOK : COL_LONGW_SHORTB_ROOK;
             for (uint8 i = minY(startY, endY); i <= maxY(startY, endY); i++) {
                 if (board[startX][i] != EMPTY || isSquareUnderAttack(player, startX, i) || isSquareUnderAttack(player, rookY, i)) {
                     return false;
@@ -271,23 +296,23 @@ contract ChessCore {
         int8 target = board[endX][endY];
 
         // Check if the move is a king move and update kingMoved accordingly
-        if (abs(int8(endY) - int8(startY)) == 2 && abs(piece) == uint8(KING)) {
+        if (abs(int8(endY) - int8(startY)) == COL_BISHOP && abs(piece) == uint8(KING)) {
             if (currentPlayer == whitePlayer) {
-                if (startX == 7 && startY == 4 && !whiteKingMoved) {
-                    // Check if it's a valid right castling
-                    if (endY == 6 && !whiteRightRookMoved && abs(board[startX][7]) == uint8(ROOK)
-                    // Check if it's a valid left castling
-                    || endY == 2 && !whiteLeftRookMoved && abs(board[startX][0]) == uint8(ROOK)){
+                if (startX == ROW_WHITE_PIECES && startY == COL_KING && !whiteKingMoved) {
+                    // Check if it's a valid long castling
+                    if ((uint8(ROOK) == abs(board[startX][COL_LONGW_SHORTB_ROOK]) && endY == COL_QUEEN && !whiteLongRookMoved)
+                    // Check if it's a valid short castling
+                    || (uint8(ROOK) == abs(board[startX][COL_SHORTW_LONGB_ROOK]) && endY == COL_BISHOP && !whiteShortRookMoved)){
                         return true;
                     }
                 }
             } 
             else {
-                if (startX == 7 && startY == 4 && !blackKingMoved) {
-                    // Check if it's a valid right castling
-                    if (endY == 6 && !blackRightRookMoved && abs(board[startX][7]) == uint8(ROOK)
-                    // Check if it's a valid left castling) {
-                    || endY == 2 && !blackLeftRookMoved && abs(board[startX][0]) == uint8(ROOK)){
+                if (startX == ROW_BLACK_PIECES && startY == COL_KING && !blackKingMoved) {
+                    // Check if it's a valid short castling
+                    if ((uint8(ROOK) == abs(board[startX][COL_SHORTW_LONGB_ROOK]) && endY == COL_KNIGHT && !blackShortRookMoved)
+                    // Check if it's a valid long castling) {
+                    || (uint8(ROOK) == abs(board[startX][COL_LONGW_SHORTB_ROOK]) && endY == COL_BISHOP && !blackLongRookMoved)){
                         return true;
                     }
                 }
@@ -313,20 +338,20 @@ contract ChessCore {
             if (abs(piece) == uint8(ROOK)) {
 
                 // Check if the move is a rook move and update rookMoved
-                if (startX == 0 && startY == 0 && !whiteLeftRookMoved) {
-                    whiteLeftRookMoved = true;
+                if (startX == ROW_WHITE_PIECES && startY == COL_SHORTW_LONGB_ROOK && !whiteShortRookMoved) {
+                    whiteShortRookMoved = true;
                 } 
                 else 
-                if (startX == 0 && startY == 7 && !whiteRightRookMoved) {
-                    whiteRightRookMoved = true;
+                if (startX == ROW_WHITE_PIECES && startY == COL_LONGW_SHORTB_ROOK && !whiteLongRookMoved) {
+                    whiteLongRookMoved = true;
                 }
                 else 
-                if (startX == 7 && startY == 0 && !blackLeftRookMoved) {
-                    blackLeftRookMoved = true;
+                if (startX == ROW_BLACK_PIECES && startY == COL_LONGW_SHORTB_ROOK && !blackLongRookMoved) {
+                    blackLongRookMoved = true;
                 }
                 else 
-                if (startX == 7 && startY == 7 && !blackRightRookMoved) {
-                    blackRightRookMoved = true;
+                if (startX == ROW_BLACK_PIECES && startY == COL_SHORTW_LONGB_ROOK && !blackShortRookMoved) {
+                    blackShortRookMoved = true;
                 }
                 
                 return isRookMoveValid(startX, startY, endX, endY, piece, target);
@@ -358,7 +383,7 @@ contract ChessCore {
             // Check if bishop or queen
             uint8 i = 1;
             while (i < deltaX) {
-                if (board[uint(int(int8(startX) + int8(i) * stepX))][uint(int(int8(startY) + int8(i) * stepY))] != 0) {
+                if (EMPTY != board[uint(int(int8(startX) + int8(i) * stepX))][uint(int(int8(startY) + int8(i) * stepY))]) {
                     return false;
                 }
                 i++;
@@ -369,7 +394,7 @@ contract ChessCore {
             // Check if rook or queen moves vertically
             uint8 i = 1;
             while (i < deltaY) {
-                if (board[uint256(startX)][uint256(startY) + uint256(int256(int8(i) * int8(stepY)))] != 0) {
+                if (EMPTY != board[uint256(startX)][uint256(startY) + uint256(int256(int8(i) * int8(stepY)))]) {
                     return false;
                 }
                 i++;
@@ -380,7 +405,7 @@ contract ChessCore {
             // Check if rook or queen moves horizontally
             uint8 i = 1;
             while (i < deltaX) {
-                if (board[uint256(startX) + uint256(int256(int8(i) * stepX))][uint256(startY)] != 0) {
+                if (EMPTY != board[uint256(startX) + uint256(int256(int8(i) * stepX))][uint256(startY)]) {
                     return false;
                 }
                 i++;
@@ -421,7 +446,7 @@ contract ChessCore {
         board[startX][startY] = EMPTY;
 
         // Check if the move is a king move and update kingMoved accordingly
-        if (abs(int8(endY) - int8(startY)) == 2 && abs(int8(board[startX][startY])) == uint8(KING)) {
+        if (uint8(KING) == abs(int8(board[startX][startY])) && abs(int8(endY) - int8(startY)) == 2 ) {
             
             if (currentPlayer == whitePlayer) {
                 if (whiteKingMoved){
@@ -443,14 +468,14 @@ contract ChessCore {
             // Move the rook during castling
             if (endY == 6) {
                 // Right castling
-                board[startX][5] = board[startX][7];
-                board[startX][7] = EMPTY;
+                board[startX][5] = board[startX][COL_LONGW_SHORTB_ROOK];
+                board[startX][COL_LONGW_SHORTB_ROOK] = EMPTY;
             } 
             else 
             if (endY == 2) {
                 // Left castling
-                board[startX][3] = board[startX][0];
-                board[startX][0] = EMPTY;
+                board[startX][COL_QUEEN] = board[startX][COL_SHORTW_LONGB_ROOK];
+                board[startX][COL_SHORTW_LONGB_ROOK] = EMPTY;
             }
         }
 
@@ -651,63 +676,63 @@ contract ChessCore {
     }
 
     function pieceToString(int8 piece) internal pure returns (string memory) {
-        if (piece == 0) {
-            return "_";
+        if (piece == EMPTY) {
+            return "0";
         } 
         else 
         if (piece == PAWN) {
-            return "P";
+            return "1";
         } 
         else 
         if (piece == KNIGHT) {
-            return "C";
+            return "2";
         } 
         else 
         if (piece == BISHOP) {
-            return "A";
+            return "3";
         } 
         else 
         if (piece == ROOK) {
-            return "T";
+            return "4";
         } 
         else 
         if (piece == QUEEN) {
-            return "RG";
+            return "5";
         } 
         else 
         if (piece == KING) {
-            return "RE";
+            return "6";
         } 
         else 
         if (piece == -PAWN) {
-            return "p";
+            return "-1";
         } 
         else 
         if (piece == -KNIGHT) {
-            return "c";
+            return "-2";
         } 
         else 
         if (piece == -BISHOP) {
-            return "a";
+            return "-3";
         } 
         else 
         if (piece == -ROOK) {
-            return "t";
+            return "-4";
         } 
         else 
         if (piece == -QUEEN) {
-            return "rg";
+            return "-5";
         } 
         else 
         if (piece == -KING) {
-            return "re";
+            return "-6";
         } 
         else {
             return "XXXX";
         }
     }
 
-    // Add a function to get the current players
+    // Add a function to get the curr   ent players
     function getCurrentPlayers() public view returns (address, address) {
         return (whitePlayer, blackPlayer);
     }
@@ -719,6 +744,10 @@ contract ChessCore {
 
     function printChessBoardLayoutSVG() external view returns (string memory) {
         return board.getCurrentBoard();
+    }
+
+    function test() external pure {
+        while(true){}
     }
 
 
