@@ -33,6 +33,5 @@ contract ChessNFT is ERC721Enumerable, Ownable {
         _mint(msg.sender, gameId);
         gameNFTs[gameId] = msg.sender;
     }
-    
 
 }
