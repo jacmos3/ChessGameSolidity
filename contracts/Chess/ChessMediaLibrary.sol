@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.22;
+import "../Utility/Base64Library.sol";
 
 library ChessMediaLibrary {
-    int8 constant EMPTY = 0;
-    int8 constant PAWN = 1;
-    int8 constant KNIGHT = 2;
-    int8 constant BISHOP = 3;
-    int8 constant ROOK = 4;
-    int8 constant QUEEN = 5;
-    int8 constant KING = 6;
+    int8 public constant EMPTY = 0;
+    int8 public constant PAWN = 1;
+    int8 public constant KNIGHT = 2;
+    int8 public constant BISHOP = 3;
+    int8 public constant ROOK = 4;
+    int8 public constant QUEEN = 5;
+    int8 public constant KING = 6;
 
     function toString(uint value) internal pure returns (string memory) {
         if (value == 0) {
@@ -34,7 +35,7 @@ library ChessMediaLibrary {
         return string(buffer);
     }
 
-    function getPieceCharacter(int8 piece, string memory x, string memory y) public pure returns (string memory) {
+    function getPieceCharacter(int8 piece, string memory x, string memory y) internal pure returns (string memory) {
         string memory token;
         bool isWhite = piece < 0 ? false : true;
         if (!isWhite){
@@ -71,8 +72,15 @@ library ChessMediaLibrary {
         return generatePiece(token, x, y, isWhite ? "#000" : "#fff");
     }
 
+    function metadata(uint256 tokenId) internal pure returns (string memory){
+        //TODO
+        tokenId = 1;
+        string memory toRet = "";
+        return toRet;
+    }
 
     function getCurrentBoard(int8[8][8] memory board) external pure returns (string memory) {
+        uint tokenId = 0;
         string memory result = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 400'>";
         result = string(abi.encodePacked(result, getBoardSquares()));   
         string memory black = "<g fill='#000' font-family='Arial, sans-serif' font-size='60'>";
@@ -93,9 +101,11 @@ library ChessMediaLibrary {
         }
 
         result = string(abi.encodePacked(result, white, "</g>", black, "</g>", "</svg>"));
-        return result;
+        
+        string memory json = Base64Library.encode(bytes(string(abi.encodePacked('{"name": "Match #', toString(tokenId), '", "description": "This is the match", "image": "data:image/svg+xml;base64,', Base64Library.encode(bytes(result)), '","attributes":[',metadata(tokenId),']}'))));
+        return string(abi.encodePacked('data:application/json;base64,', json));
+        
     }
-
 
     function generatePiece(string memory symbol, string memory x, string memory y, string memory color) internal pure returns (string memory) {
         return string(abi.encodePacked(
@@ -110,7 +120,7 @@ library ChessMediaLibrary {
 
     }
 
-    function getBoardSquares() public pure returns (string memory){
+    function getBoardSquares() internal pure returns (string memory){
         uint8 size = 50;
         
         string memory toRet = generateSquare("0","0","400","400","#808080");
