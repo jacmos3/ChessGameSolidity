@@ -3,9 +3,9 @@ pragma solidity ^0.8.22;
 import "@openzeppelin/contracts/utils/Strings.sol";
 import "./ChessMediaLibrary.sol";
 contract ChessCore {
-    using ChessMediaLibrary for int8[8][8];
-
-    int8[8][8] public board;
+    uint8 constant BOARD_SIZE = 8;
+    using ChessMediaLibrary for int8[BOARD_SIZE][BOARD_SIZE];
+    int8[BOARD_SIZE][BOARD_SIZE] public board;
     int8 constant EMPTY = ChessMediaLibrary.EMPTY;
     int8 constant PAWN = ChessMediaLibrary.PAWN;
     int8 constant KNIGHT = ChessMediaLibrary.KNIGHT;
@@ -20,12 +20,18 @@ contract ChessCore {
     uint8 constant ROW_WHITE_PAWNS_LONG_OPENING = 4;
     uint8 constant ROW_WHITE_PAWNS = 6;
     uint8 constant ROW_WHITE_PIECES = 7;
+
     uint8 constant COL_SHORTW_LONGB_ROOK = 0;
-    uint8 constant COL_LONGW_SHORTB_ROOK = 7;
+    uint8 constant COL_UNNAMED_KNIGHT = 1;
     uint8 constant COL_BISHOP = 2;
     uint8 constant COL_QUEEN = 3;
     uint8 constant COL_KING = 4;
+    uint8 constant COL_UNNAMED_BISHOP = 5;
     uint8 constant COL_KNIGHT = 6;
+    uint8 constant COL_LONGW_SHORTB_ROOK = 7;
+    
+    int8 constant PLAYER_WHITE = 1;
+    int8 constant PLAYER_BLACK = -1;
     
 
     bool private whiteKingMoved;
@@ -54,12 +60,13 @@ contract ChessCore {
         currentPlayer = _whitePlayer;
         betting = _value;
     }
-    
-    /* //for debugging
+   /* 
+    //for debugging
     constructor(){
         initializeBoard();
         whitePlayer = 0x5B38Da6a701c568545dCfcB03FcB875f56beddC4;
         currentPlayer = 0x5B38Da6a701c568545dCfcB03FcB875f56beddC4;
+        blackPlayer = 0xAb8483F64d9C6d1EcF9b849Ae677dD3315835cb2;
         betting = address(this).balance;
     }
    */
@@ -67,7 +74,7 @@ contract ChessCore {
         require(gameState == GameState.NotStarted, "Game has already started");
     }
 
-    function switchTurn() internal {
+    function switchTurn() public  {
         currentPlayer = (currentPlayer == whitePlayer) ? blackPlayer : whitePlayer;
     }
 
@@ -80,29 +87,29 @@ contract ChessCore {
 
     function initializeBoard() private {
         // Set up white pieces
-        board[0][0] = -ROOK;
-        board[0][1] = -KNIGHT;
-        board[0][2] = -BISHOP;
-        board[0][3] = -QUEEN;
-        board[0][4] = -KING;
-        board[0][5] = -BISHOP;
-        board[0][6] = -KNIGHT;
-        board[0][7] = -ROOK;
-        for (uint8 i = 0; i < 8; i++) {
-            board[ROW_BLACK_PAWNS][i] = -PAWN;
+        board[ROW_BLACK_PIECES][COL_SHORTW_LONGB_ROOK] = -ROOK;
+        board[ROW_BLACK_PIECES][COL_UNNAMED_KNIGHT] = -KNIGHT;
+        board[ROW_BLACK_PIECES][COL_BISHOP] = -BISHOP;
+        board[ROW_BLACK_PIECES][COL_QUEEN] = -QUEEN;
+        board[ROW_BLACK_PIECES][COL_KING] = -KING;
+        board[ROW_BLACK_PIECES][COL_UNNAMED_BISHOP] = -BISHOP;
+        board[ROW_BLACK_PIECES][COL_KNIGHT] = -KNIGHT;
+        board[ROW_BLACK_PIECES][COL_LONGW_SHORTB_ROOK] = -ROOK;
+        for (uint8 col = 0; col < BOARD_SIZE; col++) {
+            board[ROW_BLACK_PAWNS][col] = -PAWN;
         }
 
         // Set up black pieces
-        board[7][0] = ROOK;
-        board[7][1] = KNIGHT;
-        board[7][2] = BISHOP;
-        board[7][3] = QUEEN;
-        board[7][4] = KING;
-        board[7][5] = BISHOP;
-        board[7][6] = KNIGHT;
-        board[7][7] = ROOK;
-        for (uint8 i = 0; i < 8; i++) {
-            board[ROW_WHITE_PAWNS][i] = PAWN;
+        board[ROW_WHITE_PIECES][COL_SHORTW_LONGB_ROOK] = ROOK;
+        board[ROW_WHITE_PIECES][COL_UNNAMED_KNIGHT] = KNIGHT;
+        board[ROW_WHITE_PIECES][COL_BISHOP] = BISHOP;
+        board[ROW_WHITE_PIECES][COL_QUEEN] = QUEEN;
+        board[ROW_WHITE_PIECES][COL_KING] = KING;
+        board[ROW_WHITE_PIECES][COL_UNNAMED_BISHOP] = BISHOP;
+        board[ROW_WHITE_PIECES][COL_KNIGHT] = KNIGHT;
+        board[ROW_WHITE_PIECES][COL_LONGW_SHORTB_ROOK] = ROOK;
+        for (uint8 col = 0; col < BOARD_SIZE; col++) {
+            board[ROW_WHITE_PAWNS][col] = PAWN;
         }
 
         whiteKingMoved = false;
@@ -227,20 +234,20 @@ contract ChessCore {
         // Find the position of the player's king
         uint8 kingX;
         uint8 kingY;
-        for (uint8 i = 0; i < 8; i++) {
-            for (uint8 j = 0; j < 8; j++) {
-                if (board[i][j] == player * KING) {
-                    kingX = i;
-                    kingY = j;
+        for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
+            for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
+                if (board[rowPiece][colPiece] == player * KING) {
+                    kingX = rowPiece;
+                    kingY = colPiece;
                 }
             }
         }
 
         // Check if any of the opponent's pieces can attack the king
-        for (uint8 i = 0; i < 8; i++) {
-            for (uint8 j = 0; j < 8; j++) {
-                if (player * board[i][j] < 0) { // Check if piece belongs to opponent
-                    if (isValidMove(i, j, kingX, kingY)) {
+        for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
+            for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
+                if (player * board[rowPiece][colPiece] < 0) { // Check if piece belongs to opponent
+                    if (isValidMove(rowPiece, colPiece, kingX, kingY)) {
                         return true;
                     }
                 }
@@ -251,11 +258,11 @@ contract ChessCore {
     }
 
     function isSquareUnderAttack(int8 player, uint8 x, uint8 y) internal returns (bool) {
-        for (uint8 i = 0; i < 8; i++) {
-            for (uint8 j = 0; j < 8; j++) {
+        for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
+            for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
                 //check if the opponent pieces can do a valid move to that square
-                if (currentPlayer == whitePlayer && board[i][j] * player < 0 && isValidMove(i, j, x, y)
-                || currentPlayer == blackPlayer && board[i][j] * player > 0 && isValidMove(i,j, x, y)) {
+                if (currentPlayer == whitePlayer && board[rowPiece][colPiece] * player < 0 && isValidMove(rowPiece, colPiece, x, y)
+                || currentPlayer == blackPlayer && board[rowPiece][colPiece] * player > 0 && isValidMove(rowPiece,colPiece, x, y)) {
                     return true;
                 }
             }
@@ -281,8 +288,8 @@ contract ChessCore {
         // Verifica se le caselle attraversate sono libere
         if (startY == COL_KING && (endY == COL_BISHOP || endY == COL_KNIGHT)) {
             uint8 rookY = (endY == COL_KNIGHT) ? COL_SHORTW_LONGB_ROOK : COL_LONGW_SHORTB_ROOK;
-            for (uint8 i = minY(startY, endY); i <= maxY(startY, endY); i++) {
-                if (board[startX][i] != EMPTY || isSquareUnderAttack(player, startX, i) || isSquareUnderAttack(player, rookY, i)) {
+            for (uint8 col = minY(startY, endY); col <= maxY(startY, endY); col++) {
+                if (board[startX][col] != EMPTY || isSquareUnderAttack(player, startX, col) || isSquareUnderAttack(player, rookY, col)) {
                     return false;
                 }
             }
@@ -365,6 +372,7 @@ contract ChessCore {
                 return isKingMoveValid(startX, startY, endX, endY, piece, target);
             }
             
+            
         }
         else{
         
@@ -428,7 +436,7 @@ contract ChessCore {
          //matching the current color player with the color number to check if it is moving it's own pieces
         int8 playerColor = 1;
         if (currentPlayer == blackPlayer){
-            playerColor *= -1;
+            playerColor *= PLAYER_BLACK;
         }
         require(board[startX][startY] * playerColor > 0, "You can only move your own pieces");
         _;
@@ -480,12 +488,12 @@ contract ChessCore {
         }
 
        // Check if the move resulted in a check or checkmate
-        if (isKingInCheck(-1)) { //black
-            gameState = isCheckmate(-1, endX, endY) ? GameState.WhiteWins : GameState.InProgress;
+        if (isKingInCheck(PLAYER_BLACK)) {
+            gameState = isCheckmate(PLAYER_BLACK, endX, endY) ? GameState.WhiteWins : GameState.InProgress;
         } 
         else 
-        if (isKingInCheck(1)) { //white
-            gameState = isCheckmate(1, endX, endY) ? GameState.BlackWins : GameState.InProgress;
+        if (isKingInCheck(PLAYER_WHITE)) {
+            gameState = isCheckmate(PLAYER_WHITE, endX, endY) ? GameState.BlackWins : GameState.InProgress;
         }
         else {
             gameState = isStalemate() ? GameState.Draw : GameState.InProgress;
@@ -500,11 +508,11 @@ contract ChessCore {
         uint8 kingX;
         uint8 kingY;
 
-        for (uint8 i = 0; i < 8; i++) {
-            for (uint8 j = 0; j < 8; j++) {
-                if (board[i][j] == player * KING) {
-                    kingX = i;
-                    kingY = j;
+        for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
+            for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
+                if (board[colPiece][rowPiece] == player * KING) {
+                    kingX = colPiece;
+                    kingY = rowPiece;
                     break;
                 }
             }
@@ -515,10 +523,10 @@ contract ChessCore {
             for (int8 j = -1; j <= 1; j++) {
                 int8 x = int8(kingX) + i;
                 int8 y = int8(kingY) + j;
-                if (x > -1
-                    && x < 8 
-                    && y > -1
-                    && y < 8
+                if (x >= 0
+                    && x < int8(BOARD_SIZE)
+                    && y >= 0
+                    && y < int8(BOARD_SIZE)
                     && (i != 0 
                         || j != 0
                     )
@@ -541,20 +549,22 @@ contract ChessCore {
 
     // Check if the game is in stalemate
     function isStalemate() internal returns (bool) {
-        int8 player = (currentPlayer == whitePlayer) ? int8(1) : -1;
+        int8 player = (currentPlayer == whitePlayer) ? int8(PLAYER_WHITE) : int8(PLAYER_BLACK);
 
         //TODO I think this can be removed, since it is override by the for loops at the bottom
-        if (canKingMove(player)) {
-            return false;
-        }
+       // if (canKingMove(player)) {
+       //     return false;
+       // }
 
         // Check if there are other valid moves for current player pieces
-        for (uint8 i = 0; i < 8; i++) {
-            for (uint8 j = 0; j < 8; j++) {
-                if (board[i][j] * player > 0 ) { // If the piece belongs to the current player
-                    for (uint8 k = 0; k < 8; k++) {
-                        for (uint8 l = 0; l < 8; l++) {
-                            if (board[k][l] != board[i][j] && isValidMove(i, j, k, l)) {
+        for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
+            for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
+                // If we find a piece belonging to the current player, then check if it can perform a move
+                if (board[rowPiece][colPiece] * player > 0 ) { 
+                    for (uint8 row_target = 0; row_target < BOARD_SIZE; row_target++) {
+                        for (uint8 col_target = 0; col_target < BOARD_SIZE; col_target++) {
+                            if (board[row_target][col_target] != board[rowPiece][colPiece] 
+                                && isValidMove(rowPiece, colPiece, row_target, col_target)) {
                                 return false;
                             }
                         }
@@ -590,17 +600,17 @@ contract ChessCore {
 
 
     // Check if the player pieces can capture the attacking piece
-    function canCaptureAttacker(int8 player, uint8 attackerI, uint8 attackerJ) internal returns (bool) {
+    function canCaptureAttacker(int8 player, uint8 rowAttacker, uint8 colAttacker) internal returns (bool) {
         // Iterate over all pieces on the board
-        for (uint8 i = 0; i < 8; i++) {
-            for (uint8 j = 0; j < 8; j++) {
+        for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
+            for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
                 // Skip empty squares and pieces belonging to the attacker
-                if (board[i][j] == EMPTY || board[i][j] * player < 0 || (i == attackerI && j == attackerJ)) {
+                if (board[rowPiece][colPiece] == EMPTY || board[rowPiece][colPiece] * player < 0 || (rowPiece == rowAttacker && colPiece == colAttacker)) {
                     continue;
                 }
 
                 // Check if the piece can capture the attacking piece
-                if (isValidMove(i, j, attackerI, attackerJ)) {
+                if (isValidMove(rowPiece, colPiece, rowAttacker, colAttacker)) {
                     // A piece can capture the attacking piece
                     return true;
                 }
@@ -611,34 +621,33 @@ contract ChessCore {
         return false;
     }
 
-    function canBlockAttack(uint8 attackerI, uint8 attackerJ) internal returns (bool) {
+    function canBlockAttack(uint8 rowAttacker, uint8 colAttacker) internal returns (bool) {
         // Iterate over all pieces on the board
-        for (uint8 i = 0; i < 8; i++) {
-            for (uint8 j = 0; j < 8; j++) {
+        for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
+            for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
                 // Determine the direction of the attack
-                int8 di = int8(int(uint256(attackerI - i)));
-                int8 dj = int8(int(uint256(attackerJ - j)));
+                int8 deltaRow = int8(int(uint256(rowAttacker - rowPiece)));
+                int8 dj = int8(int(uint256(colAttacker - colPiece)));
                 // Determine the step size for moving along the attack direction
                 int8 stepi = 0;
                 int8 stepj = 0;
-                if (di != 0) {
-                    stepi = di / int8(int(uint(abs(di))));
+                if (deltaRow != 0) {
+                    stepi = deltaRow / int8(int(uint(abs(deltaRow))));
                 }
                 if (dj != 0) {
                     stepj = dj / int8(int(uint(abs(dj))));
                 }
 
-
                 // Iterate over all squares along the attack direction
-                uint8 currentI = uint8(int8(i) + stepi);
-                uint8 currentJ = uint8(int8(j) + stepj);
-                if (currentI < 8 && currentJ < 8) {
-                    while (currentI != attackerI || currentJ != attackerJ) {
-                        if (currentI >= 0 && currentI < 8 && currentJ >= 0 && currentJ < 8) {
+                uint8 currentI = uint8(int8(rowPiece) + stepi);
+                uint8 colCurrent = uint8(int8(colPiece) + stepj);
+                if (currentI < BOARD_SIZE && colCurrent < BOARD_SIZE) {
+                    while (currentI != rowAttacker || colCurrent != colAttacker) {
+                        if (currentI >= 0 && currentI < BOARD_SIZE && colCurrent >= 0 && colCurrent < BOARD_SIZE) {
                             // Check if the square can be blocked by a friendly piece
-                            if (board[currentI][currentJ] != EMPTY && board[currentI][currentJ] * board[i][j] > 0) {
+                            if (board[currentI][colCurrent] != EMPTY && board[currentI][colCurrent] * board[rowPiece][colPiece] > 0) {
                                 // Check if the blocking piece can move to the blocking square
-                                if (isValidMove(currentI, currentJ, i, j)) {
+                                if (isValidMove(currentI, colCurrent, rowPiece, colPiece)) {
                                     // A piece can block the attack
                                     return true;
                                 }
@@ -647,13 +656,11 @@ contract ChessCore {
 
                         // Move to the next square along the attack direction
                         currentI = uint8(int8(currentI) + stepi);
-                        currentJ = uint8(int8(currentJ) + stepj);
-                        
+                        colCurrent = uint8(int8(colCurrent) + stepj);
                     }
                 }
             }
         }
-
 
         // No any piece can block the attack
         return false;
@@ -663,10 +670,10 @@ contract ChessCore {
     function printBoard() public view returns (string memory) {
     string memory boardString = "";
 
-    for (uint8 i = 0; i < 8; i++) {
-        for (uint8 j = 0; j < 8; j++) {
+    for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
+        for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
             // Aggiungi il valore del pezzo alla stringa
-            boardString = string(abi.encodePacked(boardString, pieceToString(board[i][j]), " "));
+            boardString = string(abi.encodePacked(boardString, pieceToString(board[rowPiece][colPiece]), " "));
         }
         // Aggiungi una nuova riga alla fine di ogni riga della scacchiera
         boardString = string(abi.encodePacked(boardString, "\n"));
