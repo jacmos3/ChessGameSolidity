@@ -14,19 +14,17 @@ contract ChessFactory {
     }
 
     function createChessGame() public payable {
-        require(msg.value > 0, "Send an amount greater than zero");
+        //require(msg.value > 0, "Send an amount greater than zero");
 
         ChessCore newChessGame = new ChessCore{value: msg.value}(msg.sender, msg.value);
         deployedChessGames.push(address(newChessGame));
         totalChessGames++;
 
         ChessNFT(addressNFT).createGameNFT(totalChessGames - 1, address(newChessGame));
-        
     }
 
     function getDeployedChessGames() public view returns (address[] memory) {
         return deployedChessGames;
     }
-
 
 }

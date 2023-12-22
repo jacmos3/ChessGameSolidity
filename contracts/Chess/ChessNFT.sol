@@ -11,19 +11,15 @@ interface IChessCore {
     
 contract ChessNFT is ERC721Enumerable, Ownable {
     using ChessMediaLibrary for uint8[8][8];
-    IChessCore public chessCore;
-    address public chessCoreAddress;
     mapping(uint256 => address) public gameNFTs;
     address[] public gameAddresses;
 
     constructor(address _initialOwner) ERC721("ChessNFT", "Chess") Ownable(_initialOwner) {
-         //chessCore = new ChessCore{value: msg.value}(initialOwner, _value);
     }
     
     function tokenURI(uint256 _tokenId) public view virtual override returns (string memory) {
         address gameAddress = gameAddresses[_tokenId];
         IChessCore c = IChessCore(gameAddress);
-        //ChessCore chessCoreInstance = ChessCore(gameAddress);
         return c.printChessBoardLayoutSVG();
     }
 

@@ -52,7 +52,7 @@ contract ChessCore {
     address whitePlayer;
     address blackPlayer;
     address currentPlayer;
-
+/*
     constructor(address _whitePlayer, uint _value) payable {
         // Chiamare initializeBoard nel costruttore
         initializeBoard();
@@ -60,7 +60,7 @@ contract ChessCore {
         currentPlayer = _whitePlayer;
         betting = _value;
     }
-   /* 
+  */  
     //for debugging
     constructor(){
         initializeBoard();
@@ -69,7 +69,7 @@ contract ChessCore {
         blackPlayer = 0xAb8483F64d9C6d1EcF9b849Ae677dD3315835cb2;
         betting = address(this).balance;
     }
-   */
+   
    receive() external payable {
         require(gameState == GameState.NotStarted, "Game has already started");
     }
