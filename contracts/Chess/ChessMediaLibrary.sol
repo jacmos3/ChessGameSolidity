@@ -43,33 +43,59 @@ library ChessMediaLibrary {
         }
 
         if (piece == KING) {
-            token = "&#9818;";
+            token = "&#9812;";
         }
         else
         if (piece == QUEEN) {
-            token = "&#9819;";
+            token = "&#9813;";
         }
         else
         if (piece == ROOK) {
-            token = "&#9820;";
+            token = "&#9814;";
         }
         else
         if (piece == BISHOP) {
-            token = "&#9821;";
+            token = "&#9815;";
         }
         else
         if (piece == KNIGHT) {
-            token = "&#9822;";
+            token = "&#9816;";
         }
         else
         if (piece == PAWN) {
+            token = "&#9817;";
+        }
+        /*
+        else 
+        if (piece == -KING) {
+            token = "&#9818;";
+        }
+        else
+        if (piece == -QUEEN) {
+            token = "&#9819;";
+        }
+        else
+        if (piece == -ROOK) {
+            token = "&#9820;";
+        }
+        else
+        if (piece == -BISHOP) {
+            token = "&#9821;";
+        }
+        else
+        if (piece == -KNIGHT) {
+            token = "&#9822;";
+        }
+        else
+        if (piece == -PAWN) {
             token = "&#9823;";
         }
-        else {
+        */
+        else{
             token = "";
         }
 
-        return generatePiece(token, x, y, isWhite ? "#000" : "#fff");
+        return generatePiece(token, x, y, isWhite ? "#fff" : "#000");
     }
 
     function metadata(uint256 tokenId) internal pure returns (string memory){
@@ -83,8 +109,8 @@ library ChessMediaLibrary {
         uint tokenId = 0;
         string memory result = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 400'>";
         result = string(abi.encodePacked(result, getBoardSquares()));   
-        string memory black = "<g fill='#000' font-family='Arial, sans-serif' font-size='60'>";
-        string memory white = "<g fill='#fff' font-family='Arial, sans-serif' font-size='60'>";                
+        string memory black = "<g fill='#000' font-family='arial unicode ms,Helvetica,Arial,sans-serif' font-size='40'>";
+        string memory white = "<g fill='#fff' font-family='arial unicode ms,Helvetica,Arial,sans-serif' font-size='40'>";
         for (uint16 i = 0; i < 8; i++) {
             for (uint16 j = 0; j < 8; j++) {
                 string memory x = toString(j * 50 + 25);
@@ -102,14 +128,14 @@ library ChessMediaLibrary {
 
         result = string(abi.encodePacked(result, white, "</g>", black, "</g>", "</svg>"));
         
-        string memory json = Base64Library.encode(bytes(string(abi.encodePacked('{"name": "Match #', toString(tokenId), '", "description": "This is the match", "image": "data:image/svg+xml;base64,', Base64Library.encode(bytes(result)), '","attributes":[',metadata(tokenId),']}'))));
+        string memory json = Base64Library.encode(bytes(string(abi.encodePacked('{"name": "Match #', toString(tokenId), '", "description": "This is a match", "image": "data:image/svg+xml;base64,', Base64Library.encode(bytes(result)), '","attributes":[',metadata(tokenId),']}'))));
         return string(abi.encodePacked('data:application/json;base64,', json));
         
     }
 
-    function generatePiece(string memory symbol, string memory x, string memory y, string memory color) internal pure returns (string memory) {
+    function generatePiece(string memory s, string memory x, string memory y, string memory c) internal pure returns (string memory) {
         return string(abi.encodePacked(
-            "<text x='", x, "' y='", y, "' text-anchor='middle' dy='.3em' stroke='", color, "' stroke-width='0.5'>", symbol, "</text>"
+            "<text x='", x, "' y='", y, "' text-anchor='middle' dy='.3em' stroke='", c, "' stroke-width='1'>", s, "</text>"
         ));
     }
 
