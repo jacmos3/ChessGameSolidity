@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.22;
+pragma solidity ^0.8.19;
 import "./ChessNFT.sol";
 import "./ChessCore.sol";
 
@@ -9,6 +9,10 @@ contract ChessFactory {
     uint256 public totalChessGames;
 
     constructor(){
+        
+    }
+
+    function deployNFT() public {
         ChessNFT newChessNFT = new ChessNFT(msg.sender);
         addressNFT = address(newChessNFT);
     }
