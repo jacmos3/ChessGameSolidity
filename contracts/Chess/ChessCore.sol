@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.22;
+pragma solidity ^0.8.19;
 import "@openzeppelin/contracts/utils/Strings.sol";
 import "./ChessMediaLibrary.sol";
 contract ChessCore {
     uint8 constant BOARD_SIZE = 8;
     using ChessMediaLibrary for int8[BOARD_SIZE][BOARD_SIZE];
     int8[BOARD_SIZE][BOARD_SIZE] public board;
-    int8 constant EMPTY = ChessMediaLibrary.EMPTY;
-    int8 constant PAWN = ChessMediaLibrary.PAWN;
-    int8 constant KNIGHT = ChessMediaLibrary.KNIGHT;
-    int8 constant BISHOP = ChessMediaLibrary.BISHOP;
-    int8 constant ROOK = ChessMediaLibrary.ROOK;
-    int8 constant QUEEN = ChessMediaLibrary.QUEEN;
-    int8 constant KING = ChessMediaLibrary.KING;
+    int8 immutable EMPTY = ChessMediaLibrary.EMPTY;
+    int8 immutable PAWN = ChessMediaLibrary.PAWN;
+    int8 immutable KNIGHT = ChessMediaLibrary.KNIGHT;
+    int8 immutable BISHOP = ChessMediaLibrary.BISHOP;
+    int8 immutable ROOK = ChessMediaLibrary.ROOK;
+    int8 immutable QUEEN = ChessMediaLibrary.QUEEN;
+    int8 immutable KING = ChessMediaLibrary.KING;
     
     uint8 constant ROW_BLACK_PIECES = 0;
     uint8 constant ROW_BLACK_PAWNS = 1;
@@ -52,7 +52,7 @@ contract ChessCore {
     address whitePlayer;
     address blackPlayer;
     address currentPlayer;
-/*
+
     constructor(address _whitePlayer, uint _value) payable {
         // Chiamare initializeBoard nel costruttore
         initializeBoard();
@@ -60,7 +60,7 @@ contract ChessCore {
         currentPlayer = _whitePlayer;
         betting = _value;
     }
-  */  
+    /*
     //for debugging
     constructor(){
         initializeBoard();
@@ -69,6 +69,7 @@ contract ChessCore {
         blackPlayer = 0xAb8483F64d9C6d1EcF9b849Ae677dD3315835cb2;
         betting = address(this).balance;
     }
+    */
    
    receive() external payable {
         require(gameState == GameState.NotStarted, "Game has already started");
@@ -125,7 +126,7 @@ contract ChessCore {
         return x >= 0 ? uint8(x) : uint8(-x);
     }
 
-    function isPawnMoveValid(uint8 startX, uint8 startY, uint8 endX, uint8 endY, int8 piece, int8 target) private pure returns (bool) {
+    function isPawnMoveValid(uint8 startX, uint8 startY, uint8 endX, uint8 endY, int8 piece, int8 target) private view returns (bool) {
         // Check if pawn is moving forward
         if (startY == endY && target == 0) {
             if (piece == -PAWN) { // black pawn
@@ -682,7 +683,7 @@ contract ChessCore {
     return boardString;
     }
 
-    function pieceToString(int8 piece) internal pure returns (string memory) {
+    function pieceToString(int8 piece) internal view returns (string memory) {
         if (piece == EMPTY) {
             return "0";
         } 
