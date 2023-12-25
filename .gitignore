@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+#git
+package-lock.json
+
+#node
+node_modules/
+
+#solidity
+artifacts/
+
+#truffle
+build/
