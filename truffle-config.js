@@ -63,11 +63,11 @@ module.exports = {
   // Configure your compilers
   compilers: {
     solc: {
-      version: "0.8.19",      // Fetch exact version from solc-bin
+      version: "0.8.19",
       settings: {
         optimizer: {
           enabled: true,
-          runs: 200, // Numero di iterazioni dell'ottimizzatore (può essere regolato)
+          runs: 200,
         },
       },
     }

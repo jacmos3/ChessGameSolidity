@@ -6,6 +6,7 @@ const ChessCore = artifacts.require("Chess/ChessCore");
 module.exports = function(deployer) {
   deployer.deploy(Base64Library);
   deployer.link(Base64Library, ChessMediaLibrary);
+  deployer.deploy(ChessMediaLibrary);
   deployer.link(ChessMediaLibrary, ChessFactory);
   deployer.link(ChessMediaLibrary, ChessNFT);
   deployer.deploy(ChessFactory /*, {gas:6700000}*/);
