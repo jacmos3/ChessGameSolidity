@@ -2,6 +2,7 @@
 .DS_Store
 
 #git
+.gitignore
 package-lock.json
 
 #node
@@ -12,3 +13,16 @@ artifacts/
 
 #truffle
 build/
+
+#remix
+.deps/
+
+#node
+.env
+.env.local
+
+#misc
+
+.idea/
+.next/
+.vscode/
