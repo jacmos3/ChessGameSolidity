@@ -1,0 +1,78 @@
+.presentation__section {
+    display: flex;
+    flex-flow: column nowrap;
+    justify-content: center;
+    height: 100vh;
+}
+
+.hero__img {
+    background-image: linear-gradient(rgba(70, 116, 148,0.5),rgba(255,255,255,1)), url('../../public/back.png');
+    background-repeat: no-repeat;
+}
+
+.text__description {
+    font-size: large;
+    text-align: center;
+
+    font-family: "KOMIKAX_";
+    color: #002348;
+
+}
+
+.text__content {
+    padding-top: 80px;
+    text-shadow: 1px 1px ghostwhite;
+}
+
+.button__component {
+    padding-top: 4rem;
+    display: flex;
+    justify-content: center;
+}
+
+.social__component {
+    display: flex;
+    justify-content: center;
+    padding-bottom: 20px;
+}
+
+.gallery__component {
+    display: flex;
+    flex-flow: column nowrap;
+    justify-content: center;
+    padding-bottom: 40px;
+}
+
+.presentation__content {
+    display: flex;
+    flex-flow: column nowrap;
+    justify-content: space-between;
+    margin: auto;
+    height: 100%;
+    width: 100%;
+
+    h1 {
+        font-size: 5rem;
+        margin: 0 0 15px 0;
+        line-height: 1;
+
+
+        font-family: "KOMIKAX_";
+        color: white;
+        text-shadow: -3px 7px #002348, -3px 0 0 #002348, 0 -3px 0 #002348, 3px 0 0 #002348;
+
+    }
+}
+
+
+@media (max-width: 600px) {
+    .button__component {
+        padding-top: 2rem;
+    }
+    .title {
+        font-size: 2.6rem !important;
+    }
+    .text__description {
+        font-size: 1.0rem !important;
+    }
+}
