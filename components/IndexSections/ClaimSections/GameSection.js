@@ -24,7 +24,11 @@ class GameSection extends Component {
     state = {
         game: {key: "", header: "", image: "", gameStatus: ""},
         loading: 0,
-        errorMessage: ""
+        errorMessage: "",
+        startingX: null,
+        startingY: null,
+        endingX:null,
+        endingY:null
     };
 
     fetchGame = async () => {
@@ -77,9 +81,8 @@ class GameSection extends Component {
                 if (existingRect) {
                     blackSquaresGroup.removeChild(existingRect);
                     console.log("removed");
-                }
+                };
             
-
                 let toRet = "";
                 const blackSquare = "#808080";
                 const whiteSquare = "#D8D8D8";
@@ -131,39 +134,57 @@ class GameSection extends Component {
         this.setState({loading: this.state.loading - 1});
     }
 
-    handleDragStart(event) {
+    handleDragStart = (event) => {
         console.log("dragstart");
         event.dataTransfer.setData('text/plain', event.target.parentNode.id);
         if (event != null && event.target != null && event.target.parentNode != null 
             && event.target.parentNode.x != null && event.target.parentNode.x.baseVal != null && event.target.parentNode.x.baseVal.length > 0
             && event.target.parentNode.y != null && event.target.parentNode.y.baseVal != null && event.target.parentNode.y.baseVal.length > 0){
-            console.log((event.target.parentNode.x.baseVal[0].value-25)/50, (event.target.parentNode.y.baseVal[0].value-25)/50);
+                let x = (event.target.parentNode.x.baseVal[0].value-25)/50;
+                let y = (event.target.parentNode.y.baseVal[0].value-25)/50;
+                this.setState({startingX:x, startingY:y});
+            console.log(x, y);
         }
         else{
             console.log("there is something null in the event.target.parentNode");
         }
     }
     
-    handleDragOver(event) {
+    handleDragOver = (event) => {
         event.preventDefault();
     }
     
-    handleDrop(event) {
+    handleDrop = (event) => {
         event.preventDefault();
         console.log("drop");
         const data = event.dataTransfer.getData('text/plain');
         const draggedElement = document.getElementById(data);
-        console.log(draggedElement.parentNode);
 
         const dropTarget = event.target;
-        console.log(dropTarget.id);
-        console.log(dropTarget.parentNode);
-        console.log(draggedElement);
-        console.log(dropTarget.x.baseVal.value);
-        draggedElement.setAttribute('x', dropTarget.x.baseVal.value + 25);
-        draggedElement.setAttribute('y', dropTarget.y.baseVal.value + 25);
+        let x = null;
+        let y = null;
+        if (dropTarget.nodeName.toLowerCase() === 'rect'){
+            x = dropTarget.x.baseVal.value;
+            y = dropTarget.y.baseVal.value;
+            console.log(x/50,",",y/50);
+            draggedElement.setAttribute('x', x + 25);
+            draggedElement.setAttribute('y', y + 25);
+            dropTarget.parentNode.appendChild(draggedElement);
+            console.log(dropTarget.id);
+        }
+        else
+        if (dropTarget.nodeName.toLowerCase() === 'text'){
+            x = dropTarget.x.baseVal[0].value;
+            y = dropTarget.y.baseVal[0].value;
+            console.log((x-25)/50,",",(y-25)/50);
+            draggedElement.setAttribute('x', x);
+            draggedElement.setAttribute('y', y);
+            dropTarget.parentNode.appendChild(draggedElement);
+            dropTarget.parentNode.removeChild(dropTarget);
+        }
+        this.setState({endingX:x, endingY:y});
+
         
-        dropTarget.parentNode.appendChild(draggedElement);
     }
 
     render() {
