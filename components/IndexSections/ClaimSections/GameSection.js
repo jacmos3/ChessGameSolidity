@@ -31,52 +31,54 @@ class GameSection extends Component {
         console.log("fetch");
         this.setState({loading: this.state.loading + 1, errorMessage: ''})
         try {
-                const chessCoreInstance = new this.props.state.web3.eth.Contract(ChessFactory.ChessCore.abi, this.props.addressGame);
-                let chessboard = await chessCoreInstance.methods.printChessBoardLayoutSVG().call()
-                    .then((result) => {
-                        //console.log(result);
-                        return JSON.parse(window.atob(result.split(',')[1]));
-                    })
-                    .catch((error) => {
-                        this.setState({errorMessage: error.message});
-                        console.log(error);
-                    });
+            const chessCoreInstance = new this.props.state.web3.eth.Contract(ChessFactory.ChessCore.abi, this.props.addressGame);
+            let chessboard = await chessCoreInstance.methods.printChessBoardLayoutSVG().call()
+                .then((result) => {
+                    //console.log(result);
+                    return JSON.parse(window.atob(result.split(',')[1]));
+                })
+                .catch((error) => {
+                    this.setState({errorMessage: error.message});
+                    console.log(error);
+                });
 
-                let gameStatus = await chessCoreInstance.methods.getGameState().call()
-                    .then((result) => {
-                        return result;
-                    })
-                    .catch((error) => {
-                        console.log(error);
-                    });
+            let gameStatus = await chessCoreInstance.methods.getGameState().call()
+                .then((result) => {
+                    return result;
+                })
+                .catch((error) => {
+                    console.log(error);
+                });
             
-                if (gameStatus == 1){
-                    console.log("NOT STARTED");
-                    gameStatus = "Join Game";
-                }
-                else{
-                    console.log(gameStatus);
+            if (gameStatus == 1){
+                console.log("NOT STARTED");
+                gameStatus = "Join Game";
+            }
+            else{
+                console.log(gameStatus);
 
-                }
-                if (!!this.state.errorMessage) {
-                    this.setState({loading: this.state.loading - 1});
-                    return;
-                }
-                console.log(chessboard.name, gameStatus);
-                var game = {"key": this.props.addressGame, "header": chessboard.name, "image": chessboard.image, "gameStatus": gameStatus};
-                
-                this.setState({game: game});
+            }
+            if (!!this.state.errorMessage) {
+                this.setState({loading: this.state.loading - 1});
+                return;
+            }
+            console.log(chessboard.name, gameStatus);
+            var game = {"key": this.props.addressGame, "header": chessboard.name, "image": chessboard.image, "gameStatus": gameStatus};
+            
+            this.setState({game: game});
 
-                const svgString = atob(chessboard.image.split(',')[1]);
+            const svgString = atob(chessboard.image.split(',')[1]);
 
-                const imageContainer = document.getElementById('image-container');
-                imageContainer.innerHTML = svgString;
-                const blackSquaresGroup = document.getElementById('s');
+            const imageContainer = document.getElementById('image-container');
+            imageContainer.innerHTML = svgString;
+            const blackSquaresGroup = document.getElementById('s');
+            if (!blackSquaresGroup) {
                 const existingRect = blackSquaresGroup.querySelector('rect');
                 if (existingRect) {
                     blackSquaresGroup.removeChild(existingRect);
                     console.log("removed");
                 }
+            
 
                 let toRet = "";
                 const blackSquare = "#808080";
@@ -118,22 +120,20 @@ class GameSection extends Component {
                     square.addEventListener('dragover', this.handleDragOver);
                     square.addEventListener('drop', this.handleDrop);
                 });
-
-
+            }
+            else{
+                console.log("blackSquaresGroup is null");
+            }
         } catch (err) {
             this.setState({errorMessage: err.message});
             console.log(err.message);
         }
         this.setState({loading: this.state.loading - 1});
-
     }
 
-    // Gestisci l'evento dragstart
     handleDragStart(event) {
         console.log("dragstart");
         event.dataTransfer.setData('text/plain', event.target.parentNode.id);
-        
-        //check the nullity of the parent node
         if (event != null && event.target != null && event.target.parentNode != null 
             && event.target.parentNode.x != null && event.target.parentNode.x.baseVal != null && event.target.parentNode.x.baseVal.length > 0
             && event.target.parentNode.y != null && event.target.parentNode.y.baseVal != null && event.target.parentNode.y.baseVal.length > 0){
@@ -155,7 +155,6 @@ class GameSection extends Component {
         const draggedElement = document.getElementById(data);
         console.log(draggedElement.parentNode);
 
-        //draggedElement.parentNode.removeChild(draggedElement);
         const dropTarget = event.target;
         console.log(dropTarget.id);
         console.log(dropTarget.parentNode);
