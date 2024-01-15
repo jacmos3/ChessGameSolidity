@@ -72,7 +72,7 @@ class GameSection extends Component {
             const imageContainer = document.getElementById('image-container');
             imageContainer.innerHTML = svgString;
             const blackSquaresGroup = document.getElementById('s');
-            if (!blackSquaresGroup) {
+            if (blackSquaresGroup != null) {
                 const existingRect = blackSquaresGroup.querySelector('rect');
                 if (existingRect) {
                     blackSquaresGroup.removeChild(existingRect);
