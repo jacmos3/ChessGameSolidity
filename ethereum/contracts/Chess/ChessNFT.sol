@@ -13,6 +13,7 @@ contract ChessNFT is ERC721Enumerable, Ownable {
     using ChessMediaLibrary for uint8[8][8];
     mapping(uint256 => address) public gameNFTs;
     address[] public gameAddresses;
+    
 
     constructor(address _initialOwner) ERC721("ChessNFT", "Chess") Ownable(_initialOwner) {
         //transferOwnership(_initialOwner);

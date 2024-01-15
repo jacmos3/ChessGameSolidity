@@ -34,70 +34,7 @@ library ChessMediaLibrary {
 
         return string(buffer);
     }
-
-    function getPieceCharacter(int8 piece, string memory x, string memory y) internal pure returns (string memory) {
-        string memory token;
-        bool isWhite = piece < 0 ? false : true;
-        if (!isWhite){
-            piece *= -1;
-        }
-
-        if (piece == KING) {
-            token = "&#9812;";
-        }
-        else
-        if (piece == QUEEN) {
-            token = "&#9813;";
-        }
-        else
-        if (piece == ROOK) {
-            token = "&#9814;";
-        }
-        else
-        if (piece == BISHOP) {
-            token = "&#9815;";
-        }
-        else
-        if (piece == KNIGHT) {
-            token = "&#9816;";
-        }
-        else
-        if (piece == PAWN) {
-            token = "&#9817;";
-        }
-        /*
-        else 
-        if (piece == -KING) {
-            token = "&#9818;";
-        }
-        else
-        if (piece == -QUEEN) {
-            token = "&#9819;";
-        }
-        else
-        if (piece == -ROOK) {
-            token = "&#9820;";
-        }
-        else
-        if (piece == -BISHOP) {
-            token = "&#9821;";
-        }
-        else
-        if (piece == -KNIGHT) {
-            token = "&#9822;";
-        }
-        else
-        if (piece == -PAWN) {
-            token = "&#9823;";
-        }
-        */
-        else{
-            token = "";
-        }
-
-        return generatePiece(token, x, y, isWhite ? "#fff" : "#000");
-    }
-
+    
     function metadata(uint256 tokenId) internal pure returns (string memory){
         //TODO
         tokenId = 1;
@@ -111,17 +48,98 @@ library ChessMediaLibrary {
         result = string(abi.encodePacked(result, getBoardSquares()));   
         string memory black = "<g fill='#000' font-family='arial unicode ms,Helvetica,Arial,sans-serif' font-size='40'>";
         string memory white = "<g fill='#fff' font-family='arial unicode ms,Helvetica,Arial,sans-serif' font-size='40'>";
-        for (uint16 i = 0; i < 8; i++) {
-            for (uint16 j = 0; j < 8; j++) {
-                string memory x = toString(j * 50 + 25);
-                string memory y = toString(i * 50 + 25);
-                int8 piece = board[i][j];
-                if (piece < 0){
-                    black = string(abi.encodePacked(black, getPieceCharacter(piece, x, y)));
+        uint8[12] memory piecesCounter;
+    
+
+        for (uint16 row = 0; row < 8; row++) {
+            for (uint16 col = 0; col < 8; col++) {
+                string memory x = toString(col * 50 + 25);
+                string memory y = toString(row * 50 + 25);
+                int8 piece = board[row][col];         
+                string memory token;
+                string memory p;
+
+                if (piece > 0){
+
+
+                    if (piece == KING) {
+                        token = "&#9812;";
+                        piecesCounter[0] += 1;
+                        p = string(abi.encodePacked("wkng",toString(piecesCounter[0])));
+                    }
+                    else
+                    if (piece == QUEEN) {
+                        token = "&#9813;";
+                        piecesCounter[1] += 1;
+                        p = string(abi.encodePacked("wqn",toString(piecesCounter[1])));
+                    }
+                    else
+                    if (piece == ROOK) {
+                        token = "&#9814;";
+                        piecesCounter[2] += 1;
+                        p = string(abi.encodePacked("wrk",toString(piecesCounter[2])));
+                    }
+                    else
+                    if (piece == BISHOP) {
+                        token = "&#9815;";
+                        piecesCounter[3] += 1;
+                        p = string(abi.encodePacked("wbshp",toString(piecesCounter[3])));
+                    }
+                    else
+                    if (piece == KNIGHT) {
+                        token = "&#9816;";
+                        piecesCounter[4] += 1;
+                        p = string(abi.encodePacked("wknght",toString(piecesCounter[4])));
+                    }
+                    else
+                    if (piece == PAWN) {
+                        token = "&#9817;";
+                        piecesCounter[5] += 1;
+                        p = string(abi.encodePacked("wpwn",toString(piecesCounter[5])));
+                    }
+                    //p = string(abi.encodePacked(p,"_",toString(row),",",toString(col)));
+                    white = string(abi.encodePacked(white, generatePiece(token, x, y, "#fff", p)));
                 }
                 else
-                if (piece > 0){
-                    white = string(abi.encodePacked(white, getPieceCharacter(piece, x, y)));
+                if (piece < 0){
+                    if (piece == -KING) {
+                        token = "&#9812;";
+                        piecesCounter[6] += 1;
+                        p = string(abi.encodePacked("bkng",toString(piecesCounter[6])));
+                    }
+                    else
+                    if (piece == -QUEEN) {
+                        token = "&#9813;";
+                        piecesCounter[7] += 1;
+                        p = string(abi.encodePacked("bqn",toString(piecesCounter[7])));
+                    }
+                    else
+                    if (piece == -ROOK) {
+                        token = "&#9814;";
+                        piecesCounter[8] += 1;
+                        p = string(abi.encodePacked("brk",toString(piecesCounter[8])));
+                    }
+                    else
+                    if (piece == -BISHOP) {
+                        token = "&#9815;";
+                        piecesCounter[9] += 1;
+                        p = string(abi.encodePacked("bbshp",toString(piecesCounter[9])));
+                    }
+                    else
+                    if (piece == -KNIGHT) {
+                        token = "&#9816;";
+                        piecesCounter[10] += 1;
+                        p = string(abi.encodePacked("bknght",toString(piecesCounter[10])));
+                    }
+                    else
+                    if (piece == -PAWN) {
+                        token = "&#9817;";
+                        piecesCounter[11] += 1;
+                        p = string(abi.encodePacked("bpwn",toString(piecesCounter[11])));
+                    }
+                    //p = string(abi.encodePacked(p,":",toString(row),",",toString(col)));
+                    black = string(abi.encodePacked(black, generatePiece(token, x, y, "#000", p)));
+                    
                 }
             }
         }
@@ -133,9 +151,9 @@ library ChessMediaLibrary {
         
     }
 
-    function generatePiece(string memory s, string memory x, string memory y, string memory c) internal pure returns (string memory) {
+    function generatePiece(string memory s, string memory x, string memory y, string memory c, string memory piece) internal pure returns (string memory) {
         return string(abi.encodePacked(
-            "<text x='", x, "' y='", y, "' text-anchor='middle' dy='.3em' stroke='", c, "' stroke-width='1'>", s, "</text>"
+            "<text id='", piece,"' class='p' x='", x, "' y='", y, "' text-anchor='middle' dy='.3em' stroke='", c, "' stroke-width='1'>", s, "</text>"
         ));
     }
 
@@ -147,9 +165,9 @@ library ChessMediaLibrary {
     }
 
     function getBoardSquares() internal pure returns (string memory){
+        //square height and width
         uint8 size = 50;
-        
-        string memory toRet = generateSquare("0","0","400","400","#808080");
+        string memory toRet = string(abi.encodePacked("<g id='s'>", generateSquare("0","0","400","400","#808080")));
         for (uint8 k = 0; k < 2; k++){
             for (uint16 i = 0 ; i < 4; i++){
                 for (uint16 j = 0; j < 4; j++){
@@ -157,6 +175,21 @@ library ChessMediaLibrary {
                 }
             }
         }
+        toRet = string(abi.encodePacked(toRet,"</g>"));
+        /*
+        uint8 size = 50;
+        string memory toRet = "";
+        string memory blackSquare = "#808080";
+        string memory whiteSquare = "#D8D8D8";
+        bool isWhite = true;
+        for (uint16 row = 0; row < 4; row++){
+            for (uint16 col = 0; col < 8; col++){
+                toRet = string(abi.encodePacked(toRet, generateSquare(toString(size * col), toString(size * row), toString(size), toString(size), (isWhite ? whiteSquare : blackSquare),string(abi.encodePacked(toString(row),",",toString(col))))));
+                if (col != 7)
+                    isWhite = !isWhite;
+            }
+        }
+        */
         return toRet;
     }
 

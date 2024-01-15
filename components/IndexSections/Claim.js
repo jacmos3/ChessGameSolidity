@@ -2,13 +2,12 @@ import React, {Component} from 'react';
 import {Container, Button, Tab} from 'semantic-ui-react';
 import styles from "../../styles/components/Claim.module.scss"; // Styles
 import FetchNFTList from "./ClaimSections/FetchNFTList"
-
+import GameSection from "./ClaimSections/GameSection"
+import CourtesySection from "./ClaimSections/CourtesySection"
 
 class Claim extends Component {
     state = {
-        loading: 0,
-        all: [],
-        activeIndex: 0
+        activeGame: -1
     }
 
     constructor(props) {
@@ -16,10 +15,14 @@ class Claim extends Component {
         this.goToFetch = this.goToFetch.bind(this);
     }
 
-    handleTabChange = (e, {activeIndex}) => this.setState({activeIndex});
+    //handleTabChange = (e, {activeGame}) => this.setState({activeGame});
 
-    goToFetch() {
-      this.setState({activeIndex:0});
+    resetActiveGame = () => this.setState({activeGame: -1});
+
+    goToFetch(game) {
+      this.setState({activeGame:game});
+      console.log("goToFetch");
+      //console.log(game);
     }
 
     render() {
@@ -34,71 +37,40 @@ class Claim extends Component {
                     <div className={`${styles.container} rounded`}>
                         <h2 className={`${styles.title} text-center mt-4 capitalize`}>Choose your Game</h2>
                         <br/>
-                        {
+                            {
+                               
+
                             this.props.state.web3Settings.isWeb3Connected
                                 ? this.props.state.web3Settings.chains
                                     .filter(chain => chain.id === this.props.state.web3Settings.networkId)
                                     .map(chain => chain.options.id).length == 1
-                                ?
-                                (
-                                    <div>
-                                        <FetchNFTList state={this.props.state}/>
-                                    </div>
-                                )
+                                    ? this.state.activeGame != -1
+                                        ? (
+                                            <div>
+                                                <GameSection state={this.props.state} goToFetch={this.goToFetch} addressGame = {this.state.activeGame} resetActiveGame = {this.resetActiveGame} />
+                                            </div>
+                                        )
+                                        : (
+                                            <div>
+                                                <FetchNFTList state={this.props.state} goToFetch={this.goToFetch}/>
+                                            </div>
+                                        )
+                                    : (
+                                        <div>
+                                            <CourtesySection state={this.props.state} buttons= {false} connect={this.props.connect}/>
+                                        </div>
+                                    )
                                 : (
                                     <div>
-                                        <Container style={{color: "white"}}>
-                                            <div style={{padding: "5px"}}>
-                                                <div className="text-center">
-                                                    <div className={`${styles.modal}`}>
-                                                        <p className={`${styles.modal_error_title}`}>Wrong network!</p>
-                                                        <p>You are connected to
-                                                        netword {this.props.state.web3Settings.networkId} - {this.props.state.web3Settings.networkName}</p>
-                                                        <p className={`${styles.modal_error_second_description}`}>Please connect to
-                                                        networks:<br/></p>
-                                                            {
-                                                                this.props.state.web3Settings.chains.map(chain =>
-                                                                    <div key={chain.id}>
-                                                                        <div>{`${chain.id} - ${chain.name}`}</div>
-                                                                    </div>
-                                                                )
-                                                            }
-
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </Container>
+                                        <CourtesySection state={this.props.state} buttons= {true} connect={this.props.connect} />
                                     </div>
-                                )
-                                : (
-                                    <div>
-                                        <Container style={{color: "white"}}>
-                                            <div style={{padding: "5px"}}>
-                                                {
-                                                    this.props.state.web3Settings.isWeb3Connected
-                                                        ? (
-                                                            <Button onClick={this.props.disconnect}>
-                                                                {this.props.state.web3Settingsaccount}
-                                                            </Button>
-                                                        )
-
-                                                        : (
-                                                            <div className="text-center">
-                                                                <button className={`btn btn__primary`} onClick={this.props.connect}>
-                                                                    Connect Wallet
-                                                                </button>
-                                                            </div>
-                                                        )
-                                                }
-                                            </div>
-                                        </Container>
-                                    </div>
-                                )
+                                
+                            )
                         }
                     </div>
                 </div>
             </div>
-        )
+        );
     };
 }
 

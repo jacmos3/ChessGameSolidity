@@ -6,7 +6,7 @@ const app = next({
 
 });
 
-const routes = require('./routes');
+const routes = require('next-routes')();
 const handler = routes.getRequestHandler(app);
 app.prepare().then(() => {
   createServer(handler).listen(3000, (err) =>{
