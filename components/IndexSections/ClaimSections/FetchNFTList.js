@@ -6,7 +6,6 @@ import styles from "../../../styles/components/claimSections/FetchNFTList.module
 class FetchNFTList extends Component {
     constructor(props) {
         super(props);
-
     }
 
     async componentDidMount() {
@@ -15,7 +14,6 @@ class FetchNFTList extends Component {
         this.setState({
             chainName: chain.name,
             opensea: chain.opensea,
-            baseUrl: chain.thumbsFolder,
             openseaCard: chain.openseaCard + this.props.state.web3Settings.contractAddress + "/"
         });
         await this.fetchNFTList();
@@ -25,14 +23,14 @@ class FetchNFTList extends Component {
         all: [],
         loading: 0,
         errorMessage: "",
-        totalOwned:0,
+        totalChessGames:0,
     };
       
     fetchNFTList = async () => {
         console.log("fetch");
         this.setState({loading: this.state.loading + 1, errorMessage: ''})
         try {
-            const accounts = await this.props.state.web3.eth.getAccounts();
+            //const accounts = await this.props.state.web3.eth.getAccounts();
             const chessFactoryInstance = new this.props.state.web3.eth.Contract(ChessFactory.ChessFactory.abi, this.props.state.web3Settings.contractAddress);
             let deployedChessGames = await chessFactoryInstance.methods.getDeployedChessGames().call()
                 .then((result) => {
@@ -47,7 +45,7 @@ class FetchNFTList extends Component {
                 this.setState({loading: this.state.loading - 1});
                 return;
             }
-            this.setState({totalOwned: deployedChessGames.length});
+            this.setState({totalChessGames: deployedChessGames.length});
             
             //TODO check su errorMessage e saltare tutto se c'è un errore
             var all = [];
@@ -71,13 +69,27 @@ class FetchNFTList extends Component {
                         return result;
                     })
                     .catch((error) => {
+                        console.log(error);
 
                     });
             
                 if (gameStatus == 1){
                     console.log("NOT STARTED");
+                    gameStatus = "Join Game";
+                }
+                else
+                if (gameStatus == 2){
+                    console.log("STARTED");
+                    gameStatus = "Game Started";
+                }
+                else
+                if (gameStatus == 3 || gameStatus == 4 ||  gameStatus == 5){
+                    console.log("ENDED");
+                    gameStatus = "Game Ended";
+                    console.log(gameStatus);
                 }
                 else{
+                    console.log("ERROR");
                     console.log(gameStatus);
 
                 }
@@ -86,7 +98,7 @@ class FetchNFTList extends Component {
                     return;
                 }
 
-                var element = {"key": i, "header": chessboard.name, "image": chessboard.image};
+                var element = {"key": deployedChessGames[i], "header": chessboard.name, "image": chessboard.image, "gameStatus": gameStatus};
                 all.push(element);
             }
             this.setState({all: all});
@@ -94,6 +106,7 @@ class FetchNFTList extends Component {
             this.setState({errorMessage: err.message});
         }
         this.setState({loading: this.state.loading - 1});
+
     }
 
     render() {
@@ -102,13 +115,13 @@ class FetchNFTList extends Component {
             
                 <Container>
                     <div style={{display: 'flex', flexFlow: 'column'}}>
-                        <h2 className="text-center">There are {this.state.totalOwned} open games on {this.state.chainName}</h2>
+                        <h2 className="text-center">There are {this.state.totalChessGames} open games on {this.state.chainName}</h2>
 
                         {!!this.state.errorMessage ? <Message header="Oops!" content={this.state.errorMessage}/> : ""}
                         {this.state.loading > 0 &&
                           <div className={`${styles.image__container}`}>
                           {
-                            [...Array(this.state.totalOwned)].map((elementInArray, index) => (
+                            [...Array(this.state.totalChessGames)].map((elementInArray, index) => (
 
                             <div key={index}>
                                 <div className={`${styles.image}`}>
@@ -125,11 +138,12 @@ class FetchNFTList extends Component {
                                 this.state.all.map(el => (
                                     <div key={el.key}>
                                         <div className={`${styles.image}`}>
-                                            <a target="_blank" href={this.state.openseaCard + el.header}>
+                                            <a onClick={() => this.props.goToFetch(el.key)}>
                                                 <img src={el.image} width="100px"/>
                                             </a>
-
                                           <h3>#{el.header}</h3>
+
+                                          <h4>{el.gameStatus}</h4>
                                         </div>
                                     </div>
                                 ))

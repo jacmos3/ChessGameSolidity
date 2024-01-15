@@ -27,7 +27,6 @@ class MyDapp extends Component {
                     id: 1,
                     opensea:"https://opensea.io/collection/SolidityChessGame",
                     openseaCard:"https://opensea.io/assets/",
-                    thumbsFolder:"",
                     options: {
                         
                     }
@@ -35,10 +34,9 @@ class MyDapp extends Component {
                 {
                     name: "Goerli",
                     id: 5,
-                    contractAddressOverrided:"0x6acB2D04c16aDdB44cA791aC0F592DCB8F26B3d0",
+                    contractAddressOverrided:"0xE5469D17C0f97b02A48E2f5071Cb21e61DBAFDaD",
                     opensea:"https://opensea.io/collection/SolidityChessGame",
                     openseaCard:"https://opensea.io/assets/",
-                    thumbsFolder:"",
                     options: {
                         
                     }
@@ -59,6 +57,7 @@ class MyDapp extends Component {
         var web3Settings = this.state.web3Settings;
         web3Settings.contractAddress = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS;
         this.setState({web3Settings: web3Settings});
+        this.connect();
     }
 
     update = async (nextState) => {
@@ -118,6 +117,7 @@ class MyDapp extends Component {
 
         var provider;
         web3Modal.clearCachedProvider();
+        
         try {
             provider = await web3Modal.connect();
             console.log("provider",provider);
@@ -125,6 +125,7 @@ class MyDapp extends Component {
             console.log("Could not get a wallet connection", e);
             return;
         }
+
 
         var web3 = new Web3(provider);
 
@@ -182,6 +183,8 @@ class MyDapp extends Component {
     }
 
     truncateAddress(address) {
+        if (address === undefined) return ("");
+        
         const begin = address.substring(0, 6).concat("...");
         const end = address.substring(address.length - 6);
         return begin + end;
