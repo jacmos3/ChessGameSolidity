@@ -25,10 +25,10 @@ class GameSection extends Component {
         game: {key: "", header: "", image: "", gameStatus: ""},
         loading: 0,
         errorMessage: "",
-        startingX: null,
-        startingY: null,
-        endingX:null,
-        endingY:null
+        startX: null,
+        startY: null,
+        endX:null,
+        endY:null
     };
 
     fetchGame = async () => {
@@ -94,10 +94,10 @@ class GameSection extends Component {
                         newGroup.setAttribute('font-family', 'arial unicode ms,Helvetica,Arial,sans-serif');
                         newGroup.setAttribute('font-size', '40');
                         const newRect = document.createElementNS("http://www.w3.org/2000/svg", 'rect');
-                        newRect.setAttribute('id', String(row) + ',' + String(col));
+                        newRect.setAttribute('id', String(col) + ',' + String(row));
                         newRect.setAttribute('class', 's');
-                        newRect.setAttribute('x', String(size * col));
-                        newRect.setAttribute('y', String(size * row));
+                        newRect.setAttribute('x', String(size * row));
+                        newRect.setAttribute('y', String(size * col));
                         newRect.setAttribute('width', String(size));
                         newRect.setAttribute('height', String(size));
                         newRect.setAttribute('fill', isWhite ? whiteSquare : blackSquare);
@@ -142,7 +142,7 @@ class GameSection extends Component {
             && event.target.parentNode.y != null && event.target.parentNode.y.baseVal != null && event.target.parentNode.y.baseVal.length > 0){
                 let x = (event.target.parentNode.x.baseVal[0].value-25)/50;
                 let y = (event.target.parentNode.y.baseVal[0].value-25)/50;
-                this.setState({startingX:x, startingY:y});
+                this.setState({startX:x, startY:y});
             console.log(x, y);
         }
         else{
@@ -154,38 +154,54 @@ class GameSection extends Component {
         event.preventDefault();
     }
     
-    handleDrop = (event) => {
+    handleDrop = async (event) => {
         event.preventDefault();
         console.log("drop");
         const data = event.dataTransfer.getData('text/plain');
         const draggedElement = document.getElementById(data);
 
         const dropTarget = event.target;
-        let x = null;
-        let y = null;
+        let endX = null;
+        let endY = null;
         if (dropTarget.nodeName.toLowerCase() === 'rect'){
-            x = dropTarget.x.baseVal.value;
-            y = dropTarget.y.baseVal.value;
-            console.log(x/50,",",y/50);
-            draggedElement.setAttribute('x', x + 25);
-            draggedElement.setAttribute('y', y + 25);
+            endX = dropTarget.x.baseVal.value;
+            endY = dropTarget.y.baseVal.value;
+            draggedElement.setAttribute('x', endX + 25);
+            draggedElement.setAttribute('y', endY + 25);
+            console.log(endX/50,",",endY/50);
+            endX = endX/50;
+            endY = endY/50;
             dropTarget.parentNode.appendChild(draggedElement);
             console.log(dropTarget.id);
         }
         else
         if (dropTarget.nodeName.toLowerCase() === 'text'){
-            x = dropTarget.x.baseVal[0].value;
-            y = dropTarget.y.baseVal[0].value;
-            console.log((x-25)/50,",",(y-25)/50);
-            draggedElement.setAttribute('x', x);
-            draggedElement.setAttribute('y', y);
+            endX = dropTarget.x.baseVal[0].value;
+            endY = dropTarget.y.baseVal[0].value;
+            
+            draggedElement.setAttribute('x', endX);
+            draggedElement.setAttribute('y', endY);
+            endX = (endX - 25)/50;
+            endY = (endY - 25)/50;
+            console.log(endX,",",endY);
             dropTarget.parentNode.appendChild(draggedElement);
             dropTarget.parentNode.removeChild(dropTarget);
         }
-        this.setState({endingX:x, endingY:y});
+        //this.setState({endX:x, endY:y});
+        this.setState({loading: this.state.loading + 1, errorMessage: ''})
+        try {
+            const accounts = await this.props.state.web3.eth.getAccounts();
+            const chessCoreInstance = new this.props.state.web3.eth.Contract(ChessFactory.ChessCore.abi, this.props.addressGame);
+            console.log("Sending tx: ", this.state.startY, ",", this.state.startX, "_", endY, ",", endX);
+            await chessCoreInstance.methods.makeMove(this.state.startY, this.state.startX, endY, endX).send({from: accounts[0]});
+            this.props.goToFetch();
+        } 
+        catch (err) {
+            this.setState({errorMessage: err.message});
+        }
+        this.setState({loading: this.state.loading - 1, errorMessage: ""});
 
-        
-    }
+    };
 
     render() {
         return (

@@ -34,7 +34,7 @@ class MyDapp extends Component {
                 {
                     name: "Goerli",
                     id: 5,
-                    contractAddressOverrided:"0xE5469D17C0f97b02A48E2f5071Cb21e61DBAFDaD",
+                    contractAddressOverrided:"0xCbaD91fEC0389bCCE3CfD7DAA7D514afd0265d19",
                     opensea:"https://opensea.io/collection/SolidityChessGame",
                     openseaCard:"https://opensea.io/assets/",
                     options: {
