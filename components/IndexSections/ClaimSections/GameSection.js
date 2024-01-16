@@ -2,13 +2,26 @@ import React, {Component} from 'react';
 import {Container} from 'semantic-ui-react';
 import ChessFactory from '../../../ethereum/build/ChessFactory_flattened.sol.json';
 import styles from "../../../styles/components/claimSections/FetchNFTList.module.scss";
+import log from 'ipfs-api/src/log';
 
 class GameSection extends Component {
+
     constructor(props) {
         super(props);
         console.log("constructor");
         console.log(props.addressGame);
     }
+
+    state = {
+        game: {key: "", header: "", image: "", gameStatus: ""},
+        loading: 0,
+        errorMessage: "",
+        startX: null,
+        startY: null,
+        endX:null,
+        endY:null,
+        previousSelection:{piece:{id:null, style:null}, square:{id:null, style:null}}
+    };
 
     async componentDidMount() {
         var chain = this.props.state.web3Settings.chains
@@ -21,15 +34,6 @@ class GameSection extends Component {
         await this.fetchGame();
     }
 
-    state = {
-        game: {key: "", header: "", image: "", gameStatus: ""},
-        loading: 0,
-        errorMessage: "",
-        startX: null,
-        startY: null,
-        endX:null,
-        endY:null
-    };
 
     fetchGame = async () => {
         console.log("fetch");
@@ -76,13 +80,16 @@ class GameSection extends Component {
             const imageContainer = document.getElementById('image-container');
             imageContainer.innerHTML = svgString;
             const blackSquaresGroup = document.getElementById('s');
+            //remove all the existing squares, because they have no id
             if (blackSquaresGroup != null) {
-                const existingRect = blackSquaresGroup.querySelector('rect');
-                if (existingRect) {
-                    blackSquaresGroup.removeChild(existingRect);
+                const existingRects = blackSquaresGroup.getElementsByTagName('rect');
+                console.log(existingRects);
+                for (let i = 0; i < existingRects.length; i++) {
+                    blackSquaresGroup.removeChild(existingRects[i]);
                     console.log("removed");
-                };
-            
+                }
+                
+                //now I'm going to recreate all the squares with the correct id, so that I can use them to move the pieces
                 let toRet = "";
                 const blackSquare = "#808080";
                 const whiteSquare = "#D8D8D8";
@@ -117,11 +124,13 @@ class GameSection extends Component {
                     piece.addEventListener('dragstart', this.handleDragStart);
                     piece.addEventListener('dragover', this.handleDragOver);
                     piece.addEventListener('drop', this.handleDrop);
+                    piece.addEventListener('click', this.handlePieceClick);
                 });
                 const squares = document.querySelectorAll('.s');
                 squares.forEach(square => {
                     square.addEventListener('dragover', this.handleDragOver);
                     square.addEventListener('drop', this.handleDrop);
+                    square.addEventListener('click', this.handleSquareClick);
                 });
             }
             else{
@@ -132,6 +141,133 @@ class GameSection extends Component {
             console.log(err.message);
         }
         this.setState({loading: this.state.loading - 1});
+    }
+
+    handlePieceClick = (event) =>{
+        event.preventDefault();
+        console.log("click");
+        console.log(event.target);
+
+        //reload the previous piece if present
+        if (this.state.previousSelection != undefined && this.state.previousSelection != null 
+            && this.state.previousSelection.piece != undefined && this.state.previousSelection.piece != null 
+            && this.state.previousSelection.piece.id != undefined && this.state.previousSelection.piece.id != null 
+            && this.state.previousSelection.piece.style != undefined && this.state.previousSelection.piece.style != null ){
+            const previousPiece = document.getElementById(this.state.previousSelection.piece.id);
+            console.log("previousPiece id: ",previousPiece);
+            previousPiece.setAttribute('style', this.state.previousSelection.piece.style);
+        }
+        else{
+            console.log("previousSelection or something inside it is null");
+        }
+
+        //if the piece is not the same as the previous one, save its original style and color it yellow
+        if (event != undefined && event!= null 
+            && event.target != undefined && event.target != null && event.target.id != undefined && event.target.id != null
+            && this.state.previousSelection != undefined && this.state.previousSelection != null 
+            && this.state.previousSelection.piece != undefined && this.state.previousSelection.piece != null
+            && event.target.id != this.state.previousSelection.piece.id){
+            this.setState({
+                    previousSelection:{
+                    piece: 
+                        event.target
+                    , 
+                    square: this.state.previousSelection.square
+                }
+            });
+            event.target.setAttribute('style', 'fill: yellow; stroke: yellow; stroke-width: 1');
+        }
+        else{
+            this.setState({
+                previousSelection: {
+                    piece:{
+                        id:null, style:null
+                    }, 
+                    square:this.state.previousSelection.square
+                }
+            });
+        }
+    }
+    
+    handleSquareClick = (event) =>{
+        event.preventDefault();
+        console.log("click");
+        console.log("now:",event.target);
+
+        //reload the previous square if present
+        if (this.state.previousSelection != undefined && this.state.previousSelection != null 
+            && this.state.previousSelection.square != undefined && this.state.previousSelection.square != null 
+            && this.state.previousSelection.square.id != undefined && this.state.previousSelection.square.id != null 
+            && this.state.previousSelection.square.style != undefined && this.state.previousSelection.square.style != null ){
+            const previousSquare = this.state.previousSelection.square;
+            console.log("previous:",previousSquare);
+            let restoringSquare = document.getElementById(this.state.previousSelection.square.id);
+        
+            console.log( "cc",previousSquare.attributes);
+            restoringSquare.setAttribute('style', previousSquare.style.cssText);
+            restoringSquare.setAttribute('width', previousSquare.attributes.width.value);
+            restoringSquare.setAttribute('height',previousSquare.attributes.height.value);
+            restoringSquare.setAttribute('x', previousSquare.attributes.x.value);
+            restoringSquare.setAttribute('y', previousSquare.attributes.y.value);
+            restoringSquare.setAttribute('fill', previousSquare.attributes.fill.value);
+            console.log("now:",event.target);
+        }
+        else{
+            console.log("previousSelection or something inside it is null or undefined");
+        }
+
+        //if the square is not the same as the previous one, save its original style and highlight it
+        if (event != undefined && event!= null 
+            && event.target != undefined && event.target != null && event.target.id != undefined && event.target.id != null
+            && this.state.previousSelection != undefined && this.state.previousSelection != null 
+            && this.state.previousSelection.square != undefined && this.state.previousSelection.square != null
+            && event.target.id != this.state.previousSelection.square.id){
+                console.log("square is not the same");
+                console.log(" previousSelection square",this.state.previousSelection.square);
+
+
+            this.setState({
+                previousSelection:{
+                    piece: this.state.previousSelection.piece,
+                    square: event.target.cloneNode(true)
+                }
+            });
+            console.log("saved:",this.state.previousSelection.square);
+            //event.target.setAttribute('style', 'fill: yellow; stroke: yellow; stroke-width: 1');
+
+            let x = parseInt(event.target.x.baseVal.value);
+            let y = parseInt(event.target.y.baseVal.value);
+            let width = parseInt(event.target.width.baseVal.value);
+            let height = parseInt(event.target.height.baseVal.value);
+            event.target.setAttribute('style', 'stroke:pink;stroke-width:2;stroke-opacity:0.9');
+            event.target.setAttribute('width', String(width - 2));
+            event.target.setAttribute('height', String(height - 2));
+            event.target.setAttribute('x', String(x + 1));
+            event.target.setAttribute('y', String(y + 1));
+            console.log("checking",this.state.previousSelection.square);
+        }
+        else{
+            console.log("setting previousSelection to null")
+            this.setState({
+                previousSelection: {
+                    piece:this.state.previousSelection.piece,
+                    square:{
+                        id:null, style:null
+                    }
+                }
+            });
+        }
+
+
+
+//        const previousSquare = document.getElementById(this.state.previousSelection.square.id);
+  //      console.log("previousSquare id: ",previousSquare);
+    //    if (previousSquare != undefined && previousSquare != null){
+            
+            //previousSquare.setAttribute('style', this.state.previousSelection.square.style);
+      //  }
+
+
     }
 
     handleDragStart = (event) => {
@@ -171,7 +307,7 @@ class GameSection extends Component {
             console.log(endX/50,",",endY/50);
             endX = endX/50;
             endY = endY/50;
-            dropTarget.parentNode.appendChild(draggedElement);
+            //dropTarget.parentNode.appendChild(draggedElement);
             console.log(dropTarget.id);
         }
         else
@@ -184,7 +320,7 @@ class GameSection extends Component {
             endX = (endX - 25)/50;
             endY = (endY - 25)/50;
             console.log(endX,",",endY);
-            dropTarget.parentNode.appendChild(draggedElement);
+            //dropTarget.parentNode.appendChild(draggedElement);
             dropTarget.parentNode.removeChild(dropTarget);
         }
         //this.setState({endX:x, endY:y});
@@ -194,13 +330,13 @@ class GameSection extends Component {
             const chessCoreInstance = new this.props.state.web3.eth.Contract(ChessFactory.ChessCore.abi, this.props.addressGame);
             console.log("Sending tx: ", this.state.startY, ",", this.state.startX, "_", endY, ",", endX);
             await chessCoreInstance.methods.makeMove(this.state.startY, this.state.startX, endY, endX).send({from: accounts[0]});
-            this.props.goToFetch();
         } 
         catch (err) {
             this.setState({errorMessage: err.message});
+            console.log(err.code);
         }
         this.setState({loading: this.state.loading - 1, errorMessage: ""});
-
+        this.fetchGame();
     };
 
     render() {
@@ -212,10 +348,11 @@ class GameSection extends Component {
 
                         <div id="image-container">
                             <img src={this.state.game.image} width="500px"/>
-                            <h3>#{this.state.game.header}</h3>
+                            <h3>{this.state.game.header}</h3>
                         </div>
                         
                         <button onClick={() => this.props.resetActiveGame()}>Back</button>
+                        <button onClick={() => this.fetchGame()}>Refresh</button>
                 </Container>
            
         )

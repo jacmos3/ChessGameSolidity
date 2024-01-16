@@ -23,9 +23,10 @@ class MyDapp extends Component {
             isWeb3Connected: false,
             chains: [ //TODO: get these data from the relative smart contracts
                 {
-                    name: "Ethereum",
-                    id: 1,
-                    opensea:"https://opensea.io/collection/SolidityChessGame",
+                    name: "Sepolia",
+                    id: 11155111,
+                    opensea:"",
+                    contractAddressOverrided:"",
                     openseaCard:"https://opensea.io/assets/",
                     options: {
                         
@@ -35,7 +36,17 @@ class MyDapp extends Component {
                     name: "Goerli",
                     id: 5,
                     contractAddressOverrided:"0xCbaD91fEC0389bCCE3CfD7DAA7D514afd0265d19",
-                    opensea:"https://opensea.io/collection/SolidityChessGame",
+                    opensea:"",
+                    openseaCard:"https://opensea.io/assets/",
+                    options: {
+                        
+                    }
+                },
+                {
+                    name: "Holesky",
+                    id: 17000,
+                    opensea:"",
+                    contractAddressOverrided:"0x2E00209C3D86132A55Cd045C7b3468A4e062Ad9D",
                     openseaCard:"https://opensea.io/assets/",
                     options: {
                         
