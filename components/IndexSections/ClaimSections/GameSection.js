@@ -34,6 +34,9 @@ class GameSection extends Component {
         await this.fetchGame();
     }
 
+    isNullOrUndefined(value) {
+        return value === undefined || value === null;
+    }
 
     fetchGame = async () => {
         console.log("fetch");
@@ -149,10 +152,10 @@ class GameSection extends Component {
         console.log(event.target);
 
         //reload the previous piece if present
-        if (this.state.previousSelection != undefined && this.state.previousSelection != null 
-            && this.state.previousSelection.piece != undefined && this.state.previousSelection.piece != null 
-            && this.state.previousSelection.piece.id != undefined && this.state.previousSelection.piece.id != null 
-            && this.state.previousSelection.piece.style != undefined && this.state.previousSelection.piece.style != null ){
+        if (!this.isNullOrUndefined(this.state.previousSelection) 
+            && !this.isNullOrUndefined(this.state.previousSelection.piece)
+            && !this.isNullOrUndefined(this.state.previousSelection.piece.id)
+            && !this.isNullOrUndefined(this.state.previousSelection.piece.style)){
             const previousPiece = document.getElementById(this.state.previousSelection.piece.id);
             console.log("previousPiece id: ",previousPiece);
             previousPiece.setAttribute('style', this.state.previousSelection.piece.style);
@@ -162,10 +165,11 @@ class GameSection extends Component {
         }
 
         //if the piece is not the same as the previous one, save its original style and color it yellow
-        if (event != undefined && event!= null 
-            && event.target != undefined && event.target != null && event.target.id != undefined && event.target.id != null
-            && this.state.previousSelection != undefined && this.state.previousSelection != null 
-            && this.state.previousSelection.piece != undefined && this.state.previousSelection.piece != null
+        if (!this.isNullOrUndefined(event)
+            && !this.isNullOrUndefined(event.target) 
+            && !this.isNullOrUndefined(event.target.id)
+            && !this.isNullOrUndefined(this.state.previousSelection)
+            && !this.isNullOrUndefined(this.state.previousSelection.piece)
             && event.target.id != this.state.previousSelection.piece.id){
             this.setState({
                     previousSelection:{
@@ -195,10 +199,10 @@ class GameSection extends Component {
         console.log("now:",event.target);
 
         //reload the previous square if present
-        if (this.state.previousSelection != undefined && this.state.previousSelection != null 
-            && this.state.previousSelection.square != undefined && this.state.previousSelection.square != null 
-            && this.state.previousSelection.square.id != undefined && this.state.previousSelection.square.id != null 
-            && this.state.previousSelection.square.style != undefined && this.state.previousSelection.square.style != null ){
+        if (!this.isNullOrUndefined(this.state.previousSelection)
+            && !this.isNullOrUndefined(this.state.previousSelection.square)
+            && !this.isNullOrUndefined(this.state.previousSelection.square.id)
+            && !this.isNullOrUndefined(this.state.previousSelection.square.style)){
             const previousSquare = this.state.previousSelection.square;
             console.log("previous:",previousSquare);
             let restoringSquare = document.getElementById(this.state.previousSelection.square.id);
@@ -217,10 +221,11 @@ class GameSection extends Component {
         }
 
         //if the square is not the same as the previous one, save its original style and highlight it
-        if (event != undefined && event!= null 
-            && event.target != undefined && event.target != null && event.target.id != undefined && event.target.id != null
-            && this.state.previousSelection != undefined && this.state.previousSelection != null 
-            && this.state.previousSelection.square != undefined && this.state.previousSelection.square != null
+        if (!this.isNullOrUndefined(event)
+            && !this.isNullOrUndefined(event.target) 
+            && !this.isNullOrUndefined(event.target.id)
+            && !this.isNullOrUndefined(this.state.previousSelection)
+            && !this.isNullOrUndefined(this.state.previousSelection.square)
             && event.target.id != this.state.previousSelection.square.id){
                 console.log("square is not the same");
                 console.log(" previousSelection square",this.state.previousSelection.square);
@@ -258,24 +263,22 @@ class GameSection extends Component {
             });
         }
 
-
-
-//        const previousSquare = document.getElementById(this.state.previousSelection.square.id);
-  //      console.log("previousSquare id: ",previousSquare);
-    //    if (previousSquare != undefined && previousSquare != null){
-            
-            //previousSquare.setAttribute('style', this.state.previousSelection.square.style);
-      //  }
-
-
     }
 
     handleDragStart = (event) => {
         console.log("dragstart");
         event.dataTransfer.setData('text/plain', event.target.parentNode.id);
-        if (event != null && event.target != null && event.target.parentNode != null 
-            && event.target.parentNode.x != null && event.target.parentNode.x.baseVal != null && event.target.parentNode.x.baseVal.length > 0
-            && event.target.parentNode.y != null && event.target.parentNode.y.baseVal != null && event.target.parentNode.y.baseVal.length > 0){
+        if (!this.isNullOrUndefined(event)
+            && !this.isNullOrUndefined(event.target) 
+            && !this.isNullOrUndefined(event.target.parentNode)
+            && !this.isNullOrUndefined(event.target.parentNode.x)
+            && !this.isNullOrUndefined(event.target.parentNode.x.baseVal) 
+            && !this.isNullOrUndefined(event.target.parentNode.x.baseVal.length)
+            && event.target.parentNode.x.baseVal.length > 0
+            && !this.isNullOrUndefined(event.target.parentNode.y) 
+            && !this.isNullOrUndefined(event.target.parentNode.y.baseVal) 
+            && !this.isNullOrUndefined(event.target.parentNode.y.baseVal.length)
+            && event.target.parentNode.y.baseVal.length > 0){
                 let x = (event.target.parentNode.x.baseVal[0].value-25)/50;
                 let y = (event.target.parentNode.y.baseVal[0].value-25)/50;
                 this.setState({startX:x, startY:y});
