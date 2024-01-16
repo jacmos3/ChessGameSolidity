@@ -46,8 +46,8 @@ library ChessMediaLibrary {
         uint tokenId = 0;
         string memory result = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 400'>";
         result = string(abi.encodePacked(result, getBoardSquares()));   
-        string memory black = "<g fill='#000' font-family='arial unicode ms,Helvetica,Arial,sans-serif' font-size='40'>";
-        string memory white = "<g fill='#fff' font-family='arial unicode ms,Helvetica,Arial,sans-serif' font-size='40'>";
+        string memory black = "<g id='bp' fill='#000' font-family='arial unicode ms,Helvetica,Arial,sans-serif' font-size='40'>";
+        string memory white = "<g id='wp' fill='#fff' font-family='arial unicode ms,Helvetica,Arial,sans-serif' font-size='40'>";
         uint8[12] memory piecesCounter;
     
 
