@@ -51,7 +51,7 @@ contract ChessCore {
 
     address whitePlayer;
     address blackPlayer;
-    address currentPlayer;
+    address public currentPlayer;
 
     constructor(address _whitePlayer, uint _value) payable {
         // Chiamare initializeBoard nel costruttore
@@ -740,12 +740,11 @@ contract ChessCore {
         }
     }
 
-    // Add a function to get the curr   ent players
-    function getCurrentPlayers() public view returns (address, address) {
+    function getPlayers() external view returns (address, address) {
         return (whitePlayer, blackPlayer);
     }
 
-    function debugCreative(uint8 x, uint8 y, int8 piece) public returns (string memory) {
+    function debugCreative(uint8 x, uint8 y, int8 piece) external returns (string memory) {
         board[x][y] = piece;
         return printBoard();
     }
@@ -754,7 +753,7 @@ contract ChessCore {
         return board.getCurrentBoard();
     }
 
-    function getGameState () public view returns (uint8) {
+    function getGameState () external view returns (uint8) {
         if (gameState == GameState.NotStarted) return 1;
         if (gameState == GameState.InProgress) return 2;
         if (gameState == GameState.Draw) return 3;
