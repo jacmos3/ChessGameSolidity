@@ -46,7 +46,7 @@ class MyDapp extends Component {
                     name: "Holesky",
                     id: 17000,
                     opensea:"",
-                    contractAddressOverrided:"0x2E00209C3D86132A55Cd045C7b3468A4e062Ad9D",
+                    contractAddressOverrided:"0x000E8E492DFfDDf6C4779bb5EbFc351F39EFdA36",
                     openseaCard:"https://opensea.io/assets/",
                     options: {
                         

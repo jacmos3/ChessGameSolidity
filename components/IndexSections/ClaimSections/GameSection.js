@@ -16,34 +16,37 @@ class GameSection extends Component {
         game: {key: "", header: "", image: "", gameStatus: ""},
         loading: 0,
         errorMessage: "",
-        startX: null,
-        startY: null,
-        endX:null,
-        endY:null,
+        startRow: null,
+        startCol: null,
+        endRow:null,
+        endCol:null,
+        turnAddress: "w",
         previousSelection:{
             piece:{
-                id:null, style: null, highlight:false
-            }, 
+                id:null, style: null
+             }, 
+             highlight:false,
             square:{
                 id:null, style:null
             }
         }
     }
     
-
     resetState = () => {
         this.setState({
             game: {key: "", header: "", image: "", gameStatus: ""},
             loading: 0,
             errorMessage: "",
-            startX: null,
-            startY: null,
-            endX:null,
-            endY:null,
+            startRow: null,
+            startCol: null,
+            endRow:null,
+            endCol:null,
+            turnAddress: "w",
             previousSelection:{
                 piece:{
-                    id:null, style: null, highlight:false
-                }, 
+                    id:null, style: null
+                },
+                highlight:false,
                 square:{
                     id:null, style:null
                 }
@@ -71,6 +74,30 @@ class GameSection extends Component {
         this.setState({loading: this.state.loading + 1, errorMessage: ''})
         try {
             const chessCoreInstance = new this.props.state.web3.eth.Contract(ChessFactory.ChessCore.abi, this.props.addressGame);
+            let players = await chessCoreInstance.methods.getPlayers().call();
+            console.log("players:", players, ", account:", this.props.state.web3Settings.account);
+            if (players[0] == this.props.state.web3Settings.account){
+                this.setState({turnAddress: "w"});
+                console.log("turnAddress: w");
+            }
+            else
+            if (players[1] == this.props.state.web3Settings.account){
+                this.setState({turnAddress: "b"});
+                console.log("turnAddress: b");
+            }
+            else{
+                console.log("just a visitor");
+            }
+
+            let currentPlayer = await chessCoreInstance.methods.getCurrentPlayer().call();
+            console.log("currentPlayer: ", currentPlayer);
+            if (currentPlayer == this.props.state.web3Settings.account){
+                console.log("it's your turn");
+            }
+            else{
+                console.log("it's not your turn");
+            }
+
             let chessboard = await chessCoreInstance.methods.printChessBoardLayoutSVG().call()
                 .then((result) => {
                     //console.log(result);
@@ -151,12 +178,19 @@ class GameSection extends Component {
 
                 const chessPieces = document.querySelectorAll('.p');
                 chessPieces.forEach(piece => {
-                    piece.setAttribute('draggable', 'true');
-                    piece.setAttribute('style', 'cursor:pointer;');
-                    piece.addEventListener('dragstart', this.handleDragStart);
-                    piece.addEventListener('dragover', this.handleDragOver);
-                    piece.addEventListener('drop', this.handleDrop);
-                    piece.addEventListener('click', this.handlePieceClick);
+                    console.log("id[0]:",piece.id[0], this.state.turnAddress);
+                    if (piece.id[0] == this.state.turnAddress){
+                        piece.setAttribute('draggable', 'true');
+                        piece.setAttribute('style', 'cursor:pointer;');
+                        piece.addEventListener('dragstart', this.handleDragStart);
+                        piece.addEventListener('dragover', this.handleDragOver);
+                        piece.addEventListener('drop', this.handleDrop);
+                        piece.addEventListener('click', this.handlePieceClick);
+                    }
+                    else{
+                        piece.setAttribute('style', 'cursor:not-allowed;');
+                        piece.addEventListener('click', this.handleOpponentPieceClick);
+                    }
                 });
                 const squares = document.querySelectorAll('.s');
                 squares.forEach(square => {
@@ -168,12 +202,92 @@ class GameSection extends Component {
             else{
                 console.log("blackSquaresGroup is null");
             }
-        } catch (err) {
+        } 
+        catch (err) {
             this.setState({errorMessage: err.message});
             console.log(err.message);
         }
         this.setState({loading: this.state.loading - 1});
         this.resetState();
+    }
+    
+    handleOpponentPieceClick = (event) =>{
+        event.preventDefault();
+        console.log("Opponent piece click");
+        console.log(event.target);
+
+        if (!this.isNullOrUndefined(this.state.previousSelection.square)
+            && !this.isNullOrUndefined(this.state.previousSelection.square.id)
+            && !this.isNullOrUndefined(this.state.previousSelection.square.style)){
+                    const previousSquare = this.state.previousSelection.square;
+                    this.restoreSquare(previousSquare);
+                    this.setState({
+                        previousSelection:{
+                            piece: this.state.previousSelection.piece,
+                            //highlight: this.state.previousSelection.highlight, 
+                            square:{
+                                id:null, style:null
+                            }
+                        }
+                    });
+                    console.log("m");
+                    return;
+            }
+            else{
+                console.log("previousSelection square or something inside it is null or undefined");
+                console.log(this.state.previousSelection.square);
+            }
+
+        //check if the user has already selected a piece
+        if (!this.isNullOrUndefined(this.state.previousSelection) 
+            && !this.isNullOrUndefined(this.state.previousSelection.piece)
+            && !this.isNullOrUndefined(this.state.previousSelection.piece.id)
+            && !this.isNullOrUndefined(this.state.previousSelection.piece.style)){
+
+            console.log("parent node id: ",event.target.parentNode.parentNode);
+            console.log("x, y: ", event.target.attributes.x.value, event.target.attributes.y.value);
+            let x = (parseInt(event.target.attributes.x.value) - 25);
+            let y = (parseInt(event.target.attributes.y.value) - 25);
+
+            //get the element from the dom
+            const square = document.getElementById(y/50 + ',' + x/50);
+            console.log("square:",square);
+            
+            
+            const previousSquare = this.state.previousSelection.square;
+            this.restoreSquare(previousSquare);
+            this.setState({
+                previousSelection:{
+                    piece: this.state.previousSelection.piece,
+                    //highlight: this.state.previousSelection.highlight, 
+                    square: square.cloneNode(true)
+                }
+            });
+            let width = square.width.baseVal.value;
+            let height = square.height.baseVal.value;
+            square.setAttribute('style', 'stroke:yellow;stroke-width:2;stroke-opacity:0.9');
+            square.setAttribute('width', String(width - 2));
+            square.setAttribute('height', String(height - 2));
+            square.setAttribute('x', String(x + 1));
+            square.setAttribute('y', String(y + 1));
+
+
+            console.log("square",square);
+            this.setState({
+                endRow: y / 50,
+                endCol: x / 50,
+                previousSelection:{
+                    piece: this.state.previousSelection.piece,
+                    highlight: true, 
+                    square: this.state.previousSelection.square
+                }
+            });
+
+            this.generateConfirmButton(event.target, event.target.parentNode.parentNode, x, y);
+        }
+        else{
+            console.log("previousSelection or something inside it is null");
+        }
     }
 
     handlePieceClick = (event) =>{
@@ -203,11 +317,9 @@ class GameSection extends Component {
             && !this.isNullOrUndefined(this.state.previousSelection.piece)
             && event.target.id != this.state.previousSelection.piece.id){
                 this.setState({
-                        previousSelection:{
-                        piece: 
-                           event.target.cloneNode(true),
-                           highlight: true
-                        , 
+                    previousSelection:{
+                        piece: event.target.cloneNode(true),
+                        highlight: true, 
                         square: this.restoreSquare(this.state.previousSelection.square)
                     }
                 });
@@ -218,18 +330,19 @@ class GameSection extends Component {
                     && !this.isNullOrUndefined(event.target.attributes.y)
                     && !this.isNullOrUndefined(event.target.attributes.x.value)
                     && !this.isNullOrUndefined(event.target.attributes.y.value)){
-                        let x = (parseInt(event.target.attributes.x.value) - 25)/50;
-                        let y = (parseInt(event.target.attributes.y.value) - 25)/50;
-                        this.setState({startX:x, startY:y});
-                        console.log(event.target.attributes, ", ", x,",", y);
+                        let row = (parseInt(event.target.attributes.y.value) - 25)/50;
+                        let col = (parseInt(event.target.attributes.x.value) - 25)/50;
+                        this.setState({startRow:row, startCol:col});
+                        console.log(event.target.attributes, ", ", row,",", col);
                 }
             }
             else{
                 this.setState({
                     previousSelection: {
                         piece:{
-                            id:null, style: null, highlight: false
+                            id:null, style: null
                         }, 
+                        highlight: false,
                         square:this.restoreSquare(this.state.previousSelection.square)
                     }
                 });
@@ -239,6 +352,14 @@ class GameSection extends Component {
 
     restoreSquare = (previousSquare) =>{
         console.log("restoreSquare",previousSquare);
+        const confirmButton = document.getElementById('confirmButton');
+        if (!this.isNullOrUndefined(confirmButton)){
+            confirmButton.remove();
+            console.log("confirm button removed");
+        }
+        else{
+            console.log("confirm button is null");
+        }
         let restoringSquare = document.getElementById(this.state.previousSelection.square.id);
         if (!this.isNullOrUndefined(restoringSquare)
             && !this.isNullOrUndefined(previousSquare)
@@ -258,10 +379,7 @@ class GameSection extends Component {
             restoringSquare.setAttribute('y', previousSquare.attributes.y.value);
             restoringSquare.setAttribute('fill', previousSquare.attributes.fill.value);
 
-            const confirmButton = document.getElementById('confirmButton');
-            if (!this.isNullOrUndefined(confirmButton)){
-                confirmButton.parentNode.removeChild(confirmButton);
-            }
+            
         }
         else{
             console.log("restoringSquare or previousSelection is null/undefined or they contains something null");
@@ -271,27 +389,27 @@ class GameSection extends Component {
     
     handleSquareClick = (event) =>{
         event.preventDefault();
-        console.log("click");
-        console.log("now:",event.target);
-        //reload the previous square if present
+        console.log("handleSquareClick");
+
         if (!this.isNullOrUndefined(this.state.previousSelection)){
             if (!this.isNullOrUndefined(this.state.previousSelection.piece)){
-                if (!this.isNullOrUndefined(this.state.previousSelection.piece.highlight)){
-                    if (this.state.previousSelection.piece.highlight == false){
+                if (!this.isNullOrUndefined(this.state.previousSelection.highlight)){
+                    if (this.state.previousSelection.highlight == false){
+                        console.log("previousSelection.highlight is false");
                         return;
                     }
                 }
             }
+
             if (!this.isNullOrUndefined(this.state.previousSelection.square)
                 && !this.isNullOrUndefined(this.state.previousSelection.square.id)
                 && !this.isNullOrUndefined(this.state.previousSelection.square.style)){
-                const previousSquare = this.state.previousSelection.square;
-                console.log("previous:",previousSquare);
-                this.restoreSquare(previousSquare);
-                console.log("now:",event.target);
+                    const previousSquare = this.state.previousSelection.square;
+                    this.restoreSquare(previousSquare);
             }
             else{
-                console.log("previousSelection or something inside it is null or undefined");
+                console.log("previousSelection square or something inside it is null or undefined");
+                console.log(this.state.previousSelection.square);
             }
         }
 
@@ -301,18 +419,36 @@ class GameSection extends Component {
             && !this.isNullOrUndefined(event.target.id)
             && !this.isNullOrUndefined(this.state.previousSelection)
             && !this.isNullOrUndefined(this.state.previousSelection.square)
+            && !this.isNullOrUndefined(this.state.previousSelection.piece)
+            && !this.isNullOrUndefined(this.state.previousSelection.piece.id)
             && event.target.id != this.state.previousSelection.square.id){
-                console.log("square is not the same");
-                console.log(" previousSelection square",this.state.previousSelection.square);
+                
+                //this.retrieveEndCoords(event.target);
+
+                let row = event.target.id.split(',')[0];
+                let col = event.target.id.split(',')[1];
+                let element = document.getElementById(this.state.previousSelection.piece.id);
+                let pieceX = (element.attributes.x.value - 25)/50;
+                let pieceY = (element.attributes.y.value - 25)/50;
+                if (pieceX == col && pieceY == row){
+                    console.log("piece in the same square");
+                    return;
+                }
+                else{
+                    console.log("piece in a different square")
+                    console.log("pieceX:",pieceX,", pieceY:",pieceY);
+                    console.log("row:",row,", col:",col);
+                }
+                    
                 this.setState({
                     previousSelection:{
                         piece: this.state.previousSelection.piece,
                         square: event.target.cloneNode(true)
                     },
-                    endX: event.target.attributes.y.value,
-                    endX: event.target.id.split(',')[0],
-                    endY: event.target.id.split(',')[1]
+                    endRow: row,
+                    endCol: col
                 });
+
                 console.log("saved:",this.state.previousSelection.square);
                 let x = parseInt(event.target.x.baseVal.value);
                 let y = parseInt(event.target.y.baseVal.value);
@@ -323,44 +459,54 @@ class GameSection extends Component {
                 event.target.setAttribute('height', String(height - 2));
                 event.target.setAttribute('x', String(x + 1));
                 event.target.setAttribute('y', String(y + 1));
-                const parentGroup = event.target.parentNode;
-                const text = document.createElementNS("http://www.w3.org/2000/svg","text");
-                text.setAttribute('id', 'confirmButton');
-                text.setAttribute('x', String(x + 25));
-                text.setAttribute('y', String(y + 25));
-                text.setAttribute('fill', 'yellow');
-                text.setAttribute('font-size', '20');
-                text.setAttribute('font-family', 'arial unicode ms,Helvetica,Arial,sans-serif');
-                text.setAttribute('font-weight', 'bold');
-                text.setAttribute('text-anchor', 'middle');
-                text.setAttribute('alignment-baseline', 'middle');
-                text.setAttribute('dominant-baseline', 'middle');
-                text.setAttribute('style', 'cursor:pointer');
-                text.innerHTML = "✓";
-                text.addEventListener('click', this.handleConfirmClick);
-                parentGroup.appendChild(text);
-            }
-            else{
-                console.log("setting previousSelection to null")
-                this.setState({
-                    previousSelection: {
-                        piece:this.state.previousSelection.piece,
-                        square:{
-                            id:null, style:null
-                        }
+                this.generateConfirmButton(event.target, event.target.parentNode.parentNode.parentNode, x, y);
+
+        }
+        else{
+            console.log("setting previousSelection to null")
+            this.setState({
+                previousSelection: {
+                    piece:this.state.previousSelection.piece,
+                    square:{
+                        id:null, style:null
                     }
-                });
-            }
+                }
+            });
+        }
     };
+
+    retrieveEndCoords = (target) =>{
+        
+    }
+    generateConfirmButton = (target, parent, x, y) =>{
+        console.log("generateConfirmButton");
+        const parentGroup = target.parentNode;
+        const text = document.createElementNS("http://www.w3.org/2000/svg","text");
+        text.setAttribute('id', 'confirmButton');
+        text.setAttribute('x', String(x + 25));
+        text.setAttribute('y', String(y + 25));
+        text.setAttribute('fill', 'yellow');
+        text.setAttribute('font-size', '20');
+        text.setAttribute('font-family', 'arial unicode ms,Helvetica,Arial,sans-serif');
+        text.setAttribute('font-weight', 'bold');
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('alignment-baseline', 'middle');
+        text.setAttribute('dominant-baseline', 'middle');
+        text.setAttribute('style', 'cursor:pointer');
+        text.innerHTML = "✓";
+        text.addEventListener('click', this.handleConfirmClick);
+            parent.appendChild(text);
+            
+    }
 
     handleConfirmClick = (event) =>{
         event.preventDefault();
         console.log("confirm");
-        if (!this.isNullOrUndefined(this.state.startX)
-            && !this.isNullOrUndefined(this.state.startY)
-            && !this.isNullOrUndefined(this.state.endX)
-            && !this.isNullOrUndefined(this.state.endY)){
-                this.makeMove(this.state.startX, this.state.startY, this.state.endX, this.state.endY);
+        if (!this.isNullOrUndefined(this.state.startRow)
+            && !this.isNullOrUndefined(this.state.startCol)
+            && !this.isNullOrUndefined(this.state.endRow)
+            && !this.isNullOrUndefined(this.state.endCol)){
+                this.makeMove(this.state.startRow, this.state.startCol, this.state.endRow, this.state.endCol);
         }
         else{
             console.log("something is null");
@@ -383,7 +529,7 @@ class GameSection extends Component {
             && event.target.parentNode.y.baseVal.length > 0){
                 let row = (event.target.parentNode.y.baseVal[0].value-25)/50;
                 let col = (event.target.parentNode.x.baseVal[0].value-25)/50;
-                this.setState({startX:row, startY:col});
+                this.setState({startRow:row, startCol:col});
             console.log(row, col);
         }
         else{
@@ -401,16 +547,32 @@ class GameSection extends Component {
         const data = event.dataTransfer.getData('text/plain');
         const draggedElement = document.getElementById(data);
 
-        const dropTarget = event.target;
-        
-        this.findCoords(event.target, draggedElement);
-        //this.setState({endX:x, endY:y});
-        this.setState({loading: this.state.loading + 1, errorMessage: ''})
-        this.makeMove(this.state.startX, this.state.startY, this.state.endX, this.state.endY);
+        if (this.isNullOrUndefined(draggedElement)){
+            return;
+        }
+        else{
+            const dropTarget = event.target;
+            
+            this.findCoords(event.target, draggedElement);
+            //this.setState({endRow:x, endCol:y});
+            let startRow = this.state.startRow;
+            let startCol = this.state.startCol;
+            let endRow = this.state.endRow;
+            let endCol = this.state.endCol;
+            this.restoreSquare(this.state.previousSelection.square);
+
+            this.makeMove(startRow, startCol, endRow, endCol);
+            this.setState({loading: this.state.loading + 1, errorMessage: ''});
+        }
     };
 
     findCoords = (dropTarget, draggedElement) => {
         console.log("findCoords");
+        if (this.isNullOrUndefined(dropTarget) || this.isNullOrUndefined(draggedElement)){
+            console.log("dropTarget or draggedElement is null");
+            return;
+        }
+
         let col = null;
         let row = null;
         if (dropTarget.nodeName.toLowerCase() === 'rect'){
@@ -433,17 +595,25 @@ class GameSection extends Component {
             col = (col - 25)/50;
             row = (row - 25)/50;
             console.log(col,",",row);
-            dropTarget.parentNode.removeChild(dropTarget);
+
+            if (col == this.state.startCol && row == this.state.startRow){
+                console.log("same square");
+                return;
+            }
+            else{
+                console.log("different square");
+            }
+            dropTarget.remove();
         }
-        this.setState({endX:row, endY:col});
+        this.setState({endRow:row, endCol:col});
         console.log("col:",col,", row:",row);
     }
 
-    makeMove = async (startX, startY, endX, endY) => {
-        console.log("makeMove: ", startX, ",", startY, "_", endX, ",", endY);
+    makeMove = async (startRow, startCol, endRow, endCol) => {
+        console.log("makeMove: ", startRow, ",", startCol, "_", endRow, ",", endCol);
         try {
             const chessCoreInstance = new this.props.state.web3.eth.Contract(ChessFactory.ChessCore.abi, this.props.addressGame);
-            await chessCoreInstance.methods.makeMove(startX, startY, endX, endY).send({
+            await chessCoreInstance.methods.makeMove(startRow, startCol, endRow, endCol).send({
                 from: this.props.state.web3Settings.account
             });
         } catch (err) {
@@ -452,18 +622,6 @@ class GameSection extends Component {
         }
         this.setState({loading: this.state.loading - 1, errorMessage: ""});
 
-        /*try {
-            const accounts = await this.props.state.web3.eth.getAccounts();
-            const chessCoreInstance = new this.props.state.web3.eth.Contract(ChessFactory.ChessCore.abi, this.props.addressGame);
-            console.log("Sending tx: ", this.state.startY, ",", this.state.startX, "_", endY, ",", endX);
-            await chessCoreInstance.methods.makeMove(this.state.startY, this.state.startX, endY, endX).send({from: accounts[0]});
-        } 
-        catch (err) {
-            this.setState({errorMessage: err.message});
-            console.log(err.code);
-        }
-        this.setState({loading: this.state.loading - 1, errorMessage: ""});
-        */
         this.fetchGame();
     }
 
