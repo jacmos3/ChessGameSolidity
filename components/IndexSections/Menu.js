@@ -1,78 +1,68 @@
-import React, {Component} from 'react';
+import React, { Component } from 'react';
 import styles from "../../styles/components/Menu.module.scss";
-import {menuDetails} from "../../public/lists/menuDetails.js"
+import { menuDetails } from "../../public/lists/menuDetails.js";
 
 class Menu extends Component {
-    constructor(props) {
-        super(props);
-        this.state = {
-            isChecked: props.isChecked || false,
-        };
-        this.handleChange = this.handleChange.bind(this);
-    }
+    state = {
+        isChecked: false
+    };
 
-    handleChange(e) {
-        this.setState({ isChecked: !this.state.isChecked })
-    }
+    handleChange = () => {
+        this.setState({ isChecked: !this.state.isChecked });
+    };
 
     render() {
-
         return (
             <div className={`${styles.nav__section} sticky top-0 z-10`}>
-                <div className={`${styles.title}`}>Solidity Chess Game</div>
-                <div className="flex flex-wrap mx-auto w-full justify-center">
-                    <nav className={`${styles.navMenu}`}>
-                    {
-                      menuDetails.map(item =>
-                        <a key = {item.key} className = {`${styles.a__text}`} href= {item.href}>{item.value}</a>
-                      )
-                    }
-                    {
-                      //  <div className={`${styles.dot}`}></div>
-                    }
-                    </nav>
-                </div>
-                <div className={`${styles.mobile__menu}`}>
-                    <input type="checkbox" id="toogle-menu" checked={this.state.isChecked} onChange={this.handleChange}/>
-                    <label htmlFor="toogle-menu"><span></span></label>
+                <div className={styles.title}>Solidity Chess</div>
+                <nav className={styles.navMenu}>
+                    {menuDetails.map(item => (
+                        <a
+                            key={item.key}
+                            className={styles.a__text}
+                            href={item.href}
+                            target={item.href.startsWith('http') ? '_blank' : undefined}
+                            rel={item.href.startsWith('http') ? 'noopener noreferrer' : undefined}
+                        >
+                            {item.value}
+                        </a>
+                    ))}
+                </nav>
+                <div className={styles.mobile__menu}>
+                    <input
+                        type="checkbox"
+                        id="toggle-menu"
+                        checked={this.state.isChecked}
+                        onChange={this.handleChange}
+                    />
+                    <label htmlFor="toggle-menu">
+                        <span></span>
+                    </label>
                     <nav>
                         <div>
-                            <label htmlFor="toogle-menu">
+                            <label htmlFor="toggle-menu">
                                 <span></span>
                             </label>
                         </div>
-                        <ul>{
-                              menuDetails.map(item =>
-                                <li key = {item.key}><a href={item.href} onClick={this.handleChange}>{item.value}</a></li>
-                              )
-                            }
+                        <ul>
+                            {menuDetails.map(item => (
+                                <li key={item.key}>
+                                    <a
+                                        href={item.href}
+                                        onClick={this.handleChange}
+                                        target={item.href.startsWith('http') ? '_blank' : undefined}
+                                        rel={item.href.startsWith('http') ? 'noopener noreferrer' : undefined}
+                                    >
+                                        {item.value}
+                                    </a>
+                                </li>
+                            ))}
                         </ul>
-                        <div className={`${styles.social__buttons}`}>
-                            <a href={this.props.state.opensea}>
-                              <img
-                                loading="lazy"
-                                src='img/social/opensea.png'
-                                className={`${styles.social__icon}`}/>
-                            </a>
-                            <a href={this.props.state.twitter}>
-                              <img
-                                loading="lazy"
-                                src='img/social/twitter.png'
-                                className={`${styles.social__icon}`}/>
-                            </a>
-                            <a href={this.props.state.discord}>
-                              <img
-                                loading="lazy"
-                                src='img/social/discord.png'
-                                className={`${styles.social__icon}`}/>
-                            </a>
-                        </div>
                     </nav>
-
                 </div>
             </div>
-        )
-    };
+        );
+    }
 }
 
 export default Menu;

@@ -2,7 +2,6 @@ import React, { Component } from 'react';
 import Layout from '../components/Layout.js';
 import Presentation from '../components/IndexSections/Presentation.js';
 import Claim from '../components/IndexSections/Claim.js';
-import Team from '../components/IndexSections/Team.js';
 import Menu from '../components/IndexSections/Menu.js';
 
 import Web3 from "web3";
@@ -18,51 +17,35 @@ class MyDapp extends Component {
                     name: "Sepolia",
                     id: 11155111,
                     contractAddressOverrided: process.env.NEXT_PUBLIC_CONTRACT_ADDRESS_SEPOLIA || "",
-                    explorer: "https://sepolia.etherscan.io",
-                    options: { id: 1 }
+                    explorer: "https://sepolia.etherscan.io"
                 },
                 {
                     name: "Holesky",
                     id: 17000,
                     contractAddressOverrided: process.env.NEXT_PUBLIC_CONTRACT_ADDRESS_HOLESKY || "",
-                    explorer: "https://holesky.etherscan.io",
-                    options: { id: 1 }
+                    explorer: "https://holesky.etherscan.io"
                 },
                 {
                     name: "Ganache",
                     id: 1337,
                     contractAddressOverrided: process.env.NEXT_PUBLIC_CONTRACT_ADDRESS_LOCAL || "",
-                    explorer: "",
-                    options: { id: 1 }
+                    explorer: ""
                 },
                 {
-                    name: "Ganache (5777)",
+                    name: "Ganache",
                     id: 5777,
                     contractAddressOverrided: process.env.NEXT_PUBLIC_CONTRACT_ADDRESS_LOCAL || "",
-                    explorer: "",
-                    options: { id: 1 }
-                },
-                {
-                    name: "Ganache (Auto)",
-                    id: 1766970829146,
-                    contractAddressOverrided: process.env.NEXT_PUBLIC_CONTRACT_ADDRESS_LOCAL || "",
-                    explorer: "",
-                    options: { id: 1 }
+                    explorer: ""
                 },
                 {
                     name: "Linea Sepolia",
                     id: 59141,
                     contractAddressOverrided: process.env.NEXT_PUBLIC_CONTRACT_ADDRESS_LINEA || "",
-                    explorer: "https://sepolia.lineascan.build",
-                    options: { id: 1 }
+                    explorer: "https://sepolia.lineascan.build"
                 }
             ]
         }
     };
-
-    constructor(props) {
-        super(props);
-    }
 
     async componentDidMount() {
         var web3Settings = this.state.web3Settings;
@@ -71,23 +54,19 @@ class MyDapp extends Component {
         this.connect();
     }
 
-    update = async (nextState) => {
-        this.setState(nextState);
-    }
-
-    disconnect = (event) => {
+    disconnect = () => {
         var web3Settings = this.state.web3Settings;
         web3Settings.isWeb3Connected = false;
         web3Settings.account = null;
         this.setState({ web3Settings: web3Settings });
     }
 
-    connect = async (event) => {
+    connect = async () => {
         var providerOptions = {
             injected: {
                 display: {
                     name: "MetaMask",
-                    description: "Connect with MetaMask or browser wallet"
+                    description: "Connect with MetaMask"
                 },
                 package: null
             }
@@ -110,11 +89,11 @@ class MyDapp extends Component {
 
         var web3 = new Web3(provider);
 
-        provider.on('accountsChanged', function (accounts) {
+        provider.on('accountsChanged', function () {
             window.location.reload();
         });
 
-        provider.on('chainChanged', function (networkId) {
+        provider.on('chainChanged', function () {
             window.location.reload();
         });
 
@@ -136,12 +115,10 @@ class MyDapp extends Component {
         web3Settings.ethBalance = ethBalance;
         web3Settings.isWeb3Connected = accounts.length > 0;
 
-        // Get network name
         const chain = web3Settings.chains.find(c => c.id === networkId);
         web3Settings.networkName = chain ? chain.name : `Unknown (${networkId})`;
         web3Settings.isSupported = !!chain;
 
-        // Override contract address if specified for this network
         if (chain && chain.contractAddressOverrided) {
             web3Settings.contractAddress = chain.contractAddressOverrided;
         }
@@ -159,43 +136,72 @@ class MyDapp extends Component {
 
         return (
             <Layout state={this.state}>
-                <div id="connectWallet" className="fixed top-4 right-4 z-50">
+                <div id="connectWallet" style={{
+                    position: 'fixed',
+                    top: '16px',
+                    right: '16px',
+                    zIndex: 50,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                }}>
                     {web3Settings.isWeb3Connected ? (
-                        <div className="flex items-center gap-2">
-                            <span className={`px-3 py-1 rounded text-sm ${web3Settings.isSupported ? 'bg-green-600' : 'bg-yellow-600'} text-white`}>
+                        <>
+                            <span style={{
+                                padding: '6px 12px',
+                                borderRadius: '6px',
+                                fontSize: '0.85rem',
+                                fontWeight: 500,
+                                background: web3Settings.isSupported ? '#22c55e' : '#eab308',
+                                color: web3Settings.isSupported ? 'white' : '#1a1a2e'
+                            }}>
                                 {web3Settings.networkName}
                             </span>
                             <button
-                                className="btn btn__wallet bg-trips-1 text-white px-4 py-2 rounded hover:bg-trips-2"
                                 onClick={this.disconnect}
+                                style={{
+                                    padding: '8px 16px',
+                                    borderRadius: '6px',
+                                    background: '#e4a853',
+                                    color: '#1a1a2e',
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                    fontWeight: 500,
+                                    fontSize: '0.85rem'
+                                }}
                             >
                                 {this.truncateAddress(web3Settings.account)}
                             </button>
-                        </div>
+                        </>
                     ) : (
                         <button
-                            className="btn btn__wallet bg-trips-3 text-white px-4 py-2 rounded hover:bg-orange-600"
                             onClick={this.connect}
+                            style={{
+                                padding: '8px 16px',
+                                borderRadius: '6px',
+                                background: '#e4a853',
+                                color: '#1a1a2e',
+                                border: 'none',
+                                cursor: 'pointer',
+                                fontWeight: 500,
+                                fontSize: '0.85rem'
+                            }}
                         >
                             Connect Wallet
                         </button>
                     )}
                 </div>
 
-                <Presentation state={this.state} />
-                <Menu state={this.state} />
+                <Presentation />
+                <Menu />
 
-                <div id="Claim" className="bg-trips-5">
+                <div id="Claim" style={{ background: '#1a1a2e', minHeight: '100vh' }}>
                     <Claim
                         disconnect={this.disconnect}
                         connect={this.connect}
                         state={this.state}
                         web3={this.state.web3}
                     />
-                </div>
-
-                <div id="Team">
-                    <Team />
                 </div>
             </Layout>
         );
