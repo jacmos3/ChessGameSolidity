@@ -29,17 +29,31 @@ class MyDapp extends Component {
                     options: { id: 1 }
                 },
                 {
-                    name: "Localhost",
+                    name: "Ganache",
                     id: 1337,
                     contractAddressOverrided: process.env.NEXT_PUBLIC_CONTRACT_ADDRESS_LOCAL || "",
                     explorer: "",
                     options: { id: 1 }
                 },
                 {
-                    name: "Ganache",
+                    name: "Ganache (5777)",
                     id: 5777,
                     contractAddressOverrided: process.env.NEXT_PUBLIC_CONTRACT_ADDRESS_LOCAL || "",
                     explorer: "",
+                    options: { id: 1 }
+                },
+                {
+                    name: "Ganache (Auto)",
+                    id: 1766970829146,
+                    contractAddressOverrided: process.env.NEXT_PUBLIC_CONTRACT_ADDRESS_LOCAL || "",
+                    explorer: "",
+                    options: { id: 1 }
+                },
+                {
+                    name: "Linea Sepolia",
+                    id: 59141,
+                    contractAddressOverrided: process.env.NEXT_PUBLIC_CONTRACT_ADDRESS_LINEA || "",
+                    explorer: "https://sepolia.lineascan.build",
                     options: { id: 1 }
                 }
             ]

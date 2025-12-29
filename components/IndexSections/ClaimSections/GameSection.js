@@ -1,38 +1,26 @@
 import React, { Component } from 'react';
 import { Container, Message, Button, Modal } from 'semantic-ui-react';
-import ChessFactory from '../../../ethereum/build/ChessFactory_flattened.sol.json';
-import styles from "../../../styles/components/claimSections/FetchNFTList.module.scss";
+import { Chessboard } from 'react-chessboard';
+import ChessCoreABI from '../../../ethereum/build/contracts/ChessCore.json';
 
 class GameSection extends Component {
-    constructor(props) {
-        super(props);
-    }
-
     state = {
-        game: { key: "", header: "", image: "", gameStatus: "" },
+        game: { key: "", header: "" },
         loading: false,
         actionLoading: false,
         errorMessage: "",
         successMessage: "",
-        // Move tracking
-        startRow: null,
-        startCol: null,
-        endRow: null,
-        endCol: null,
         // Game info
-        playerRole: null, // 'white', 'black', or 'spectator'
+        playerRole: null,
         isMyTurn: false,
         gameState: 0,
         betting: "0",
         whitePlayer: "",
         blackPlayer: "",
         currentPlayer: "",
-        // UI state
-        previousSelection: {
-            piece: { id: null, style: null },
-            highlight: false,
-            square: { id: null, style: null }
-        },
+        // Board state
+        position: "start",
+        boardOrientation: "white",
         showResignModal: false
     }
 
@@ -42,13 +30,43 @@ class GameSection extends Component {
 
     getGameStateInfo = (state) => {
         switch (parseInt(state)) {
-            case 1: return { text: "Waiting for opponent", color: "blue", isActive: false, canJoin: true };
-            case 2: return { text: "In Progress", color: "green", isActive: true, canJoin: false };
-            case 3: return { text: "Draw", color: "gray", isActive: false, canJoin: false };
-            case 4: return { text: "White Wins!", color: "gold", isActive: false, canJoin: false };
-            case 5: return { text: "Black Wins!", color: "purple", isActive: false, canJoin: false };
-            default: return { text: "Unknown", color: "gray", isActive: false, canJoin: false };
+            case 1: return { text: "Waiting for opponent", color: "#3b82f6", isActive: false, canJoin: true };
+            case 2: return { text: "In Progress", color: "#22c55e", isActive: true, canJoin: false };
+            case 3: return { text: "Draw", color: "#6b7280", isActive: false, canJoin: false };
+            case 4: return { text: "White Wins!", color: "#eab308", isActive: false, canJoin: false };
+            case 5: return { text: "Black Wins!", color: "#a855f7", isActive: false, canJoin: false };
+            default: return { text: "Unknown", color: "#6b7280", isActive: false, canJoin: false };
         }
+    }
+
+    // Convert contract piece value to FEN piece character
+    pieceToFen = (piece) => {
+        const pieceMap = {
+            1: 'P', 2: 'N', 3: 'B', 4: 'R', 5: 'Q', 6: 'K',
+            '-1': 'p', '-2': 'n', '-3': 'b', '-4': 'r', '-5': 'q', '-6': 'k'
+        };
+        return pieceMap[piece.toString()] || null;
+    }
+
+    // Convert board array to position object for react-chessboard
+    boardToPosition = (boardArray) => {
+        const position = {};
+        const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+
+        for (let row = 0; row < 8; row++) {
+            for (let col = 0; col < 8; col++) {
+                const piece = boardArray[row][col];
+                if (piece !== 0) {
+                    const fenPiece = this.pieceToFen(piece);
+                    if (fenPiece) {
+                        const square = files[col] + (8 - row);
+                        const color = piece > 0 ? 'w' : 'b';
+                        position[square] = color + fenPiece.toUpperCase();
+                    }
+                }
+            }
+        }
+        return position;
     }
 
     fetchGame = async () => {
@@ -57,22 +75,30 @@ class GameSection extends Component {
         try {
             const { web3, web3Settings } = this.props.state;
             const chessCoreInstance = new web3.eth.Contract(
-                ChessFactory.ChessCore.abi,
+                ChessCoreABI.abi,
                 this.props.addressGame
             );
 
-            // Fetch all game data
-            const [players, currentPlayer, gameState, betting, chessboardData] = await Promise.all([
+            const [players, currentPlayer, gameState, betting] = await Promise.all([
                 chessCoreInstance.methods.getPlayers().call(),
-                chessCoreInstance.methods.getCurrentPlayer().call(),
+                chessCoreInstance.methods.currentPlayer().call(),
                 chessCoreInstance.methods.getGameState().call(),
-                chessCoreInstance.methods.betting().call(),
-                chessCoreInstance.methods.printChessBoardLayoutSVG().call()
+                chessCoreInstance.methods.betting().call()
             ]);
 
-            const chessboard = JSON.parse(window.atob(chessboardData.split(',')[1]));
+            // Fetch board state
+            const boardArray = [];
+            for (let row = 0; row < 8; row++) {
+                const rowArray = [];
+                for (let col = 0; col < 8; col++) {
+                    const piece = await chessCoreInstance.methods.board(row, col).call();
+                    rowArray.push(parseInt(piece));
+                }
+                boardArray.push(rowArray);
+            }
 
-            // Determine player role
+            const position = this.boardToPosition(boardArray);
+
             let playerRole = 'spectator';
             if (players[0].toLowerCase() === web3Settings.account.toLowerCase()) {
                 playerRole = 'white';
@@ -85,9 +111,10 @@ class GameSection extends Component {
             this.setState({
                 game: {
                     key: this.props.addressGame,
-                    header: chessboard.name,
-                    image: chessboard.image
+                    header: this.props.addressGame.slice(0, 8)
                 },
+                position,
+                boardOrientation: playerRole === 'black' ? 'black' : 'white',
                 playerRole,
                 isMyTurn,
                 gameState: parseInt(gameState),
@@ -97,9 +124,6 @@ class GameSection extends Component {
                 currentPlayer
             });
 
-            // Render the SVG board
-            this.renderBoard(chessboard, playerRole, isMyTurn, parseInt(gameState));
-
         } catch (err) {
             this.setState({ errorMessage: err.message });
         }
@@ -107,270 +131,48 @@ class GameSection extends Component {
         this.setState({ loading: false });
     }
 
-    renderBoard = (chessboard, playerRole, isMyTurn, gameState) => {
-        const svgString = atob(chessboard.image.split(',')[1]);
-        const imageContainer = document.getElementById('image-container');
-        if (!imageContainer) return;
+    // Convert square notation to row/col
+    squareToCoords = (square) => {
+        const files = { a: 0, b: 1, c: 2, d: 3, e: 4, f: 5, g: 6, h: 7 };
+        const col = files[square[0]];
+        const row = 8 - parseInt(square[1]);
+        return { row, col };
+    }
 
-        imageContainer.innerHTML = svgString;
+    onDrop = async (sourceSquare, targetSquare) => {
+        const { isMyTurn, playerRole, gameState } = this.state;
 
-        const blackSquaresGroup = document.getElementById('s');
-        if (!blackSquaresGroup) return;
-
-        // Remove existing squares
-        const existingRects = blackSquaresGroup.getElementsByTagName('rect');
-        while (existingRects.length > 0) {
-            blackSquaresGroup.removeChild(existingRects[0]);
+        // Check if move is allowed
+        if (gameState !== 2 || !isMyTurn || playerRole === 'spectator') {
+            return false;
         }
 
-        // Recreate squares with IDs
-        const blackSquare = "#808080";
-        const whiteSquare = "#D8D8D8";
-        let isWhite = true;
-        const size = 50;
+        const source = this.squareToCoords(sourceSquare);
+        const target = this.squareToCoords(targetSquare);
 
-        for (let row = 0; row < 8; row++) {
-            for (let col = 0; col < 8; col++) {
-                const newGroup = document.createElementNS("http://www.w3.org/2000/svg", 'g');
-                newGroup.setAttribute('font-family', 'arial unicode ms,Helvetica,Arial,sans-serif');
-                newGroup.setAttribute('font-size', '40');
-
-                const newRect = document.createElementNS("http://www.w3.org/2000/svg", 'rect');
-                newRect.setAttribute('id', String(col) + ',' + String(row));
-                newRect.setAttribute('class', 's');
-                newRect.setAttribute('x', String(size * row));
-                newRect.setAttribute('y', String(size * col));
-                newRect.setAttribute('width', String(size));
-                newRect.setAttribute('height', String(size));
-                newRect.setAttribute('fill', isWhite ? whiteSquare : blackSquare);
-
-                if (col !== 7) isWhite = !isWhite;
-
-                newGroup.appendChild(newRect);
-                blackSquaresGroup.appendChild(newGroup);
-            }
-        }
-
-        // Set up piece interactions (only if game is active and it's player's turn)
-        const canMove = gameState === 2 && isMyTurn && playerRole !== 'spectator';
-        const turnPrefix = playerRole === 'white' ? 'w' : 'b';
-
-        const chessPieces = document.querySelectorAll('.p');
-        chessPieces.forEach(piece => {
-            if (canMove && piece.id[0] === turnPrefix) {
-                piece.setAttribute('style', 'cursor:pointer;');
-                piece.addEventListener('click', this.handlePieceClick);
-            } else {
-                piece.setAttribute('style', 'cursor:not-allowed;');
-                if (canMove) {
-                    piece.addEventListener('click', this.handleOpponentPieceClick);
-                }
-            }
-        });
-
-        const squares = document.querySelectorAll('.s');
-        squares.forEach(square => {
-            square.addEventListener('click', this.handleSquareClick);
-        });
-    }
-
-    isNullOrUndefined = (value) => value === undefined || value === null;
-
-    handlePieceClick = (event) => {
-        event.preventDefault();
-
-        // Restore previous piece style
-        if (this.state.previousSelection?.piece?.id) {
-            const previousPiece = document.getElementById(this.state.previousSelection.piece.id);
-            if (previousPiece) {
-                previousPiece.setAttribute('style', "cursor:pointer");
-            }
-        }
-
-        // Restore previous square
-        this.restoreSquare(this.state.previousSelection.square);
-
-        // If clicking same piece, deselect
-        if (event.target.id === this.state.previousSelection?.piece?.id) {
-            this.setState({
-                previousSelection: { piece: { id: null }, highlight: false, square: { id: null } },
-                startRow: null,
-                startCol: null
-            });
-            return;
-        }
-
-        // Select new piece
-        const x = parseInt(event.target.attributes.x.value);
-        const y = parseInt(event.target.attributes.y.value);
-        const row = (y - 25) / 50;
-        const col = (x - 25) / 50;
-
-        this.setState({
-            previousSelection: {
-                piece: { id: event.target.id, style: event.target.getAttribute('style') },
-                highlight: true,
-                square: { id: null }
-            },
-            startRow: row,
-            startCol: col
-        });
-
-        event.target.setAttribute('style', 'cursor:pointer; fill:yellow; stroke:yellow; stroke-width:1px');
-    }
-
-    handleOpponentPieceClick = (event) => {
-        event.preventDefault();
-
-        if (!this.state.previousSelection?.piece?.id) return;
-
-        // Get target square coordinates
-        const x = parseInt(event.target.attributes.x.value) - 25;
-        const y = parseInt(event.target.attributes.y.value) - 25;
-        const row = y / 50;
-        const col = x / 50;
-
-        // Restore previous square highlight
-        this.restoreSquare(this.state.previousSelection.square);
-
-        // Highlight this square
-        const square = document.getElementById(`${row},${col}`);
-        if (square) {
-            this.setState({
-                previousSelection: {
-                    ...this.state.previousSelection,
-                    square: {
-                        id: square.id,
-                        width: square.getAttribute('width'),
-                        height: square.getAttribute('height'),
-                        x: square.getAttribute('x'),
-                        y: square.getAttribute('y'),
-                        fill: square.getAttribute('fill')
-                    }
-                },
-                endRow: row,
-                endCol: col
-            });
-
-            square.setAttribute('style', 'stroke:yellow;stroke-width:2;stroke-opacity:0.9');
-            this.generateConfirmButton(square, x, y);
-        }
-    }
-
-    handleSquareClick = (event) => {
-        event.preventDefault();
-
-        if (!this.state.previousSelection?.highlight) return;
-
-        const [row, col] = event.target.id.split(',').map(Number);
-
-        // Check if clicking on same square as selected piece
-        if (col === this.state.startCol && row === this.state.startRow) return;
-
-        // Restore previous square
-        this.restoreSquare(this.state.previousSelection.square);
-
-        // Highlight new target square
-        this.setState({
-            previousSelection: {
-                ...this.state.previousSelection,
-                square: {
-                    id: event.target.id,
-                    width: event.target.getAttribute('width'),
-                    height: event.target.getAttribute('height'),
-                    x: event.target.getAttribute('x'),
-                    y: event.target.getAttribute('y'),
-                    fill: event.target.getAttribute('fill')
-                }
-            },
-            endRow: row,
-            endCol: col
-        });
-
-        const x = parseInt(event.target.x.baseVal.value);
-        const y = parseInt(event.target.y.baseVal.value);
-
-        event.target.setAttribute('style', 'stroke:yellow;stroke-width:2;stroke-opacity:0.9');
-        event.target.setAttribute('width', '48');
-        event.target.setAttribute('height', '48');
-        event.target.setAttribute('x', String(x + 1));
-        event.target.setAttribute('y', String(y + 1));
-
-        this.generateConfirmButton(event.target, x, y);
-    }
-
-    restoreSquare = (prevSquare) => {
-        // Remove confirm button
-        const confirmButton = document.getElementById('confirmButton');
-        if (confirmButton) confirmButton.remove();
-
-        if (!prevSquare?.id) return;
-
-        const square = document.getElementById(prevSquare.id);
-        if (square && prevSquare.width) {
-            square.setAttribute('style', '');
-            square.setAttribute('width', prevSquare.width);
-            square.setAttribute('height', prevSquare.height);
-            square.setAttribute('x', prevSquare.x);
-            square.setAttribute('y', prevSquare.y);
-            square.setAttribute('fill', prevSquare.fill);
-        }
-    }
-
-    generateConfirmButton = (target, x, y) => {
-        // Remove existing button
-        const existing = document.getElementById('confirmButton');
-        if (existing) existing.remove();
-
-        const svg = document.querySelector('#image-container svg');
-        if (!svg) return;
-
-        const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
-        text.setAttribute('id', 'confirmButton');
-        text.setAttribute('x', String(x + 25));
-        text.setAttribute('y', String(y + 35));
-        text.setAttribute('fill', 'yellow');
-        text.setAttribute('font-size', '24');
-        text.setAttribute('font-weight', 'bold');
-        text.setAttribute('text-anchor', 'middle');
-        text.setAttribute('style', 'cursor:pointer');
-        text.innerHTML = "OK";
-        text.addEventListener('click', this.handleConfirmClick);
-
-        svg.appendChild(text);
-    }
-
-    handleConfirmClick = async (event) => {
-        event.preventDefault();
-
-        const { startRow, startCol, endRow, endCol } = this.state;
-        if (startRow === null || startCol === null || endRow === null || endCol === null) return;
-
-        await this.makeMove(startRow, startCol, endRow, endCol);
-    }
-
-    makeMove = async (startRow, startCol, endRow, endCol) => {
         this.setState({ actionLoading: true, errorMessage: '' });
 
         try {
             const { web3, web3Settings } = this.props.state;
             const chessCoreInstance = new web3.eth.Contract(
-                ChessFactory.ChessCore.abi,
+                ChessCoreABI.abi,
                 this.props.addressGame
             );
 
-            await chessCoreInstance.methods.makeMove(startRow, startCol, endRow, endCol).send({
-                from: web3Settings.account
-            });
+            await chessCoreInstance.methods.makeMove(
+                source.row, source.col, target.row, target.col
+            ).send({ from: web3Settings.account });
 
             this.setState({ successMessage: "Move executed!" });
             await this.fetchGame();
+            return true;
 
         } catch (err) {
             this.setState({ errorMessage: err.message });
+            return false;
+        } finally {
+            this.setState({ actionLoading: false });
         }
-
-        this.setState({ actionLoading: false });
     }
 
     joinGame = async () => {
@@ -381,7 +183,7 @@ class GameSection extends Component {
             const betAmountWei = web3.utils.toWei(this.state.betting, 'ether');
 
             const chessCoreInstance = new web3.eth.Contract(
-                ChessFactory.ChessCore.abi,
+                ChessCoreABI.abi,
                 this.props.addressGame
             );
 
@@ -406,7 +208,7 @@ class GameSection extends Component {
         try {
             const { web3, web3Settings } = this.props.state;
             const chessCoreInstance = new web3.eth.Contract(
-                ChessFactory.ChessCore.abi,
+                ChessCoreABI.abi,
                 this.props.addressGame
             );
 
@@ -414,7 +216,7 @@ class GameSection extends Component {
                 from: web3Settings.account
             });
 
-            this.setState({ successMessage: "You resigned. Game over." });
+            this.setState({ successMessage: "You resigned." });
             await this.fetchGame();
 
         } catch (err) {
@@ -430,7 +232,7 @@ class GameSection extends Component {
         try {
             const { web3, web3Settings } = this.props.state;
             const chessCoreInstance = new web3.eth.Contract(
-                ChessFactory.ChessCore.abi,
+                ChessCoreABI.abi,
                 this.props.addressGame
             );
 
@@ -438,7 +240,7 @@ class GameSection extends Component {
                 from: web3Settings.account
             });
 
-            this.setState({ successMessage: "Prize claimed successfully!" });
+            this.setState({ successMessage: "Prize claimed!" });
             await this.fetchGame();
 
         } catch (err) {
@@ -450,36 +252,36 @@ class GameSection extends Component {
 
     canClaimPrize = () => {
         const { gameState, playerRole } = this.state;
-        if (gameState === 3) return true; // Draw - both can claim
+        if (gameState === 3) return true;
         if (gameState === 4 && playerRole === 'white') return true;
         if (gameState === 5 && playerRole === 'black') return true;
         return false;
     }
 
+    truncate = (addr) => addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : '';
+
     render() {
         const {
             game, loading, actionLoading, errorMessage, successMessage,
-            playerRole, isMyTurn, gameState, betting,
-            whitePlayer, blackPlayer, currentPlayer, showResignModal
+            playerRole, isMyTurn, gameState, betting, position, boardOrientation,
+            whitePlayer, blackPlayer, showResignModal
         } = this.state;
 
         const { web3Settings } = this.props.state;
         const stateInfo = this.getGameStateInfo(gameState);
-
-        const truncate = (addr) => addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : '';
+        const canMove = stateInfo.isActive && isMyTurn && playerRole !== 'spectator';
 
         return (
             <Container>
-                {/* Header */}
-                <div className="flex justify-between items-center mb-4">
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
                     <button
-                        className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600"
+                        style={{ background: '#6b7280', color: 'white', padding: '8px 16px', borderRadius: '4px', border: 'none', cursor: 'pointer' }}
                         onClick={() => this.props.resetActiveGame()}
                     >
-                        Back to Games
+                        ← Back
                     </button>
                     <button
-                        className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                        style={{ background: '#3b82f6', color: 'white', padding: '8px 16px', borderRadius: '4px', border: 'none', cursor: 'pointer' }}
                         onClick={this.fetchGame}
                         disabled={loading}
                     >
@@ -487,7 +289,6 @@ class GameSection extends Component {
                     </button>
                 </div>
 
-                {/* Messages */}
                 {errorMessage && (
                     <Message negative onDismiss={() => this.setState({ errorMessage: '' })}>
                         <Message.Header>Error</Message.Header>
@@ -500,94 +301,105 @@ class GameSection extends Component {
                     </Message>
                 )}
 
-                {/* Game Info Panel */}
-                <div className="bg-gray-800 text-white p-4 rounded-lg mb-4">
-                    <div className="flex justify-between items-center mb-2">
-                        <span className="text-lg font-bold">Game #{game.header}</span>
-                        <span
-                            className="px-3 py-1 rounded font-bold"
-                            style={{ backgroundColor: stateInfo.color }}
-                        >
+                <div style={{ background: '#1f2937', color: 'white', padding: '16px', borderRadius: '8px', marginBottom: '16px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                        <span style={{ fontWeight: 'bold', fontSize: '18px' }}>Game #{game.header}</span>
+                        <span style={{ background: stateInfo.color, padding: '4px 12px', borderRadius: '4px', fontWeight: 'bold' }}>
                             {stateInfo.text}
                         </span>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '14px' }}>
                         <div>
-                            <span className="text-gray-400">White: </span>
-                            <span className={whitePlayer === web3Settings.account ? 'text-yellow-400 font-bold' : ''}>
-                                {truncate(whitePlayer)} {whitePlayer === web3Settings.account && '(You)'}
+                            <span style={{ color: '#9ca3af' }}>White: </span>
+                            <span style={{ color: whitePlayer === web3Settings?.account ? '#fbbf24' : 'white' }}>
+                                {this.truncate(whitePlayer)} {whitePlayer === web3Settings?.account && '(You)'}
                             </span>
                         </div>
                         <div>
-                            <span className="text-gray-400">Black: </span>
-                            <span className={blackPlayer === web3Settings.account ? 'text-yellow-400 font-bold' : ''}>
-                                {blackPlayer === '0x0000000000000000000000000000000000000000' ? 'Waiting...' : truncate(blackPlayer)}
-                                {blackPlayer === web3Settings.account && ' (You)'}
+                            <span style={{ color: '#9ca3af' }}>Black: </span>
+                            <span style={{ color: blackPlayer === web3Settings?.account ? '#fbbf24' : 'white' }}>
+                                {blackPlayer === '0x0000000000000000000000000000000000000000' ? 'Waiting...' : this.truncate(blackPlayer)}
+                                {blackPlayer === web3Settings?.account && ' (You)'}
                             </span>
                         </div>
                         <div>
-                            <span className="text-gray-400">Bet: </span>
+                            <span style={{ color: '#9ca3af' }}>Bet: </span>
                             <span>{betting} ETH</span>
                         </div>
                         <div>
-                            <span className="text-gray-400">Your Role: </span>
-                            <span className="capitalize">{playerRole}</span>
+                            <span style={{ color: '#9ca3af' }}>Role: </span>
+                            <span style={{ textTransform: 'capitalize' }}>{playerRole}</span>
                         </div>
                     </div>
 
-                    {/* Turn Indicator */}
                     {stateInfo.isActive && (
-                        <div className={`mt-3 p-2 rounded text-center font-bold ${isMyTurn ? 'bg-green-600' : 'bg-gray-600'}`}>
-                            {isMyTurn ? "Your Turn - Make a Move!" : "Waiting for opponent..."}
+                        <div style={{
+                            marginTop: '12px',
+                            padding: '8px',
+                            borderRadius: '4px',
+                            textAlign: 'center',
+                            fontWeight: 'bold',
+                            background: isMyTurn ? '#22c55e' : '#4b5563'
+                        }}>
+                            {isMyTurn ? "Your Turn - Drag a piece to move!" : "Opponent's Turn"}
                         </div>
                     )}
                 </div>
 
-                {/* Chess Board */}
-                <div className="flex justify-center mb-4">
-                    <div id="image-container" className="border-4 border-gray-700 rounded">
-                        {loading && <div className="w-96 h-96 flex items-center justify-center bg-gray-200">Loading...</div>}
+                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
+                    <div style={{ width: '400px' }}>
+                        <Chessboard
+                            position={position}
+                            onPieceDrop={this.onDrop}
+                            boardOrientation={boardOrientation}
+                            arePiecesDraggable={canMove}
+                            customBoardStyle={{
+                                borderRadius: '8px',
+                                boxShadow: '0 4px 6px rgba(0, 0, 0, 0.3)'
+                            }}
+                        />
                     </div>
                 </div>
 
-                {/* Action Buttons */}
-                <div className="flex justify-center gap-4 flex-wrap">
-                    {/* Join Game Button */}
+                {actionLoading && (
+                    <div style={{ textAlign: 'center', marginBottom: '16px', color: '#6b7280' }}>
+                        Processing transaction...
+                    </div>
+                )}
+
+                <div style={{ display: 'flex', justifyContent: 'center', gap: '16px', flexWrap: 'wrap' }}>
                     {stateInfo.canJoin && playerRole === 'spectator' && (
-                        <button
-                            className="bg-green-600 text-white px-6 py-3 rounded-lg font-bold hover:bg-green-700 disabled:opacity-50"
+                        <Button
+                            positive
+                            size="large"
                             onClick={this.joinGame}
-                            disabled={actionLoading}
+                            loading={actionLoading}
                         >
-                            {actionLoading ? 'Joining...' : `Join as Black (${betting} ETH)`}
-                        </button>
+                            Join as Black ({betting} ETH)
+                        </Button>
                     )}
 
-                    {/* Resign Button */}
                     {stateInfo.isActive && playerRole !== 'spectator' && (
-                        <button
-                            className="bg-red-600 text-white px-6 py-3 rounded-lg font-bold hover:bg-red-700 disabled:opacity-50"
+                        <Button
+                            negative
                             onClick={() => this.setState({ showResignModal: true })}
-                            disabled={actionLoading}
                         >
                             Resign
-                        </button>
+                        </Button>
                     )}
 
-                    {/* Claim Prize Button */}
                     {this.canClaimPrize() && (
-                        <button
-                            className="bg-yellow-500 text-black px-6 py-3 rounded-lg font-bold hover:bg-yellow-400 disabled:opacity-50"
+                        <Button
+                            color="yellow"
                             onClick={this.claimPrize}
-                            disabled={actionLoading}
+                            loading={actionLoading}
                         >
-                            {actionLoading ? 'Claiming...' : `Claim Prize (${parseFloat(betting) * 2} ETH)`}
-                        </button>
+                            Claim Prize ({parseFloat(betting) * 2} ETH)
+                        </Button>
                     )}
                 </div>
 
-                {/* Resign Confirmation Modal */}
                 <Modal
                     open={showResignModal}
                     onClose={() => this.setState({ showResignModal: false })}
@@ -595,15 +407,11 @@ class GameSection extends Component {
                 >
                     <Modal.Header>Confirm Resignation</Modal.Header>
                     <Modal.Content>
-                        <p>Are you sure you want to resign? You will lose the game and your bet of {betting} ETH.</p>
+                        <p>Are you sure? You will lose {betting} ETH.</p>
                     </Modal.Content>
                     <Modal.Actions>
-                        <Button onClick={() => this.setState({ showResignModal: false })}>
-                            Cancel
-                        </Button>
-                        <Button negative onClick={this.resign} loading={actionLoading}>
-                            Yes, Resign
-                        </Button>
+                        <Button onClick={() => this.setState({ showResignModal: false })}>Cancel</Button>
+                        <Button negative onClick={this.resign} loading={actionLoading}>Resign</Button>
                     </Modal.Actions>
                 </Modal>
             </Container>

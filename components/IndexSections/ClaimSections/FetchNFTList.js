@@ -1,6 +1,7 @@
 import React, { Component } from 'react';
 import { Container, Message, Modal, Input, Button } from 'semantic-ui-react';
-import ChessFactory from '../../../ethereum/build/ChessFactory_flattened.sol.json';
+import ChessFactoryABI from '../../../ethereum/build/contracts/ChessFactory.json';
+import ChessCoreABI from '../../../ethereum/build/contracts/ChessCore.json';
 import styles from "../../../styles/components/claimSections/FetchNFTList.module.scss";
 
 class FetchNFTList extends Component {
@@ -56,7 +57,7 @@ class FetchNFTList extends Component {
             }
 
             const chessFactoryInstance = new web3.eth.Contract(
-                ChessFactory.ChessFactory.abi,
+                ChessFactoryABI.abi,
                 web3Settings.contractAddress
             );
 
@@ -67,7 +68,7 @@ class FetchNFTList extends Component {
             for (var i = 0; i < deployedChessGames.length; i++) {
                 try {
                     const chessCoreInstance = new web3.eth.Contract(
-                        ChessFactory.ChessCore.abi,
+                        ChessCoreABI.abi,
                         deployedChessGames[i]
                     );
 
@@ -121,7 +122,7 @@ class FetchNFTList extends Component {
             const betAmountWei = web3.utils.toWei(this.state.betAmount, 'ether');
 
             const chessFactoryInstance = new web3.eth.Contract(
-                ChessFactory.ChessFactory.abi,
+                ChessFactoryABI.abi,
                 web3Settings.contractAddress
             );
 
