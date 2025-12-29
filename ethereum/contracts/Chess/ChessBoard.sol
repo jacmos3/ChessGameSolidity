@@ -144,4 +144,10 @@ contract ChessBoard {
     function printChessBoardLayoutSVG() external view returns (string memory) {
         return board.getCurrentBoard();
     }
+
+    /// @notice Get entire board state in a single call (saves 63 RPC calls)
+    /// @return The complete 8x8 board array
+    function getBoardState() external view returns (int8[8][8] memory) {
+        return board;
+    }
 }

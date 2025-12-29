@@ -30,11 +30,11 @@ contract ChessNFT is ERC721Enumerable, Ownable {
         return c.printChessBoardLayoutSVG();
     }
 
-    function createGameNFT(uint256 gameId, address _chessCoreAddress) external onlyFactory {
+    function createGameNFT(uint256 gameId, address _chessCoreAddress, address _whitePlayer) external onlyFactory {
         require(gameNFTs[gameId] == address(0), "NFT for the game already exists");
         gameAddresses.push(_chessCoreAddress);
-        _mint(msg.sender, gameId);
-        gameNFTs[gameId] = msg.sender;
+        _mint(_whitePlayer, gameId);
+        gameNFTs[gameId] = _chessCoreAddress;
     }
 
 }

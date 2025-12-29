@@ -10,9 +10,41 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     uint public betting;
     bool private prizeClaimed;
 
+    // Per-player timeout tracking
+    uint256 public whiteLastMoveBlock;
+    uint256 public blackLastMoveBlock;
+    uint256 public timeoutBlocks;
+
+    // Timeout presets (based on ~12 sec/block on Ethereum)
+    enum TimeoutPreset { Blitz, Rapid, Classical }
+    uint256 public constant BLITZ_BLOCKS = 300;      // ~1 hour
+    uint256 public constant RAPID_BLOCKS = 2100;     // ~7 hours
+    uint256 public constant CLASSICAL_BLOCKS = 50400; // ~7 days
+
+    // Legacy event (kept for backward compatibility)
     event Debug(int8 player, uint8 startX, uint8 startY, uint8 endX, uint8 endY, string comment);
+
+    // Structured events for frontend
+    event MoveMade(
+        address indexed player,
+        uint8 fromRow,
+        uint8 fromCol,
+        uint8 toRow,
+        uint8 toCol,
+        int8 piece,
+        int8 capturedPiece,
+        int8 promotionPiece,
+        bool isCheck,
+        bool isMate,
+        bool isCastling,
+        bool isEnPassant
+    );
+    event GameStarted(address indexed whitePlayer, address indexed blackPlayer, uint256 betAmount);
+    event GameStateChanged(GameState newState);
     event PrizeClaimed(address winner, uint256 amount);
     event PlayerResigned(address player, address winner);
+    event GameTimeout(address winner, address loser);
+
     // Define the GameState enum
     enum GameState { NotStarted, InProgress, Draw, WhiteWins, BlackWins }
     // Add a gameState variable to the contract
@@ -22,12 +54,21 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     address blackPlayer;
     address public currentPlayer;
 
-    constructor(address _whitePlayer, uint _value) payable {
+    constructor(address _whitePlayer, uint _value, TimeoutPreset _preset) payable {
         // Chiamare initializeBoard nel costruttore
         initializeBoard();
         whitePlayer = _whitePlayer;
         currentPlayer = _whitePlayer;
         betting = _value;
+
+        // Set timeout based on preset
+        if (_preset == TimeoutPreset.Blitz) {
+            timeoutBlocks = BLITZ_BLOCKS;
+        } else if (_preset == TimeoutPreset.Rapid) {
+            timeoutBlocks = RAPID_BLOCKS;
+        } else {
+            timeoutBlocks = CLASSICAL_BLOCKS;
+        }
     }
     /*
     //for debugging
@@ -41,7 +82,7 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     */
    
    receive() external payable {
-        require(gameState == GameState.NotStarted, "Game has already started");
+        require(gameState == GameState.NotStarted, "Game started");
     }
 
     function switchTurn() internal {
@@ -49,48 +90,54 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     }
 
    function joinGameAsBlack() public payable {
-        require(msg.sender != whitePlayer, "You are already the white player");
-        require(msg.value == betting, "Please send the same amount as the white player");
-        require(blackPlayer == address(0), "Black player slot is already taken");
+        require(gameState == GameState.NotStarted, "Game started");
+        require(msg.sender != whitePlayer, "Already white");
+        require(msg.value == betting, "Wrong bet");
+        require(blackPlayer == address(0), "Black taken");
         blackPlayer = msg.sender;
         gameState = GameState.InProgress;
+
+        // Start white's clock (white moves first)
+        whiteLastMoveBlock = block.number;
+
+        emit GameStarted(whitePlayer, blackPlayer, betting);
+        emit GameStateChanged(GameState.InProgress);
     }
 
     function claimPrize() external nonReentrant {
-        require(!prizeClaimed, "Prize has already been claimed");
+        require(!prizeClaimed, "Already claimed");
         require(
             gameState == GameState.WhiteWins ||
             gameState == GameState.BlackWins ||
             gameState == GameState.Draw,
-            "Game is not finished yet"
+            "Not finished"
         );
 
         prizeClaimed = true;
         uint256 totalPrize = address(this).balance;
 
         if (gameState == GameState.WhiteWins) {
-            require(msg.sender == whitePlayer, "Only the winner can claim the prize");
+            require(msg.sender == whitePlayer, "Not winner");
             (bool success, ) = payable(whitePlayer).call{value: totalPrize}("");
-            require(success, "Transfer to white player failed");
+            require(success, "Transfer failed");
             emit PrizeClaimed(whitePlayer, totalPrize);
         }
         else if (gameState == GameState.BlackWins) {
-            require(msg.sender == blackPlayer, "Only the winner can claim the prize");
+            require(msg.sender == blackPlayer, "Not winner");
             (bool success, ) = payable(blackPlayer).call{value: totalPrize}("");
-            require(success, "Transfer to black player failed");
+            require(success, "Transfer failed");
             emit PrizeClaimed(blackPlayer, totalPrize);
         }
         else if (gameState == GameState.Draw) {
-            // In case of draw, split the prize equally
             uint256 halfPrize = totalPrize / 2;
-            uint256 remainingPrize = totalPrize - halfPrize; // Handles odd wei amounts
+            uint256 remainingPrize = totalPrize - halfPrize;
 
             (bool successWhite, ) = payable(whitePlayer).call{value: halfPrize}("");
-            require(successWhite, "Transfer to white player failed");
+            require(successWhite, "Transfer failed");
             emit PrizeClaimed(whitePlayer, halfPrize);
 
             (bool successBlack, ) = payable(blackPlayer).call{value: remainingPrize}("");
-            require(successBlack, "Transfer to black player failed");
+            require(successBlack, "Transfer failed");
             emit PrizeClaimed(blackPlayer, remainingPrize);
         }
     }
@@ -98,11 +145,11 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     function resign() external {
         require(
             msg.sender == whitePlayer || msg.sender == blackPlayer,
-            "Only players can resign"
+            "Not a player"
         );
         require(
             gameState == GameState.InProgress || gameState == GameState.NotStarted,
-            "Game is already finished"
+            "Game finished"
         );
 
         address winner;
@@ -115,6 +162,35 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         }
 
         emit PlayerResigned(msg.sender, winner);
+    }
+
+    /// @notice Claim victory when opponent has not moved within timeout period
+    function claimVictoryByTimeout() external {
+        require(
+            msg.sender == whitePlayer || msg.sender == blackPlayer,
+            "Not a player"
+        );
+        require(gameState == GameState.InProgress, "Not in progress");
+        require(msg.sender != currentPlayer, "Your turn");
+
+        // Check if current player (opponent) has exceeded their time
+        uint256 opponentLastMove = (currentPlayer == whitePlayer)
+            ? whiteLastMoveBlock
+            : blackLastMoveBlock;
+
+        require(block.number >= opponentLastMove + timeoutBlocks, "Not timed out");
+
+        address winner = msg.sender;
+        address loser = currentPlayer;
+
+        if (msg.sender == whitePlayer) {
+            gameState = GameState.WhiteWins;
+        } else {
+            gameState = GameState.BlackWins;
+        }
+
+        emit GameTimeout(winner, loser);
+        emit GameStateChanged(gameState);
     }
 
     function isPawnMoveValid(uint8 startX, uint8 startY, uint8 endX, uint8 endY, int8 piece, int8 target) private view returns (bool) {
@@ -456,17 +532,16 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     }
 
     modifier onlyCurrentPlayer() {
-        require(msg.sender == currentPlayer, "It's not your turn!");
+        require(msg.sender == currentPlayer, "Not your turn");
         _;
     }
-    
+
     modifier onlyOwnPieces(uint8 startX, uint8 startY){
-         //matching the current color player with the color number to check if it is moving it's own pieces
         int8 playerColor = 1;
         if (currentPlayer == blackPlayer){
             playerColor *= PLAYER_BLACK;
         }
-        require(board[startX][startY] * playerColor > 0, "You can only move your own pieces");
+        require(board[startX][startY] * playerColor > 0, "Not your piece");
         _;
     }
 
@@ -483,8 +558,10 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         uint8 endY,
         int8 promotionPiece
     ) public onlyCurrentPlayer onlyOwnPieces(startX, startY) {
-        // Check if the game is in progress
-        require(gameState == GameState.InProgress || gameState == GameState.NotStarted, "Game has not started or has ended");
+        // Bounds checking for coordinates
+        require(startX < BOARD_SIZE && startY < BOARD_SIZE && endX < BOARD_SIZE && endY < BOARD_SIZE, "Bad coords");
+
+        require(gameState == GameState.InProgress || gameState == GameState.NotStarted, "Bad state");
 
         // Check if the move is valid
         require(isValidMove(startX, startY, endX, endY), "Invalid move");
@@ -589,16 +666,97 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
             }
         }
 
+        // Detect special moves for event emission
+        bool isCastling = (abs(movingPiece) == uint8(KING)) && (abs(int8(endY) - int8(startY)) == 2);
+        bool isEnPassant = (abs(movingPiece) == uint8(PAWN)) &&
+                           (abs(int8(endY) - int8(startY)) == 1) &&
+                           (targetPiece == EMPTY);
+
+        // For en passant, the captured piece is a pawn (not recorded in targetPiece)
+        int8 actualCaptured = isEnPassant ? (movingPiece > 0 ? -PAWN : PAWN) : targetPiece;
+
         // Check if the move resulted in a check or checkmate
+        bool isCheck = false;
+        bool isMate = false;
+        GameState previousState = gameState;
+
         if (isKingInCheck(PLAYER_BLACK)) {
-            gameState = isCheckmate(PLAYER_BLACK, endX, endY) ? GameState.WhiteWins : GameState.InProgress;
+            isMate = isCheckmate(PLAYER_BLACK, endX, endY);
+            isCheck = !isMate;
+            gameState = isMate ? GameState.WhiteWins : GameState.InProgress;
         } else if (isKingInCheck(PLAYER_WHITE)) {
-            gameState = isCheckmate(PLAYER_WHITE, endX, endY) ? GameState.BlackWins : GameState.InProgress;
+            isMate = isCheckmate(PLAYER_WHITE, endX, endY);
+            isCheck = !isMate;
+            gameState = isMate ? GameState.BlackWins : GameState.InProgress;
         } else {
             gameState = isStalemate() ? GameState.Draw : GameState.InProgress;
         }
 
+        // Build move comment for legacy event
+        string memory comment = _buildMoveComment(movingPiece, targetPiece, startY, endY, isCheck, isMate);
+
+        // Emit legacy event (for backward compatibility)
+        int8 playerSign = (currentPlayer == whitePlayer) ? int8(1) : int8(-1);
+        emit Debug(playerSign, startX, startY, endX, endY, comment);
+
+        // Emit structured event
+        emit MoveMade(
+            currentPlayer,
+            startX, startY,
+            endX, endY,
+            movingPiece,
+            actualCaptured,
+            promotionPiece,
+            isCheck,
+            isMate,
+            isCastling,
+            isEnPassant
+        );
+
+        // Emit game state change if state changed
+        if (gameState != previousState) {
+            emit GameStateChanged(gameState);
+        }
+
+        // Update opponent's clock (they now need to move)
+        // currentPlayer is still the player who just moved
+        if (currentPlayer == whitePlayer) {
+            blackLastMoveBlock = block.number;
+        } else {
+            whiteLastMoveBlock = block.number;
+        }
+
         switchTurn();
+    }
+
+    /// @notice Build a comment string for the move event
+    function _buildMoveComment(int8 piece, int8 captured, uint8 startCol, uint8 endCol, bool isCheck, bool isMate) internal view returns (string memory) {
+        string memory pieceName;
+        uint8 absPiece = abs(piece);
+
+        if (absPiece == uint8(PAWN)) pieceName = "pawn";
+        else if (absPiece == uint8(KNIGHT)) pieceName = "knight";
+        else if (absPiece == uint8(BISHOP)) pieceName = "bishop";
+        else if (absPiece == uint8(ROOK)) pieceName = "rook";
+        else if (absPiece == uint8(QUEEN)) pieceName = "queen";
+        else if (absPiece == uint8(KING)) {
+            // Check for castling
+            if (abs(int8(endCol) - int8(startCol)) == 2) {
+                return endCol == COL_KNIGHT ? "castling kingside" : "castling queenside";
+            }
+            pieceName = "king";
+        }
+        else pieceName = "unknown";
+
+        if (captured != EMPTY) {
+            if (isMate) return string(abi.encodePacked(pieceName, " capture checkmate"));
+            if (isCheck) return string(abi.encodePacked(pieceName, " capture check"));
+            return string(abi.encodePacked(pieceName, " capture"));
+        }
+
+        if (isMate) return string(abi.encodePacked(pieceName, " checkmate"));
+        if (isCheck) return string(abi.encodePacked(pieceName, " check"));
+        return pieceName;
     }
 
     // Check if the given player's king can move out of check
@@ -839,9 +997,13 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         return (whitePlayer, blackPlayer);
     }
 
-    /// @notice DEBUG ONLY - Place a piece on the board (remove before mainnet deployment)
-    /// @dev This function is for testing purposes only
+    /// @notice Setup function for testing - place a piece on the board
+    /// @dev Only callable by white player before game starts (before black joins)
     function debugCreative(uint8 x, uint8 y, int8 piece) external returns (string memory) {
+        require(msg.sender == whitePlayer, "Only white player can setup board");
+        require(gameState == GameState.NotStarted, "Can only setup before game starts");
+        require(x < BOARD_SIZE && y < BOARD_SIZE, "Invalid coordinates");
+
         board[x][y] = piece;
         // Update king position cache if placing a king
         if (piece == KING) {
@@ -862,7 +1024,33 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         if (gameState == GameState.BlackWins) return 5;
 
         return 0;
-    } 
+    }
+
+    /// @notice Get timeout status for both players
+    /// @return whiteBlocksRemaining Blocks remaining before white times out (0 if not their turn)
+    /// @return blackBlocksRemaining Blocks remaining before black times out (0 if not their turn)
+    /// @return currentPlayerIsWhite True if it's white's turn
+    function getTimeoutStatus() external view returns (
+        uint256 whiteBlocksRemaining,
+        uint256 blackBlocksRemaining,
+        bool currentPlayerIsWhite
+    ) {
+        currentPlayerIsWhite = (currentPlayer == whitePlayer);
+
+        if (gameState != GameState.InProgress) {
+            return (0, 0, currentPlayerIsWhite);
+        }
+
+        if (currentPlayerIsWhite) {
+            uint256 elapsed = block.number - whiteLastMoveBlock;
+            whiteBlocksRemaining = elapsed >= timeoutBlocks ? 0 : timeoutBlocks - elapsed;
+            blackBlocksRemaining = 0;
+        } else {
+            uint256 elapsed = block.number - blackLastMoveBlock;
+            blackBlocksRemaining = elapsed >= timeoutBlocks ? 0 : timeoutBlocks - elapsed;
+            whiteBlocksRemaining = 0;
+        }
+    }
 }
 
 

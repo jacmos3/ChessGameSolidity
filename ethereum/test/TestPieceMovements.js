@@ -37,7 +37,8 @@ contract("ChessCore - Piece Movements", (accounts) => {
   beforeEach(async () => {
     chessFactory = await ChessFactory.new();
 
-    await chessFactory.createChessGame({
+    // TimeoutPreset: 0=Blitz, 1=Rapid, 2=Classical
+    await chessFactory.createChessGame(2, {
       from: whitePlayer,
       value: betAmount
     });
@@ -615,7 +616,7 @@ contract("ChessCore - Piece Movements", (accounts) => {
         await chessCore.makeMove(1, 4, 3, 4, { from: whitePlayer }); // Try to move black pawn
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "You can only move your own pieces");
+        assert.include(error.message, "Not your piece");
       }
     });
 
@@ -626,7 +627,7 @@ contract("ChessCore - Piece Movements", (accounts) => {
         await chessCore.makeMove(6, 3, 4, 3, { from: whitePlayer }); // White tries to move again
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "It's not your turn");
+        assert.include(error.message, "Not your turn");
       }
     });
 
