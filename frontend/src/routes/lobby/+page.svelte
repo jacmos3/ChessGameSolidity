@@ -174,7 +174,7 @@
 			<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
 				{#each filteredGames as game (game.address)}
 					{@const isMyGame = game.whitePlayer?.toLowerCase() === $wallet.account?.toLowerCase() || game.blackPlayer?.toLowerCase() === $wallet.account?.toLowerCase()}
-					{@const canJoin = game.state === 0 && !isMyGame}
+					{@const canJoin = game.state === 1 && !isMyGame}
 
 					<a href="/game/{game.address}" class="card group hover:border-chess-accent/50 cursor-pointer !p-0 overflow-hidden">
 						<!-- Mini board preview placeholder -->
@@ -185,9 +185,9 @@
 
 							<!-- Status badge -->
 							<div class="absolute top-2 right-2">
-								{#if game.state === 0}
+								{#if game.state === 1}
 									<span class="bg-chess-blue text-white text-xs px-2 py-1 rounded">Open</span>
-								{:else if game.state === 1 || game.state === 2}
+								{:else if game.state === 2}
 									<span class="bg-chess-success text-white text-xs px-2 py-1 rounded">In Progress</span>
 								{:else if game.state === 3}
 									<span class="bg-chess-gray text-white text-xs px-2 py-1 rounded">Draw</span>

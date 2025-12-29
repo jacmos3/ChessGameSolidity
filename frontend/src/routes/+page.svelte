@@ -14,7 +14,7 @@
 	);
 
 	$: myActiveGames = myGames.filter(g => g.state === 1 || g.state === 2);
-	$: openGames = $games.games.filter(g => g.state === 0);
+	$: openGames = $games.games.filter(g => g.state === 1); // NotStarted = waiting for opponent
 
 	// Mock leaderboard data (in real app, fetch from contract events)
 	const leaderboard = [
