@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/utils/Strings.sol";
 import "./ChessMediaLibrary.sol";
 contract ChessCore {
@@ -42,8 +42,15 @@ contract ChessCore {
     bool private blackLongRookMoved;
     bool private blackShortRookMoved;
     uint public betting;
+    bool private prizeClaimed;
+
+    // En passant tracking: stores the column of the pawn that just moved two squares
+    // -1 means no en passant is available
+    int8 private enPassantCol = -1;
+    uint8 private enPassantRow; // Row where the capturable pawn is located
 
     event Debug(int8 player, uint8 startX, uint8 startY, uint8 endX, uint8 endY, string comment);
+    event PrizeClaimed(address winner, uint256 amount);
     // Define the GameState enum
     enum GameState { NotStarted, InProgress, Draw, WhiteWins, BlackWins }
     // Add a gameState variable to the contract
@@ -75,7 +82,7 @@ contract ChessCore {
         require(gameState == GameState.NotStarted, "Game has already started");
     }
 
-    function switchTurn() public  {
+    function switchTurn() internal {
         currentPlayer = (currentPlayer == whitePlayer) ? blackPlayer : whitePlayer;
     }
 
@@ -84,6 +91,45 @@ contract ChessCore {
         require(msg.value == betting, "Please send the same amount as the white player");
         require(blackPlayer == address(0), "Black player slot is already taken");
         blackPlayer = msg.sender;
+    }
+
+    function claimPrize() external {
+        require(!prizeClaimed, "Prize has already been claimed");
+        require(
+            gameState == GameState.WhiteWins ||
+            gameState == GameState.BlackWins ||
+            gameState == GameState.Draw,
+            "Game is not finished yet"
+        );
+
+        prizeClaimed = true;
+        uint256 totalPrize = address(this).balance;
+
+        if (gameState == GameState.WhiteWins) {
+            require(msg.sender == whitePlayer, "Only the winner can claim the prize");
+            (bool success, ) = payable(whitePlayer).call{value: totalPrize}("");
+            require(success, "Transfer to white player failed");
+            emit PrizeClaimed(whitePlayer, totalPrize);
+        }
+        else if (gameState == GameState.BlackWins) {
+            require(msg.sender == blackPlayer, "Only the winner can claim the prize");
+            (bool success, ) = payable(blackPlayer).call{value: totalPrize}("");
+            require(success, "Transfer to black player failed");
+            emit PrizeClaimed(blackPlayer, totalPrize);
+        }
+        else if (gameState == GameState.Draw) {
+            // In case of draw, split the prize equally
+            uint256 halfPrize = totalPrize / 2;
+            uint256 remainingPrize = totalPrize - halfPrize; // Handles odd wei amounts
+
+            (bool successWhite, ) = payable(whitePlayer).call{value: halfPrize}("");
+            require(successWhite, "Transfer to white player failed");
+            emit PrizeClaimed(whitePlayer, halfPrize);
+
+            (bool successBlack, ) = payable(blackPlayer).call{value: remainingPrize}("");
+            require(successBlack, "Transfer to black player failed");
+            emit PrizeClaimed(blackPlayer, remainingPrize);
+        }
     }
 
     function initializeBoard() private {
@@ -143,18 +189,35 @@ contract ChessCore {
 
         // Check if pawn is capturing diagonally
         if (abs(int8(endY) - int8(startY)) == 1) {
-            if (piece == PAWN && endX == startX + 1 && target < 0) { // White pawn captures black piece
+            if (piece == PAWN && endX == startX - 1 && target < 0) { // White pawn captures black piece (moving up)
                 return true;
-            } 
+            }
             else
-            if (piece == -PAWN && endX == startX - 1 && target > 0) { // Black pawn captures white piece
+            if (piece == -PAWN && endX == startX + 1 && target > 0) { // Black pawn captures white piece (moving down)
                 return true;
             }
         }
 
+        // En passant capture
+        if (enPassantCol >= 0 && abs(int8(endY) - int8(startY)) == 1 && target == EMPTY) {
+            // White pawn captures en passant
+            if (piece == PAWN &&
+                endX == startX - 1 &&
+                startX == ROW_WHITE_PAWNS_LONG_OPENING && // White pawn must be on row 4 (after black's double move)
+                int8(endY) == enPassantCol &&
+                enPassantRow == startX) {
+                return true;
+            }
+            // Black pawn captures en passant
+            else if (piece == -PAWN &&
+                     endX == startX + 1 &&
+                     startX == ROW_BLACK_PAWNS_LONG_OPENING && // Black pawn must be on row 3 (after white's double move)
+                     int8(endY) == enPassantCol &&
+                     enPassantRow == startX) {
+                return true;
+            }
+        }
 
-        //TODO: to add the en-passant move
-        
         return false;
     }
 
@@ -443,33 +506,105 @@ contract ChessCore {
         _;
     }
 
-    function makeMove(uint8 startX, uint8 startY, uint8 endX, uint8 endY) public onlyCurrentPlayer onlyOwnPieces(startX,startY){
+    // Wrapper for backward compatibility - promotes to Queen by default
+    function makeMove(uint8 startX, uint8 startY, uint8 endX, uint8 endY) public {
+        makeMoveWithPromotion(startX, startY, endX, endY, QUEEN);
+    }
+
+    // Main move function with promotion support
+    function makeMoveWithPromotion(
+        uint8 startX,
+        uint8 startY,
+        uint8 endX,
+        uint8 endY,
+        int8 promotionPiece
+    ) public onlyCurrentPlayer onlyOwnPieces(startX, startY) {
         // Check if the game is in progress
         require(gameState == GameState.InProgress || gameState == GameState.NotStarted, "Game has not started or has ended");
 
         // Check if the move is valid
         require(isValidMove(startX, startY, endX, endY), "Invalid move");
 
+        // Store the piece being moved before clearing the start position
+        int8 movingPiece = board[startX][startY];
+        int8 targetPiece = board[endX][endY];
+
         // Make the move
-        board[endX][endY] = board[startX][startY];
+        board[endX][endY] = movingPiece;
         board[startX][startY] = EMPTY;
 
-        // Check if the move is a king move and update kingMoved accordingly
-        if (uint8(KING) == abs(int8(board[startX][startY])) && abs(int8(endY) - int8(startY)) == 2 ) {
-            
-            if (currentPlayer == whitePlayer) {
-                if (whiteKingMoved){
-                    revert("White king has already moved. cannot castle");
+        // Track if this move sets up en passant for the opponent
+        bool isDoublePawnMove = false;
+
+        // Handle pawn-specific logic
+        if (abs(movingPiece) == uint8(PAWN)) {
+            // Check for en passant capture (diagonal move to empty square)
+            if (abs(int8(endY) - int8(startY)) == 1 && targetPiece == EMPTY) {
+                // This is an en passant capture - remove the captured pawn
+                if (movingPiece == PAWN && enPassantCol == int8(endY) && startX == ROW_WHITE_PAWNS_LONG_OPENING) {
+                    // White captures black pawn en passant
+                    board[startX][endY] = EMPTY; // Remove the black pawn
+                } else if (movingPiece == -PAWN && enPassantCol == int8(endY) && startX == ROW_BLACK_PAWNS_LONG_OPENING) {
+                    // Black captures white pawn en passant
+                    board[startX][endY] = EMPTY; // Remove the white pawn
                 }
-                else{
+            }
+
+            // Check for double pawn move (sets up en passant for opponent)
+            if (movingPiece == PAWN && startX == ROW_WHITE_PAWNS && endX == ROW_WHITE_PAWNS_LONG_OPENING) {
+                // White pawn double move
+                isDoublePawnMove = true;
+                enPassantCol = int8(endY);
+                enPassantRow = endX; // Row 4
+            } else if (movingPiece == -PAWN && startX == ROW_BLACK_PAWNS && endX == ROW_BLACK_PAWNS_LONG_OPENING) {
+                // Black pawn double move
+                isDoublePawnMove = true;
+                enPassantCol = int8(endY);
+                enPassantRow = endX; // Row 3
+            }
+
+            // Handle pawn promotion
+            bool isWhitePawnPromoting = (movingPiece == PAWN && endX == ROW_BLACK_PIECES);
+            bool isBlackPawnPromoting = (movingPiece == -PAWN && endX == ROW_WHITE_PIECES);
+
+            if (isWhitePawnPromoting || isBlackPawnPromoting) {
+                // Validate promotion piece (must be Queen, Rook, Bishop, or Knight)
+                require(
+                    promotionPiece == QUEEN ||
+                    promotionPiece == ROOK ||
+                    promotionPiece == BISHOP ||
+                    promotionPiece == KNIGHT,
+                    "Invalid promotion piece"
+                );
+
+                // Apply the correct sign based on player color
+                if (isWhitePawnPromoting) {
+                    board[endX][endY] = promotionPiece; // White piece (positive)
+                } else {
+                    board[endX][endY] = -promotionPiece; // Black piece (negative)
+                }
+            }
+        }
+
+        // Reset en passant if this was not a double pawn move
+        if (!isDoublePawnMove) {
+            enPassantCol = -1;
+        }
+
+        // Check if the move is a king move and update kingMoved accordingly
+        // Note: use movingPiece since we stored it before the move
+        if (uint8(KING) == abs(movingPiece) && abs(int8(endY) - int8(startY)) == 2) {
+
+            if (currentPlayer == whitePlayer) {
+                if (whiteKingMoved) {
+                    revert("White king has already moved. cannot castle");
+                } else {
                     whiteKingMoved = true;
                 }
-            } 
-            else {
-                if (blackKingMoved){
+            } else {
+                if (blackKingMoved) {
                     revert("Black king has already moved. cannot castle");
-                }
-                else{
+                } else {
                     blackKingMoved = true;
                 }
             }
@@ -479,24 +614,19 @@ contract ChessCore {
                 // Right castling
                 board[startX][5] = board[startX][COL_LONGW_SHORTB_ROOK];
                 board[startX][COL_LONGW_SHORTB_ROOK] = EMPTY;
-            } 
-            else 
-            if (endY == 2) {
+            } else if (endY == 2) {
                 // Left castling
                 board[startX][COL_QUEEN] = board[startX][COL_SHORTW_LONGB_ROOK];
                 board[startX][COL_SHORTW_LONGB_ROOK] = EMPTY;
             }
         }
 
-       // Check if the move resulted in a check or checkmate
+        // Check if the move resulted in a check or checkmate
         if (isKingInCheck(PLAYER_BLACK)) {
             gameState = isCheckmate(PLAYER_BLACK, endX, endY) ? GameState.WhiteWins : GameState.InProgress;
-        } 
-        else 
-        if (isKingInCheck(PLAYER_WHITE)) {
+        } else if (isKingInCheck(PLAYER_WHITE)) {
             gameState = isCheckmate(PLAYER_WHITE, endX, endY) ? GameState.BlackWins : GameState.InProgress;
-        }
-        else {
+        } else {
             gameState = isStalemate() ? GameState.Draw : GameState.InProgress;
         }
 
@@ -533,7 +663,7 @@ contract ChessCore {
                     )
                 ){
                     uint8 newX = uint8(x);
-                    uint8 newY = uint8(j);
+                    uint8 newY = uint8(y);
 
                     if (board[newX][newY] == EMPTY 
                         && isValidMove(kingX, kingY, newX, newY)) {
