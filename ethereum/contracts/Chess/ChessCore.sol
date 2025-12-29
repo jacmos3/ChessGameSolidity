@@ -51,6 +51,7 @@ contract ChessCore {
 
     event Debug(int8 player, uint8 startX, uint8 startY, uint8 endX, uint8 endY, string comment);
     event PrizeClaimed(address winner, uint256 amount);
+    event PlayerResigned(address player, address winner);
     // Define the GameState enum
     enum GameState { NotStarted, InProgress, Draw, WhiteWins, BlackWins }
     // Add a gameState variable to the contract
@@ -130,6 +131,28 @@ contract ChessCore {
             require(successBlack, "Transfer to black player failed");
             emit PrizeClaimed(blackPlayer, remainingPrize);
         }
+    }
+
+    function resign() external {
+        require(
+            msg.sender == whitePlayer || msg.sender == blackPlayer,
+            "Only players can resign"
+        );
+        require(
+            gameState == GameState.InProgress || gameState == GameState.NotStarted,
+            "Game is already finished"
+        );
+
+        address winner;
+        if (msg.sender == whitePlayer) {
+            gameState = GameState.BlackWins;
+            winner = blackPlayer;
+        } else {
+            gameState = GameState.WhiteWins;
+            winner = whitePlayer;
+        }
+
+        emit PlayerResigned(msg.sender, winner);
     }
 
     function initializeBoard() private {
