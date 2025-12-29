@@ -222,6 +222,27 @@ function createActiveGameStore() {
 				to
 			};
 
+			// Store animation data for the ChessBoard component
+			const animatingMove = {
+				from: { row: Number(fromRow), col: Number(fromCol) },
+				to: { row: Number(toRow), col: Number(toCol) },
+				piece: pieceValue
+			};
+
+			// Clear animation after a delay
+			setTimeout(() => {
+				update(state => {
+					if (!state.data) return state;
+					return {
+						...state,
+						data: {
+							...state.data,
+							animatingMove: null
+						}
+					};
+				});
+			}, 350);
+
 			return {
 				...s,
 				data: {
@@ -229,7 +250,8 @@ function createActiveGameStore() {
 					board: newBoard,
 					currentPlayer: $wallet.account, // Now it's our turn
 					isMyTurn: true,
-					moveHistory: [...s.data.moveHistory, newMove]
+					moveHistory: [...s.data.moveHistory, newMove],
+					animatingMove
 				}
 			};
 		});
@@ -263,12 +285,13 @@ function createActiveGameStore() {
 			try {
 				const game = new ethers.Contract(address, ChessCoreABI.abi, $wallet.signer);
 
-				const [players, currentPlayer, state, betting, boardState] = await Promise.all([
+				const [players, currentPlayer, state, betting, boardState, timeoutStatus] = await Promise.all([
 					game.getPlayers(),
 					game.currentPlayer(),
 					game.getGameState(),
 					game.betting(),
-					game.getBoardState() // Single call instead of 64!
+					game.getBoardState(), // Single call instead of 64!
+					game.getTimeoutStatus().catch(() => null) // May not exist on older contracts
 				]);
 
 				// Convert board state from contract format
@@ -334,6 +357,22 @@ function createActiveGameStore() {
 
 				const isMyTurn = currentPlayer.toLowerCase() === $wallet.account.toLowerCase();
 
+				// Parse timeout status
+				let timeout = null;
+				if (timeoutStatus) {
+					const whiteBlocks = Number(timeoutStatus.whiteBlocksRemaining);
+					const blackBlocks = Number(timeoutStatus.blackBlocksRemaining);
+					// Estimate time: ~12 seconds per block on Ethereum
+					const SECONDS_PER_BLOCK = 12;
+					timeout = {
+						whiteBlocksRemaining: whiteBlocks,
+						blackBlocksRemaining: blackBlocks,
+						whiteTimeRemaining: whiteBlocks * SECONDS_PER_BLOCK,
+						blackTimeRemaining: blackBlocks * SECONDS_PER_BLOCK,
+						currentPlayerIsWhite: timeoutStatus.currentPlayerIsWhite
+					};
+				}
+
 				set({
 					address,
 					loading: false,
@@ -348,7 +387,8 @@ function createActiveGameStore() {
 						board,
 						playerRole,
 						isMyTurn,
-						moveHistory
+						moveHistory,
+						timeout
 					}
 				});
 
