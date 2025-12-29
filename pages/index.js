@@ -1,4 +1,4 @@
-import React, {Component} from 'react';
+import React, { Component } from 'react';
 import Layout from '../components/Layout.js';
 import Presentation from '../components/IndexSections/Presentation.js';
 import Claim from '../components/IndexSections/Claim.js';
@@ -7,57 +7,43 @@ import Menu from '../components/IndexSections/Menu.js';
 
 import Web3 from "web3";
 import Web3Modal from "web3modal";
-import WalletConnectProvider from "@walletconnect/web3-provider";
-import styles from "../styles/pages/INDEX.module.scss";
 
 class MyDapp extends Component {
     state = {
-        daoNft: "https://opensea.io/assets/matic/0x2953399124f0cbb46d2cbacd8a89cf0599974963/93380629908989276154329187712159695682604484101294988604591734366325570535524",
-        opensea: "https://opensea.io/collection/little-traveler-pfp",
-        etherscan: "https://etherscan.io/",
-        twitter: "https://twitter.com/",
-        website: "https://www.google.com",
-        discord: "https://discord.gg/",
         web3Settings: {
-            infura: "aec28327c8c04ea7b712b34da8302791",//ldg
+            infuraId: process.env.NEXT_PUBLIC_INFURA_ID || "",
             isWeb3Connected: false,
-            chains: [ //TODO: get these data from the relative smart contracts
+            chains: [
                 {
                     name: "Sepolia",
                     id: 11155111,
-                    opensea:"",
-                    contractAddressOverrided:"",
-                    openseaCard:"https://opensea.io/assets/",
-                    options: {
-                        
-                    }
-                },
-                {
-                    name: "Goerli",
-                    id: 5,
-                    contractAddressOverrided:"0xCbaD91fEC0389bCCE3CfD7DAA7D514afd0265d19",
-                    opensea:"",
-                    openseaCard:"https://opensea.io/assets/",
-                    options: {
-                        
-                    }
+                    contractAddressOverrided: process.env.NEXT_PUBLIC_CONTRACT_ADDRESS_SEPOLIA || "",
+                    explorer: "https://sepolia.etherscan.io",
+                    options: { id: 1 }
                 },
                 {
                     name: "Holesky",
                     id: 17000,
-                    opensea:"",
-                    contractAddressOverrided:"0x000E8E492DFfDDf6C4779bb5EbFc351F39EFdA36",
-                    openseaCard:"https://opensea.io/assets/",
-                    options: {
-                        
-                    }
+                    contractAddressOverrided: process.env.NEXT_PUBLIC_CONTRACT_ADDRESS_HOLESKY || "",
+                    explorer: "https://holesky.etherscan.io",
+                    options: { id: 1 }
                 },
-
-                
-
-          ]
-   
-      }
+                {
+                    name: "Localhost",
+                    id: 1337,
+                    contractAddressOverrided: process.env.NEXT_PUBLIC_CONTRACT_ADDRESS_LOCAL || "",
+                    explorer: "",
+                    options: { id: 1 }
+                },
+                {
+                    name: "Ganache",
+                    id: 5777,
+                    contractAddressOverrided: process.env.NEXT_PUBLIC_CONTRACT_ADDRESS_LOCAL || "",
+                    explorer: "",
+                    options: { id: 1 }
+                }
+            ]
+        }
     };
 
     constructor(props) {
@@ -67,178 +53,138 @@ class MyDapp extends Component {
     async componentDidMount() {
         var web3Settings = this.state.web3Settings;
         web3Settings.contractAddress = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS;
-        this.setState({web3Settings: web3Settings});
+        this.setState({ web3Settings: web3Settings });
         this.connect();
     }
 
     update = async (nextState) => {
-        console.log("nextState: " + JSON.stringify(nextState));
         this.setState(nextState);
     }
 
     disconnect = (event) => {
-        console.log("disconnect");
         var web3Settings = this.state.web3Settings;
         web3Settings.isWeb3Connected = false;
-        this.setState({web3Settings: web3Settings});
+        web3Settings.account = null;
+        this.setState({ web3Settings: web3Settings });
     }
 
     connect = async (event) => {
         var providerOptions = {
             injected: {
                 display: {
-                    name: "Default",
-                    description: "Connect with the provider in your Browser"
+                    name: "MetaMask",
+                    description: "Connect with MetaMask or browser wallet"
                 },
                 package: null
-            },
-        /*    'custom-uauth': {
-              display: UAuthWeb3Modal.display,
-              // The Connector
-              connector: UAuthWeb3Modal.connector,
-              // The SPA libary
-              package: UAuthSPA,
-              // The SPA libary options
-              options: {
-                clientID: process.env.NEXT_PUBLIC_CLIENT_ID,
-                clientSecret: process.env.NEXT_PUBLIC_CLIENT_SECRET,
-                redirectUri: process.env.NEXT_PUBLIC_REDIRECT_URI,
-
-                // Must include both the openid and wallet scopes.
-                scope: 'openid wallet',
-              },
-            },*/
-            walletconnect: {
-                display: {
-                    name: "Mobile",
-                    description: "Scan qrcode with your mobile wallet"
-                },
-                package: WalletConnectProvider,
-                options: {
-                    infuraId: this.state.web3Settings.infura // required
-                }
             }
-        }
+        };
 
         var web3Modal = new Web3Modal({
-            network: "rinkeby", // optional
-            cacheProvider: false, // optional
-            providerOptions // required
+            cacheProvider: false,
+            providerOptions
         });
 
         var provider;
         web3Modal.clearCachedProvider();
-        
+
         try {
             provider = await web3Modal.connect();
-            console.log("provider",provider);
         } catch (e) {
             console.log("Could not get a wallet connection", e);
             return;
         }
 
-
         var web3 = new Web3(provider);
 
         provider.on('accountsChanged', function (accounts) {
-            console.log("account changed " + accounts[0]);
             window.location.reload();
-        })
+        });
 
         provider.on('chainChanged', function (networkId) {
-            console.log("chain changed: reloading page");
             window.location.reload();
-        })
+        });
 
         provider.on("disconnect", function () {
-                console.log("disconnecting");
-                provider.disconnect();
-                web3Modal.clearCachedProvider();
-                provider = null;
-            }
-        );
+            provider.disconnect();
+            web3Modal.clearCachedProvider();
+            provider = null;
+        });
 
-        this.setState({web3: web3});
-        //console.log(this.state.web3);
-        const networkId = await this.state.web3.eth.net.getId();
-        const accounts = await this.state.web3.eth.getAccounts();
-        //console.log("account:"+ accounts[0]);
+        this.setState({ web3: web3 });
 
-        const ethBalance = await this.state.web3.eth.getBalance(accounts[0]) / 10 ** 18;
-        // console.log(this.state.web3Settings.isWeb3Connected);
+        const networkId = await web3.eth.net.getId();
+        const accounts = await web3.eth.getAccounts();
+        const ethBalance = await web3.eth.getBalance(accounts[0]) / 10 ** 18;
+
         var web3Settings = this.state.web3Settings;
         web3Settings.account = accounts[0];
         web3Settings.networkId = networkId;
-        web3.eth.net.getNetworkType()
-            .then((value) => {
-                web3Settings.networkName = value;
-                this.forceUpdate();
-            });
-
         web3Settings.ethBalance = ethBalance;
         web3Settings.isWeb3Connected = accounts.length > 0;
-        this.setState({web3Settings: web3Settings});
 
-        //checking if the contract has a different address on the selected network
-        var contractAddress = web3Settings.chains
-            .filter(chain => chain.id === web3Settings.networkId)
-            .map(chain => chain.contractAddressOverrided)[0];
-        if ((contractAddress !== undefined) && (contractAddress !== null) && (contractAddress !== "")) {
-          console.log("contract address not null; overriding");
-          web3Settings.contractAddress = contractAddress;
-          console.log("contractAddress: "+contractAddress);
+        // Get network name
+        const chain = web3Settings.chains.find(c => c.id === networkId);
+        web3Settings.networkName = chain ? chain.name : `Unknown (${networkId})`;
+        web3Settings.isSupported = !!chain;
+
+        // Override contract address if specified for this network
+        if (chain && chain.contractAddressOverrided) {
+            web3Settings.contractAddress = chain.contractAddressOverrided;
         }
 
-
-        console.log("web3connected:",this.state.web3Settings.isWeb3Connected);
+        this.setState({ web3Settings: web3Settings });
     }
 
     truncateAddress(address) {
-        if (address === undefined) return ("");
-        
-        const begin = address.substring(0, 6).concat("...");
-        const end = address.substring(address.length - 6);
-        return begin + end;
+        if (!address) return "";
+        return `${address.substring(0, 6)}...${address.substring(address.length - 4)}`;
     }
 
     render() {
+        const { web3Settings } = this.state;
+
         return (
             <Layout state={this.state}>
-                <div id="connectWallet">
-                    {
-                        this.state.web3Settings.isWeb3Connected
-                            ? (
-                                <a className={`px-5`}>
-                                    <button className={`btn btn__wallet`} onClick={this.disconnect}>
-                                        {this.truncateAddress(this.state.web3Settings.account)}
-                                    </button>
-                                </a>
-                            )
-
-                            : (
-                                <a href="#Claim" className={`px-5`}>
-                                    <button className={`btn btn__wallet`} onClick={this.connect}>
-                                        Connect wallet
-                                    </button>
-                                </a>
-                            )
-                    }
+                <div id="connectWallet" className="fixed top-4 right-4 z-50">
+                    {web3Settings.isWeb3Connected ? (
+                        <div className="flex items-center gap-2">
+                            <span className={`px-3 py-1 rounded text-sm ${web3Settings.isSupported ? 'bg-green-600' : 'bg-yellow-600'} text-white`}>
+                                {web3Settings.networkName}
+                            </span>
+                            <button
+                                className="btn btn__wallet bg-trips-1 text-white px-4 py-2 rounded hover:bg-trips-2"
+                                onClick={this.disconnect}
+                            >
+                                {this.truncateAddress(web3Settings.account)}
+                            </button>
+                        </div>
+                    ) : (
+                        <button
+                            className="btn btn__wallet bg-trips-3 text-white px-4 py-2 rounded hover:bg-orange-600"
+                            onClick={this.connect}
+                        >
+                            Connect Wallet
+                        </button>
+                    )}
                 </div>
 
-                <Presentation state={this.state}/>
-
-                <Menu state={this.state}/>
+                <Presentation state={this.state} />
+                <Menu state={this.state} />
 
                 <div id="Claim" className="bg-trips-5">
-                    <Claim disconnect={this.disconnect} connect={this.connect} state={this.state}/>
-                </div>
-               
-                <div id="Team">
-                    <Team/>
+                    <Claim
+                        disconnect={this.disconnect}
+                        connect={this.connect}
+                        state={this.state}
+                        web3={this.state.web3}
+                    />
                 </div>
 
+                <div id="Team">
+                    <Team />
+                </div>
             </Layout>
-        )
+        );
     }
 }
 
