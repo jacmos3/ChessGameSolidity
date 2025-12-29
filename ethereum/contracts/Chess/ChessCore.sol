@@ -226,7 +226,7 @@ contract ChessCore {
             // White pawn captures en passant
             if (piece == PAWN &&
                 endX == startX - 1 &&
-                startX == ROW_WHITE_PAWNS_LONG_OPENING && // White pawn must be on row 4 (after black's double move)
+                startX == ROW_BLACK_PAWNS_LONG_OPENING && // White pawn must be on row 3 (adjacent to black's double move)
                 int8(endY) == enPassantCol &&
                 enPassantRow == startX) {
                 return true;
@@ -234,7 +234,7 @@ contract ChessCore {
             // Black pawn captures en passant
             else if (piece == -PAWN &&
                      endX == startX + 1 &&
-                     startX == ROW_BLACK_PAWNS_LONG_OPENING && // Black pawn must be on row 3 (after white's double move)
+                     startX == ROW_WHITE_PAWNS_LONG_OPENING && // Black pawn must be on row 4 (adjacent to white's double move)
                      int8(endY) == enPassantCol &&
                      enPassantRow == startX) {
                 return true;
@@ -564,11 +564,11 @@ contract ChessCore {
             // Check for en passant capture (diagonal move to empty square)
             if (abs(int8(endY) - int8(startY)) == 1 && targetPiece == EMPTY) {
                 // This is an en passant capture - remove the captured pawn
-                if (movingPiece == PAWN && enPassantCol == int8(endY) && startX == ROW_WHITE_PAWNS_LONG_OPENING) {
-                    // White captures black pawn en passant
+                if (movingPiece == PAWN && enPassantCol == int8(endY) && startX == ROW_BLACK_PAWNS_LONG_OPENING) {
+                    // White captures black pawn en passant (white is on row 3)
                     board[startX][endY] = EMPTY; // Remove the black pawn
-                } else if (movingPiece == -PAWN && enPassantCol == int8(endY) && startX == ROW_BLACK_PAWNS_LONG_OPENING) {
-                    // Black captures white pawn en passant
+                } else if (movingPiece == -PAWN && enPassantCol == int8(endY) && startX == ROW_WHITE_PAWNS_LONG_OPENING) {
+                    // Black captures white pawn en passant (black is on row 4)
                     board[startX][endY] = EMPTY; // Remove the white pawn
                 }
             }
