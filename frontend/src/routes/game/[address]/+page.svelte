@@ -3,7 +3,7 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { activeGame } from '$lib/stores/game.js';
-	import { wallet, truncateAddress } from '$lib/stores/wallet.js';
+	import { wallet, truncateAddress, explorer } from '$lib/stores/wallet.js';
 	import ChessBoard from '$lib/components/ChessBoard.svelte';
 
 	$: address = $page.params.address;
@@ -209,6 +209,12 @@
 	function copyGameLink() {
 		navigator.clipboard.writeText(window.location.href);
 		actionSuccess = 'Link copied!';
+		setTimeout(() => actionSuccess = null, 2000);
+	}
+
+	function copyAddress() {
+		navigator.clipboard.writeText(address);
+		actionSuccess = 'Contract address copied!';
 		setTimeout(() => actionSuccess = null, 2000);
 	}
 
@@ -473,6 +479,55 @@
 								{/each}
 							</div>
 						{/if}
+					</div>
+
+					<!-- Contract Info Card -->
+					<div class="card">
+						<h3 class="font-display text-lg mb-4">On-Chain Info</h3>
+						<div class="space-y-3">
+							<!-- Contract Address -->
+							<div>
+								<div class="text-xs text-chess-gray mb-1">Game Contract</div>
+								<div class="flex items-center gap-2">
+									<code class="flex-1 text-xs bg-chess-darker px-2 py-1.5 rounded truncate font-mono">
+										{address}
+									</code>
+									<button
+										class="p-1.5 rounded hover:bg-chess-accent/20 transition-colors"
+										on:click={copyAddress}
+										title="Copy address"
+									>
+										<svg class="w-4 h-4 text-chess-gray" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+											<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+										</svg>
+									</button>
+								</div>
+							</div>
+
+							<!-- Explorer Link -->
+							{#if $explorer}
+								<a
+									href="{$explorer}/address/{address}"
+									target="_blank"
+									rel="noopener noreferrer"
+									class="flex items-center justify-center gap-2 w-full py-2 px-3 rounded-lg bg-chess-darker hover:bg-chess-accent/20 transition-colors text-sm"
+								>
+									<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+									</svg>
+									View on Explorer
+								</a>
+							{:else}
+								<div class="text-xs text-chess-gray text-center py-2">
+									Local network - no explorer available
+								</div>
+							{/if}
+
+							<!-- Verify Note -->
+							<p class="text-xs text-chess-gray/60 text-center pt-2 border-t border-chess-accent/10">
+								Every move is recorded on-chain. Verify the game state directly on the blockchain.
+							</p>
+						</div>
 					</div>
 				</div>
 			</div>
