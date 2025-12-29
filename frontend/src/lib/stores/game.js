@@ -142,6 +142,116 @@ function createActiveGameStore() {
 		data: null
 	});
 
+	let currentGameContract = null;
+	let moveMadeListener = null;
+	let gameStateListener = null;
+
+	// Cleanup event listeners
+	function cleanupListeners() {
+		if (currentGameContract) {
+			if (moveMadeListener) {
+				currentGameContract.off('MoveMade', moveMadeListener);
+				moveMadeListener = null;
+			}
+			if (gameStateListener) {
+				currentGameContract.off('GameStateChanged', gameStateListener);
+				gameStateListener = null;
+			}
+			currentGameContract = null;
+		}
+	}
+
+	// Handle incoming move from blockchain event
+	function handleMoveMade(player, fromRow, fromCol, toRow, toCol, piece, capturedPiece, promotionPiece, isCheck, isMate, isCastling, isEnPassant) {
+		update(s => {
+			if (!s.data) return s;
+
+			const $wallet = get(wallet);
+			const isMyMove = player.toLowerCase() === $wallet.account?.toLowerCase();
+
+			// Skip if this is our own move (we already updated optimistically)
+			if (isMyMove) return s;
+
+			// Create new board with the move applied
+			const newBoard = s.data.board.map(row => [...row]);
+			const pieceValue = Number(piece);
+			const promoValue = Number(promotionPiece);
+
+			// Apply move
+			newBoard[Number(toRow)][Number(toCol)] = promoValue !== 0 ? promoValue : pieceValue;
+			newBoard[Number(fromRow)][Number(fromCol)] = 0;
+
+			// Handle en passant capture
+			if (isEnPassant) {
+				const captureRow = pieceValue > 0 ? Number(toRow) + 1 : Number(toRow) - 1;
+				newBoard[captureRow][Number(toCol)] = 0;
+			}
+
+			// Handle castling rook movement
+			if (isCastling) {
+				const row = Number(fromRow);
+				if (Number(toCol) === 6) { // Kingside
+					newBoard[row][5] = newBoard[row][7];
+					newBoard[row][7] = 0;
+				} else if (Number(toCol) === 2) { // Queenside
+					newBoard[row][3] = newBoard[row][0];
+					newBoard[row][0] = 0;
+				}
+			}
+
+			// Build notation
+			const pieceSymbols = { 1: '', 2: 'N', 3: 'B', 4: 'R', 5: 'Q', 6: 'K' };
+			const symbol = pieceSymbols[Math.abs(pieceValue)] || '';
+			const from = toAlgebraic(Number(fromCol), Number(fromRow));
+			const to = toAlgebraic(Number(toCol), Number(toRow));
+
+			let notation = symbol + to;
+			if (Number(capturedPiece) !== 0) {
+				notation = symbol + (symbol === '' ? from[0] : '') + 'x' + to;
+			}
+			if (isCastling) {
+				notation = Number(toCol) === 6 ? 'O-O' : 'O-O-O';
+			}
+			if (isCheck) notation += '+';
+			if (isMate) notation += '#';
+
+			const newMove = {
+				moveNumber: Math.floor(s.data.moveHistory.length / 2) + 1,
+				isWhite: pieceValue > 0,
+				notation,
+				from,
+				to
+			};
+
+			return {
+				...s,
+				data: {
+					...s.data,
+					board: newBoard,
+					currentPlayer: $wallet.account, // Now it's our turn
+					isMyTurn: true,
+					moveHistory: [...s.data.moveHistory, newMove]
+				}
+			};
+		});
+	}
+
+	// Handle game state changes
+	function handleGameStateChanged(newState) {
+		const stateNum = Number(newState);
+		update(s => {
+			if (!s.data) return s;
+			return {
+				...s,
+				data: {
+					...s.data,
+					state: stateNum,
+					stateInfo: GAME_STATES[stateNum] || GAME_STATES[1]
+				}
+			};
+		});
+	}
+
 	return {
 		subscribe,
 
@@ -154,23 +264,16 @@ function createActiveGameStore() {
 			try {
 				const game = new ethers.Contract(address, ChessCoreABI.abi, $wallet.signer);
 
-				const [players, currentPlayer, state, betting] = await Promise.all([
+				const [players, currentPlayer, state, betting, boardState] = await Promise.all([
 					game.getPlayers(),
 					game.currentPlayer(),
 					game.getGameState(),
-					game.betting()
+					game.betting(),
+					game.getBoardState() // Single call instead of 64!
 				]);
 
-				// Fetch board - batch if possible, or individual calls
-				const board = [];
-				for (let row = 0; row < 8; row++) {
-					const rowData = [];
-					for (let col = 0; col < 8; col++) {
-						const piece = await game.board(row, col);
-						rowData.push(Number(piece));
-					}
-					board.push(rowData);
-				}
+				// Convert board state from contract format
+				const board = boardState.map(row => row.map(cell => Number(cell)));
 
 				// Fetch move history from events
 				let moveHistory = [];
@@ -249,12 +352,25 @@ function createActiveGameStore() {
 						moveHistory
 					}
 				});
+
+				// Setup real-time event listeners for opponent moves
+				cleanupListeners();
+				currentGameContract = game;
+
+				// Listen for MoveMade events
+				moveMadeListener = handleMoveMade;
+				game.on('MoveMade', moveMadeListener);
+
+				// Listen for GameStateChanged events
+				gameStateListener = handleGameStateChanged;
+				game.on('GameStateChanged', gameStateListener);
+
 			} catch (err) {
 				update(s => ({ ...s, loading: false, error: err.message }));
 			}
 		},
 
-		async makeMove(fromRow, fromCol, toRow, toCol) {
+		async makeMove(fromRow, fromCol, toRow, toCol, promotionPiece = 0) {
 			const $wallet = get(wallet);
 			const $state = get({ subscribe });
 
@@ -262,9 +378,81 @@ function createActiveGameStore() {
 				throw new Error('No game loaded');
 			}
 
-			const game = new ethers.Contract($state.address, ChessCoreABI.abi, $wallet.signer);
-			const tx = await game.makeMove(fromRow, fromCol, toRow, toCol);
-			await tx.wait();
+			// Optimistic update - apply move immediately to UI
+			const piece = $state.data?.board[fromRow]?.[fromCol];
+			if ($state.data) {
+				update(s => {
+					const newBoard = s.data.board.map(row => [...row]);
+					const movedPiece = promotionPiece !== 0 ? promotionPiece : piece;
+					newBoard[toRow][toCol] = movedPiece;
+					newBoard[fromRow][fromCol] = 0;
+
+					// Handle en passant
+					const isPawn = Math.abs(piece) === 1;
+					const isDiagonal = fromCol !== toCol;
+					const targetEmpty = s.data.board[toRow][toCol] === 0;
+					if (isPawn && isDiagonal && targetEmpty) {
+						const captureRow = piece > 0 ? toRow + 1 : toRow - 1;
+						newBoard[captureRow][toCol] = 0;
+					}
+
+					// Handle castling
+					const isKing = Math.abs(piece) === 6;
+					if (isKing && Math.abs(toCol - fromCol) === 2) {
+						if (toCol === 6) { // Kingside
+							newBoard[fromRow][5] = newBoard[fromRow][7];
+							newBoard[fromRow][7] = 0;
+						} else if (toCol === 2) { // Queenside
+							newBoard[fromRow][3] = newBoard[fromRow][0];
+							newBoard[fromRow][0] = 0;
+						}
+					}
+
+					return {
+						...s,
+						data: {
+							...s.data,
+							board: newBoard,
+							isMyTurn: false
+						}
+					};
+				});
+			}
+
+			try {
+				const game = new ethers.Contract($state.address, ChessCoreABI.abi, $wallet.signer);
+				let tx;
+				if (promotionPiece !== 0) {
+					tx = await game.makeMoveWithPromotion(fromRow, fromCol, toRow, toCol, promotionPiece);
+				} else {
+					tx = await game.makeMove(fromRow, fromCol, toRow, toCol);
+				}
+				await tx.wait();
+			} catch (err) {
+				// Revert optimistic update on error
+				await this.load($state.address);
+				throw err;
+			}
+		},
+
+		// Check if a move is a pawn promotion
+		isPawnPromotion(fromRow, fromCol, toRow) {
+			const $state = get({ subscribe });
+			if (!$state.data) return false;
+
+			const piece = $state.data.board[fromRow]?.[fromCol];
+			if (!piece) return false;
+
+			const isPawn = Math.abs(piece) === 1;
+			const isWhitePawn = piece === 1;
+			const isBlackPawn = piece === -1;
+
+			// White pawn promoting (reaching row 0)
+			if (isWhitePawn && toRow === 0) return true;
+			// Black pawn promoting (reaching row 7)
+			if (isBlackPawn && toRow === 7) return true;
+
+			return false;
 		},
 
 		async joinGame() {
@@ -309,6 +497,7 @@ function createActiveGameStore() {
 		},
 
 		clear() {
+			cleanupListeners();
 			set({ address: null, loading: false, error: null, data: null });
 		}
 	};
