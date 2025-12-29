@@ -32,6 +32,77 @@ function createWalletStore() {
 		error: null
 	});
 
+	let accountsChangedHandler = null;
+	let chainChangedHandler = null;
+
+	async function refreshWalletState() {
+		if (typeof window === 'undefined' || !window.ethereum) return;
+
+		try {
+			const provider = new ethers.providers.Web3Provider(window.ethereum);
+			const accounts = await provider.listAccounts();
+
+			if (accounts.length === 0) {
+				// User disconnected all accounts
+				set({
+					connected: false,
+					connecting: false,
+					account: null,
+					chainId: null,
+					balance: null,
+					provider: null,
+					signer: null,
+					error: null
+				});
+				return;
+			}
+
+			const signer = provider.getSigner();
+			const account = await signer.getAddress();
+			const network = await provider.getNetwork();
+			const balance = await provider.getBalance(account);
+
+			set({
+				connected: true,
+				connecting: false,
+				account,
+				chainId: network.chainId,
+				balance: ethers.utils.formatEther(balance),
+				provider,
+				signer,
+				error: null
+			});
+		} catch (err) {
+			console.error('Error refreshing wallet state:', err);
+		}
+	}
+
+	function setupListeners() {
+		if (typeof window === 'undefined' || !window.ethereum) return;
+
+		// Clean up existing listeners
+		if (accountsChangedHandler) {
+			window.ethereum.removeListener('accountsChanged', accountsChangedHandler);
+		}
+		if (chainChangedHandler) {
+			window.ethereum.removeListener('chainChanged', chainChangedHandler);
+		}
+
+		// Set up new listeners
+		accountsChangedHandler = (accounts) => {
+			console.log('Accounts changed:', accounts);
+			refreshWalletState();
+		};
+
+		chainChangedHandler = (chainIdHex) => {
+			console.log('Chain changed:', chainIdHex);
+			refreshWalletState();
+		};
+
+		window.ethereum.on('accountsChanged', accountsChangedHandler);
+		window.ethereum.on('chainChanged', chainChangedHandler);
+	}
+
 	return {
 		subscribe,
 
@@ -63,9 +134,8 @@ function createWalletStore() {
 					error: null
 				});
 
-				// Listen for account changes
-				window.ethereum.on('accountsChanged', () => window.location.reload());
-				window.ethereum.on('chainChanged', () => window.location.reload());
+				// Setup listeners for account/chain changes
+				setupListeners();
 
 			} catch (err) {
 				update(s => ({
@@ -77,6 +147,18 @@ function createWalletStore() {
 		},
 
 		disconnect() {
+			// Clean up listeners
+			if (typeof window !== 'undefined' && window.ethereum) {
+				if (accountsChangedHandler) {
+					window.ethereum.removeListener('accountsChanged', accountsChangedHandler);
+					accountsChangedHandler = null;
+				}
+				if (chainChangedHandler) {
+					window.ethereum.removeListener('chainChanged', chainChangedHandler);
+					chainChangedHandler = null;
+				}
+			}
+
 			set({
 				connected: false,
 				connecting: false,
@@ -91,6 +173,20 @@ function createWalletStore() {
 
 		clearError() {
 			update(s => ({ ...s, error: null }));
+		},
+
+		// Refresh balance only
+		async refreshBalance() {
+			update(s => {
+				if (!s.provider || !s.account) return s;
+				s.provider.getBalance(s.account).then(balance => {
+					update(state => ({
+						...state,
+						balance: ethers.utils.formatEther(balance)
+					}));
+				});
+				return s;
+			});
 		}
 	};
 }

@@ -12,8 +12,18 @@
 	let actionError = null;
 	let actionSuccess = null;
 	let showResignModal = false;
+	let showPromotionModal = false;
+	let promotionMoveData = null;
 	let pendingMove = null;
 	let errorTimeout = null;
+
+	// Promotion pieces: Queen, Rook, Bishop, Knight
+	const promotionPieces = [
+		{ value: 5, symbol: '♛', name: 'Queen' },
+		{ value: 4, symbol: '♜', name: 'Rook' },
+		{ value: 3, symbol: '♝', name: 'Bishop' },
+		{ value: 2, symbol: '♞', name: 'Knight' }
+	];
 
 	// Auto-dismiss minor errors after 3 seconds
 	function setError(message) {
@@ -39,6 +49,15 @@
 	// Reload when address changes
 	$: if (address) {
 		activeGame.load(address);
+	}
+
+	// Reload when wallet account changes (user switched accounts)
+	let previousAccount = null;
+	$: if ($wallet.account && $wallet.account !== previousAccount) {
+		previousAccount = $wallet.account;
+		if (address && previousAccount !== null) {
+			activeGame.load(address);
+		}
 	}
 
 	$: data = $activeGame.data;
@@ -85,16 +104,49 @@
 
 	async function handleMove(e) {
 		const { from, to } = e.detail;
-		actionLoading = true;
 		actionError = null;
 		actionSuccess = null;
 
 		const piece = data.board[from.row][from.col];
+
+		// Check for pawn promotion
+		if (activeGame.isPawnPromotion(from.row, from.col, to.row)) {
+			// Store move data and show promotion modal
+			promotionMoveData = { from, to, piece };
+			showPromotionModal = true;
+			return;
+		}
+
+		// Execute normal move
+		await executeMove(from, to, 0);
+	}
+
+	async function handlePromotion(promotionValue) {
+		showPromotionModal = false;
+		if (!promotionMoveData) return;
+
+		const { from, to, piece } = promotionMoveData;
+		// For black pieces, use negative value
+		const actualValue = piece < 0 ? -promotionValue : promotionValue;
+
+		await executeMove(from, to, actualValue);
+		promotionMoveData = null;
+	}
+
+	function cancelPromotion() {
+		showPromotionModal = false;
+		promotionMoveData = null;
+	}
+
+	async function executeMove(from, to, promotionPiece) {
+		actionLoading = true;
+		const piece = data.board[from.row][from.col];
 		pendingMove = { from, to, piece };
 
 		try {
-			await activeGame.makeMove(from.row, from.col, to.row, to.col);
+			await activeGame.makeMove(from.row, from.col, to.row, to.col, promotionPiece);
 			actionSuccess = 'Move executed!';
+			// The optimistic update already applied, reload just to confirm state
 			await activeGame.load(address);
 		} catch (err) {
 			console.error('Move error:', err);
@@ -448,6 +500,34 @@
 					Resign
 				</button>
 			</div>
+		</div>
+	</div>
+{/if}
+
+<!-- Pawn Promotion Modal -->
+{#if showPromotionModal}
+	<!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+	<div
+		class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+		on:click|self={cancelPromotion}
+	>
+		<div class="card max-w-sm w-full text-center">
+			<h3 class="font-display text-xl mb-4">Promote Pawn</h3>
+			<p class="text-chess-gray mb-6">Choose a piece for promotion:</p>
+			<div class="grid grid-cols-4 gap-3 mb-4">
+				{#each promotionPieces as piece}
+					<button
+						class="aspect-square rounded-lg bg-chess-darker hover:bg-chess-accent/20 border border-chess-accent/20 hover:border-chess-accent transition-all flex flex-col items-center justify-center gap-1"
+						on:click={() => handlePromotion(piece.value)}
+					>
+						<span class="text-4xl {promotionMoveData?.piece > 0 ? 'text-white' : 'text-chess-gray'}">{piece.symbol}</span>
+						<span class="text-xs text-chess-gray">{piece.name}</span>
+					</button>
+				{/each}
+			</div>
+			<button class="btn btn-secondary w-full" on:click={cancelPromotion}>
+				Cancel
+			</button>
 		</div>
 	</div>
 {/if}
