@@ -1,13 +1,13 @@
-import React, {Component} from 'react';
-import {Container, Button, Tab} from 'semantic-ui-react';
-import styles from "../../styles/components/Claim.module.scss"; // Styles
-import FetchNFTList from "./ClaimSections/FetchNFTList"
-import GameSection from "./ClaimSections/GameSection"
-import CourtesySection from "./ClaimSections/CourtesySection"
+import React, { Component } from 'react';
+import { Container } from 'semantic-ui-react';
+import styles from "../../styles/components/Claim.module.scss";
+import FetchNFTList from "./ClaimSections/FetchNFTList";
+import GameSection from "./ClaimSections/GameSection";
+import CourtesySection from "./ClaimSections/CourtesySection";
 
 class Claim extends Component {
     state = {
-        activeGame: -1
+        activeGame: null
     }
 
     constructor(props) {
@@ -15,63 +15,69 @@ class Claim extends Component {
         this.goToFetch = this.goToFetch.bind(this);
     }
 
-    //handleTabChange = (e, {activeGame}) => this.setState({activeGame});
+    resetActiveGame = () => this.setState({ activeGame: null });
 
-    resetActiveGame = () => this.setState({activeGame: -1});
-
-    goToFetch(game) {
-      this.setState({activeGame:game});
-      console.log("goToFetch");
-      //console.log(game);
+    goToFetch(gameAddress) {
+        this.setState({ activeGame: gameAddress });
     }
 
     render() {
-        var option = this.props.state.web3Settings.chains
-            .filter(chain => chain.id === this.props.state.web3Settings.networkId)
-            .map(chain => chain.options)[0];
+        const { web3Settings } = this.props.state;
+        const isConnected = web3Settings.isWeb3Connected;
+        const isSupported = web3Settings.isSupported;
+        const hasContract = !!web3Settings.contractAddress;
 
-       
         return (
             <div className={`${styles.claim__container} py-10 text-trips-1`}>
                 <div className="flex justify-around">
                     <div className={`${styles.container} rounded`}>
-                        <h2 className={`${styles.title} text-center mt-4 capitalize`}>Choose your Game</h2>
-                        <br/>
-                            {
-                               
+                        <h2 className={`${styles.title} text-center mt-4 capitalize text-2xl font-bold`}>
+                            Chess Arena
+                        </h2>
+                        <br />
 
-                            this.props.state.web3Settings.isWeb3Connected
-                                ? this.props.state.web3Settings.chains
-                                    .filter(chain => chain.id === this.props.state.web3Settings.networkId)
-                                    .map(chain => chain.options.id).length == 1
-                                    ? this.state.activeGame != -1
-                                        ? (
-                                            <div>
-                                                <GameSection state={this.props.state} goToFetch={this.goToFetch} addressGame = {this.state.activeGame} resetActiveGame = {this.resetActiveGame} />
-                                            </div>
-                                        )
-                                        : (
-                                            <div>
-                                                <FetchNFTList state={this.props.state} goToFetch={this.goToFetch}/>
-                                            </div>
-                                        )
-                                    : (
-                                        <div>
-                                            <CourtesySection state={this.props.state} buttons= {false} connect={this.props.connect}/>
-                                        </div>
-                                    )
-                                : (
-                                    <div>
-                                        <CourtesySection state={this.props.state} buttons= {true} connect={this.props.connect} />
-                                    </div>
-                                
-                            )
-                        }
+                        {!isConnected ? (
+                            // Not connected
+                            <CourtesySection
+                                state={this.props.state}
+                                message="Connect your wallet to play"
+                                showConnectButton={true}
+                                connect={this.props.connect}
+                            />
+                        ) : !isSupported ? (
+                            // Connected but wrong network
+                            <CourtesySection
+                                state={this.props.state}
+                                message={`Network not supported. Please switch to Sepolia, Holesky, or Localhost.`}
+                                showConnectButton={false}
+                            />
+                        ) : !hasContract ? (
+                            // No contract configured
+                            <CourtesySection
+                                state={this.props.state}
+                                message="No contract configured for this network. Check .env file."
+                                showConnectButton={false}
+                            />
+                        ) : this.state.activeGame ? (
+                            // Show active game
+                            <GameSection
+                                state={this.props.state}
+                                goToFetch={this.goToFetch}
+                                addressGame={this.state.activeGame}
+                                resetActiveGame={this.resetActiveGame}
+                            />
+                        ) : (
+                            // Show games list
+                            <FetchNFTList
+                                state={this.props.state}
+                                goToFetch={this.goToFetch}
+                            />
+                        )}
                     </div>
                 </div>
             </div>
         );
-    };
+    }
 }
 
 export default Claim;

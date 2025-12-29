@@ -1,58 +1,53 @@
-import React, {Component} from 'react';
-import {Button, Container} from 'semantic-ui-react';
-import styles from "../../../styles/components/claimSections/FetchNFTList.module.scss";
+import React, { Component } from 'react';
+import { Container } from 'semantic-ui-react';
 
 class CourtesySection extends Component {
-    constructor(props) {
-        super(props);   
-    }
-
     render() {
+        const { message, showConnectButton, connect, state } = this.props;
+        const { web3Settings } = state;
+
         return (
-            <Container style={{color: "white"}}>
-                {
-                    this.props.buttons ? (
-                        this.props.state.web3Settings.isWeb3Connected
-                            ? (
-                                <div style={{padding: "5px"}}>
-                                    <Button onClick={this.props.disconnect}>
-                                        {this.props.state.web3Settingsaccount}
-                                    </Button>
-                                </div>
-                            )
-                            : (
-                                <div style={{padding: "5px"}}>
-                                    <div className="text-center">
-                                        <button className={`btn btn__primary`} onClick={this.props.connect}>
-                                            Connect Wallet
-                                        </button>
+            <Container>
+                <div className="text-center py-12">
+                    <div className="bg-gray-800 text-white p-8 rounded-lg max-w-md mx-auto">
+                        <div className="text-5xl mb-4">
+                            {showConnectButton ? '?' : '!'}
+                        </div>
+
+                        <p className="text-xl mb-6">{message}</p>
+
+                        {showConnectButton && (
+                            <button
+                                className="bg-trips-3 text-white px-8 py-3 rounded-lg font-bold hover:bg-orange-600 transition-colors"
+                                onClick={connect}
+                            >
+                                Connect Wallet
+                            </button>
+                        )}
+
+                        {!showConnectButton && web3Settings.networkId && (
+                            <div className="mt-4 text-sm text-gray-400">
+                                <p>Current network: {web3Settings.networkName || web3Settings.networkId}</p>
+                                <div className="mt-4">
+                                    <p className="text-gray-300 mb-2">Supported networks:</p>
+                                    <div className="flex flex-wrap justify-center gap-2">
+                                        {web3Settings.chains.map(chain => (
+                                            <span
+                                                key={chain.id}
+                                                className="bg-gray-700 px-3 py-1 rounded text-xs"
+                                            >
+                                                {chain.name}
+                                            </span>
+                                        ))}
                                     </div>
                                 </div>
-                            )
-                    ) 
-                    : (
-                        <div style={{padding: "5px"}}>
-                            <div className="text-center">
-                                <div className={`${styles.modal}`}>
-                                    <p className={`${styles.modal_error_title}`}>Wrong network!</p>
-                                    <p>You are connected to
-                                    netword {this.props.state.web3Settings.networkId} - {this.props.state.web3Settings.networkName}</p>
-                                    <p className={`${styles.modal_error_second_description}`}>Please connect to
-                                    networks:<br/></p>
-                                        {
-                                            this.props.state.web3Settings.chains.map(chain =>
-                                                <div key={chain.id}>
-                                                    <div>{`${chain.id} - ${chain.name}`}</div>
-                                                </div>
-                                            )
-                                        }
-                                </div>
                             </div>
-                        </div>
-                    )
-                }
+                        )}
+                    </div>
+                </div>
             </Container>
-        )
-    };
+        );
+    }
 }
+
 export default CourtesySection;
