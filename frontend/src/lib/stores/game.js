@@ -83,7 +83,7 @@ function createGamesStore() {
 			}
 		},
 
-		async createGame(betAmount) {
+		async createGame(betAmount, timeoutPreset = 2) {
 			const $wallet = get(wallet);
 			const $contractAddress = get(contractAddress);
 
@@ -98,7 +98,6 @@ function createGamesStore() {
 			);
 
 			// TimeoutPreset: 0=Blitz (~1h), 1=Rapid (~7h), 2=Classical (~7d)
-			const timeoutPreset = 2; // Default to Classical
 			const tx = await factory.createChessGame(timeoutPreset, {
 				value: ethers.utils.parseEther(betAmount)
 			});
