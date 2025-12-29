@@ -5,6 +5,8 @@
 	import { activeGame } from '$lib/stores/game.js';
 	import { wallet, truncateAddress, explorer } from '$lib/stores/wallet.js';
 	import ChessBoard from '$lib/components/ChessBoard.svelte';
+	import GameTimer from '$lib/components/GameTimer.svelte';
+	import { playMoveSound, playSound, preloadAllSounds, audioSettings, toggleSound } from '$lib/stores/audio.js';
 
 	$: address = $page.params.address;
 
@@ -40,11 +42,24 @@
 
 	onMount(() => {
 		activeGame.load(address);
+		preloadAllSounds();
 		return () => {
 			activeGame.clear();
 			if (errorTimeout) clearTimeout(errorTimeout);
 		};
 	});
+
+	// Play sound when opponent makes a move (animatingMove is set)
+	$: if (data?.animatingMove) {
+		// Detect if it's a capture, check, etc. from the last move notation
+		const lastNotation = moveHistory[moveHistory.length - 1]?.notation || '';
+		playMoveSound({
+			isCapture: lastNotation.includes('x'),
+			isCheck: lastNotation.includes('+'),
+			isMate: lastNotation.includes('#'),
+			isCastle: lastNotation.includes('O-O')
+		});
+	}
 
 	// Reload when address changes
 	$: if (address) {
@@ -70,6 +85,31 @@
 
 	// Move history from contract events
 	$: moveHistory = data?.moveHistory || [];
+
+	// Last move for highlighting
+	$: lastMove = moveHistory.length > 0 ? (() => {
+		const last = moveHistory[moveHistory.length - 1];
+		if (!last) return null;
+		// Convert algebraic notation back to coords
+		const files = { a: 0, b: 1, c: 2, d: 3, e: 4, f: 5, g: 6, h: 7 };
+		const fromFile = files[last.from?.[0]];
+		const fromRank = 8 - parseInt(last.from?.[1]);
+		const toFile = files[last.to?.[0]];
+		const toRank = 8 - parseInt(last.to?.[1]);
+		if (isNaN(fromFile) || isNaN(toFile)) return null;
+		return {
+			from: { row: fromRank, col: fromFile },
+			to: { row: toRank, col: toFile }
+		};
+	})() : null;
+
+	// Check if current player's king is in check (detect from last move notation)
+	$: isCheck = moveHistory.length > 0 &&
+		(moveHistory[moveHistory.length - 1]?.notation?.includes('+') ||
+		 moveHistory[moveHistory.length - 1]?.notation?.includes('#'));
+
+	// Whose turn is it (white moves first, alternates)
+	$: currentPlayerIsWhite = moveHistory.length % 2 === 0;
 
 	// Parse error messages to be more user-friendly
 	function parseError(err) {
@@ -141,7 +181,15 @@
 	async function executeMove(from, to, promotionPiece) {
 		actionLoading = true;
 		const piece = data.board[from.row][from.col];
+		const targetPiece = data.board[to.row][to.col];
 		pendingMove = { from, to, piece };
+
+		// Play move sound immediately (optimistic)
+		playMoveSound({
+			isCapture: targetPiece !== 0,
+			isPromotion: promotionPiece !== 0,
+			isCastle: Math.abs(piece) === 6 && Math.abs(to.col - from.col) === 2
+		});
 
 		try {
 			await activeGame.makeMove(from.row, from.col, to.row, to.col, promotionPiece);
@@ -262,6 +310,14 @@
 							<span>Back to Lobby</span>
 						</a>
 						<div class="flex items-center gap-2">
+							<!-- Sound Toggle -->
+							<button
+								class="btn btn-secondary !px-3 !py-1.5 text-sm"
+								on:click={toggleSound}
+								title={$audioSettings.enabled ? 'Mute sounds' : 'Enable sounds'}
+							>
+								{$audioSettings.enabled ? '🔊' : '🔇'}
+							</button>
 							<button
 								class="btn btn-secondary !px-3 !py-1.5 text-sm"
 								on:click={copyGameLink}
@@ -326,6 +382,10 @@
 							orientation={data.playerRole === 'black' ? 'black' : 'white'}
 							interactive={canMove && !actionLoading}
 							{pendingMove}
+							{lastMove}
+							{isCheck}
+							{currentPlayerIsWhite}
+							animateMove={data.animatingMove}
 							on:move={handleMove}
 						/>
 					</div>
@@ -368,6 +428,21 @@
 								{parseFloat(data.betting) * 2} ETH
 							</div>
 						</div>
+
+						<!-- Timer -->
+						{#if data.timeout && data.stateInfo.isActive}
+							<div class="mb-4">
+								<h4 class="text-xs text-chess-gray mb-2 uppercase tracking-wider">Time Remaining</h4>
+								<GameTimer
+									whiteTimeRemaining={data.timeout.whiteTimeRemaining}
+									blackTimeRemaining={data.timeout.blackTimeRemaining}
+									whiteBlocksRemaining={data.timeout.whiteBlocksRemaining}
+									blackBlocksRemaining={data.timeout.blackBlocksRemaining}
+									currentPlayerIsWhite={data.timeout.currentPlayerIsWhite}
+									isActive={data.stateInfo.isActive}
+								/>
+							</div>
+						{/if}
 
 						<!-- Players -->
 						<div class="space-y-3">
