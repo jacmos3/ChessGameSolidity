@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+	html {
+		scroll-behavior: smooth;
+	}
+
+	body {
+		min-height: 100vh;
+	}
+}
+
+@layer components {
+	.btn {
+		@apply px-6 py-3 rounded-lg font-medium transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed;
+	}
+
+	.btn-primary {
+		@apply bg-chess-accent text-chess-darker hover:bg-chess-accent-hover hover:-translate-y-0.5 hover:shadow-lg hover:shadow-chess-accent/30;
+	}
+
+	.btn-secondary {
+		@apply bg-transparent border-2 border-chess-accent text-chess-accent hover:bg-chess-accent hover:text-chess-darker;
+	}
+
+	.btn-danger {
+		@apply bg-chess-danger text-white hover:bg-red-600;
+	}
+
+	.card {
+		@apply bg-white/[0.03] border border-chess-accent/10 rounded-xl p-6 transition-all duration-300;
+	}
+
+	.card:hover {
+		@apply border-chess-accent/30 bg-white/[0.05] -translate-y-1;
+	}
+
+	.input {
+		@apply w-full px-4 py-3 bg-chess-darker border border-chess-accent/20 rounded-lg text-chess-light placeholder-chess-gray focus:outline-none focus:border-chess-accent transition-colors;
+	}
+}
