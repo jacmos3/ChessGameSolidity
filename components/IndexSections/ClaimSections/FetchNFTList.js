@@ -5,10 +5,6 @@ import ChessCoreABI from '../../../ethereum/build/contracts/ChessCore.json';
 import styles from "../../../styles/components/claimSections/FetchNFTList.module.scss";
 
 class FetchNFTList extends Component {
-    constructor(props) {
-        super(props);
-    }
-
     state = {
         all: [],
         loading: 0,
@@ -16,7 +12,6 @@ class FetchNFTList extends Component {
         successMessage: "",
         totalChessGames: 0,
         chainName: "",
-        // Create game modal
         showCreateModal: false,
         betAmount: "0.01",
         creatingGame: false
@@ -37,12 +32,12 @@ class FetchNFTList extends Component {
 
     getGameStatusLabel = (status) => {
         switch (parseInt(status)) {
-            case 1: return { text: "Waiting for opponent", color: "blue", canJoin: true };
-            case 2: return { text: "In Progress", color: "green", canJoin: false };
-            case 3: return { text: "Draw", color: "gray", canJoin: false };
-            case 4: return { text: "White Wins", color: "gold", canJoin: false };
-            case 5: return { text: "Black Wins", color: "purple", canJoin: false };
-            default: return { text: "Unknown", color: "gray", canJoin: false };
+            case 1: return { text: "Waiting", color: "#3b82f6", canJoin: true };
+            case 2: return { text: "In Progress", color: "#22c55e", canJoin: false };
+            case 3: return { text: "Draw", color: "#6b7280", canJoin: false };
+            case 4: return { text: "White Wins", color: "#e4a853", canJoin: false };
+            case 5: return { text: "Black Wins", color: "#a855f7", canJoin: false };
+            default: return { text: "Unknown", color: "#6b7280", canJoin: false };
         }
     }
 
@@ -150,75 +145,117 @@ class FetchNFTList extends Component {
 
         return (
             <Container>
-                <div style={{ display: 'flex', flexFlow: 'column' }}>
-                    <h2 className="text-center text-2xl font-bold mb-4">
-                        {totalChessGames} Games on {chainName}
+                <div style={{ display: 'flex', flexFlow: 'column', padding: '20px 0' }}>
+                    <h2 style={{
+                        textAlign: 'center',
+                        color: '#f5f5f5',
+                        fontSize: '1.3rem',
+                        marginBottom: '24px'
+                    }}>
+                        {totalChessGames} Games on <span style={{ color: '#e4a853' }}>{chainName}</span>
                     </h2>
 
                     {errorMessage && (
-                        <Message negative>
+                        <Message negative onDismiss={() => this.setState({ errorMessage: '' })}>
                             <Message.Header>Error</Message.Header>
                             <p>{errorMessage}</p>
                         </Message>
                     )}
 
                     {successMessage && (
-                        <Message positive>
-                            <Message.Header>Success</Message.Header>
+                        <Message positive onDismiss={() => this.setState({ successMessage: '' })}>
                             <p>{successMessage}</p>
                         </Message>
                     )}
 
                     {/* Action Buttons */}
-                    <div className="flex justify-center gap-4 mb-6">
+                    <div style={{ display: 'flex', justifyContent: 'center', gap: '16px', marginBottom: '24px' }}>
                         <button
-                            className="bg-green-600 text-white px-6 py-3 rounded-lg font-bold hover:bg-green-700 disabled:opacity-50"
                             onClick={this.openCreateModal}
                             disabled={loading > 0}
+                            style={{
+                                background: '#e4a853',
+                                color: '#1a1a2e',
+                                padding: '12px 24px',
+                                borderRadius: '8px',
+                                border: 'none',
+                                fontWeight: 600,
+                                cursor: loading > 0 ? 'not-allowed' : 'pointer',
+                                opacity: loading > 0 ? 0.5 : 1,
+                                transition: 'all 0.2s'
+                            }}
                         >
                             + Create New Game
                         </button>
                         <button
-                            className="bg-blue-600 text-white px-6 py-3 rounded-lg font-bold hover:bg-blue-700 disabled:opacity-50"
                             onClick={this.fetchNFTList}
                             disabled={loading > 0}
+                            style={{
+                                background: 'transparent',
+                                color: '#e4a853',
+                                padding: '12px 24px',
+                                borderRadius: '8px',
+                                border: '2px solid #e4a853',
+                                fontWeight: 600,
+                                cursor: loading > 0 ? 'not-allowed' : 'pointer',
+                                opacity: loading > 0 ? 0.5 : 1,
+                                transition: 'all 0.2s'
+                            }}
                         >
-                            {loading > 0 ? 'Loading...' : 'Refresh List'}
+                            {loading > 0 ? 'Loading...' : 'Refresh'}
                         </button>
                     </div>
 
                     {/* Games Grid */}
                     {loading > 0 ? (
-                        <div className={`${styles.image__container}`}>
+                        <div className={styles.image__container}>
                             {[...Array(totalChessGames || 3)].map((_, index) => (
-                                <div key={index} className={`${styles.image}`}>
-                                    <div className="animate-pulse bg-gray-300 w-24 h-24 rounded"></div>
-                                    <h3 className="text-gray-400">Loading...</h3>
+                                <div key={index} className={styles.image}>
+                                    <div style={{
+                                        width: '100px',
+                                        height: '100px',
+                                        background: 'rgba(255,255,255,0.05)',
+                                        borderRadius: '8px',
+                                        animation: 'pulse 2s infinite'
+                                    }}></div>
+                                    <h3 style={{ color: '#6b7280' }}>Loading...</h3>
                                 </div>
                             ))}
                         </div>
                     ) : (
-                        <div className={`${styles.image__container}`}>
+                        <div className={styles.image__container}>
                             {all.length === 0 ? (
-                                <div className="text-center py-8">
-                                    <p className="text-gray-500 text-lg">No games found. Create one to get started!</p>
+                                <div style={{ textAlign: 'center', padding: '40px' }}>
+                                    <div style={{ fontSize: '3rem', marginBottom: '16px' }}>♟</div>
+                                    <p style={{ color: '#6b7280', fontSize: '1.1rem' }}>
+                                        No games found. Create one to get started!
+                                    </p>
                                 </div>
                             ) : (
                                 all.map(el => (
-                                    <div key={el.key} className={`${styles.image} cursor-pointer hover:scale-105 transition-transform`}>
-                                        <div onClick={() => this.props.goToFetch(el.key)}>
-                                            <img src={el.image} width="120px" alt={el.header} />
-                                        </div>
-                                        <h3 className="font-bold">#{el.header}</h3>
-                                        <p className="text-sm" style={{ color: el.statusColor }}>
+                                    <div
+                                        key={el.key}
+                                        className={styles.image}
+                                        onClick={() => this.props.goToFetch(el.key)}
+                                        style={{ cursor: 'pointer' }}
+                                    >
+                                        <img src={el.image} width="120px" alt={el.header} />
+                                        <h3>#{el.header}</h3>
+                                        <p style={{ color: el.statusColor, fontWeight: 500 }}>
                                             {el.gameStatus}
                                         </p>
-                                        <p className="text-xs text-gray-500">
-                                            Bet: {el.betting} ETH
-                                        </p>
+                                        <p>{el.betting} ETH</p>
                                         {el.canJoin && el.whitePlayer !== web3Settings.account && (
-                                            <span className="text-xs bg-blue-500 text-white px-2 py-1 rounded mt-1 inline-block">
-                                                Click to Join!
+                                            <span style={{
+                                                background: 'rgba(59, 130, 246, 0.2)',
+                                                color: '#3b82f6',
+                                                padding: '4px 10px',
+                                                borderRadius: '4px',
+                                                fontSize: '0.75rem',
+                                                marginTop: '8px',
+                                                fontWeight: 500
+                                            }}>
+                                                Join Game
                                             </span>
                                         )}
                                     </div>
@@ -236,31 +273,29 @@ class FetchNFTList extends Component {
                 >
                     <Modal.Header>Create New Chess Game</Modal.Header>
                     <Modal.Content>
-                        <div className="space-y-4">
-                            <div>
-                                <label className="block text-sm font-medium mb-2">
-                                    Bet Amount (ETH)
-                                </label>
-                                <Input
-                                    type="number"
-                                    step="0.001"
-                                    min="0"
-                                    value={this.state.betAmount}
-                                    onChange={(e) => this.setState({ betAmount: e.target.value })}
-                                    placeholder="0.01"
-                                    fluid
-                                />
-                                <p className="text-sm text-gray-500 mt-1">
-                                    Your opponent will need to match this bet to join.
-                                    Set to 0 for a friendly game.
-                                </p>
-                            </div>
-                            {this.state.errorMessage && (
-                                <Message negative size="small">
-                                    {this.state.errorMessage}
-                                </Message>
-                            )}
+                        <div style={{ marginBottom: '16px' }}>
+                            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>
+                                Bet Amount (ETH)
+                            </label>
+                            <Input
+                                type="number"
+                                step="0.001"
+                                min="0"
+                                value={this.state.betAmount}
+                                onChange={(e) => this.setState({ betAmount: e.target.value })}
+                                placeholder="0.01"
+                                fluid
+                            />
+                            <p style={{ fontSize: '0.85rem', color: '#6b7280', marginTop: '8px' }}>
+                                Your opponent will need to match this bet to join.
+                                Set to 0 for a friendly game.
+                            </p>
                         </div>
+                        {this.state.errorMessage && (
+                            <Message negative size="small">
+                                {this.state.errorMessage}
+                            </Message>
+                        )}
                     </Modal.Content>
                     <Modal.Actions>
                         <Button onClick={this.closeCreateModal}>
