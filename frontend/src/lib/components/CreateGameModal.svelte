@@ -5,15 +5,23 @@
 	const dispatch = createEventDispatcher();
 
 	let betAmount = '0.01';
+	let timeoutPreset = 2; // Default to Classical
 	let creating = false;
 	let error = null;
+
+	// Timeout presets matching contract constants
+	const timeoutOptions = [
+		{ value: 0, name: 'Blitz', blocks: 300, time: '~1 ora', description: 'Partite veloci' },
+		{ value: 1, name: 'Rapid', blocks: 2100, time: '~7 ore', description: 'Ritmo moderato' },
+		{ value: 2, name: 'Classical', blocks: 50400, time: '~7 giorni', description: 'Partite rilassate' }
+	];
 
 	async function handleCreate() {
 		creating = true;
 		error = null;
 
 		try {
-			await games.createGame(betAmount);
+			await games.createGame(betAmount, timeoutPreset);
 			await games.fetchGames();
 			dispatch('close');
 		} catch (err) {
@@ -42,7 +50,8 @@
 			<h3 class="font-display text-xl">Create New Game</h3>
 		</div>
 
-		<div class="p-6 space-y-4">
+		<div class="p-6 space-y-5">
+			<!-- Bet Amount -->
 			<div>
 				<label for="bet" class="block text-sm font-medium mb-2">
 					Bet Amount (ETH)
@@ -51,14 +60,42 @@
 					id="bet"
 					type="number"
 					step="0.001"
-					min="0"
+					min="0.001"
+					max="100"
 					bind:value={betAmount}
 					class="input"
 					placeholder="0.01"
 				/>
 				<p class="text-xs text-chess-gray mt-2">
-					Your opponent will need to match this bet to join.
-					Set to 0 for a friendly game.
+					Your opponent will need to match this bet to join (min 0.001, max 100 ETH).
+				</p>
+			</div>
+
+			<!-- Time Control -->
+			<div role="group" aria-labelledby="time-control-label">
+				<span id="time-control-label" class="block text-sm font-medium mb-3">
+					Time Control
+				</span>
+				<div class="grid grid-cols-3 gap-2">
+					{#each timeoutOptions as option}
+						<button
+							type="button"
+							class="p-3 rounded-lg border transition-all text-center
+								{timeoutPreset === option.value
+									? 'border-chess-accent bg-chess-accent/10'
+									: 'border-chess-accent/20 hover:border-chess-accent/50 bg-chess-darker'}"
+							on:click={() => timeoutPreset = option.value}
+						>
+							<div class="font-display text-sm {timeoutPreset === option.value ? 'text-chess-accent' : ''}">
+								{option.name}
+							</div>
+							<div class="text-xs text-chess-gray mt-1">{option.time}</div>
+						</button>
+					{/each}
+				</div>
+				<p class="text-xs text-chess-gray mt-2">
+					{timeoutOptions[timeoutPreset].description} -
+					{timeoutOptions[timeoutPreset].blocks} blocchi per mossa
 				</p>
 			</div>
 
