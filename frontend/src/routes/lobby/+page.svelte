@@ -24,11 +24,12 @@
 	}
 
 	// Filter and sort games
+	// Game states: 1=NotStarted(Open), 2=InProgress, 3=Draw, 4=WhiteWins, 5=BlackWins
 	$: filteredGames = $games.games
 		.filter(g => {
 			// Status filter
-			if (statusFilter === 'open' && g.state !== 0) return false;
-			if (statusFilter === 'active' && g.state !== 1 && g.state !== 2) return false;
+			if (statusFilter === 'open' && g.state !== 1) return false;
+			if (statusFilter === 'active' && g.state !== 2) return false;
 			if (statusFilter === 'finished' && g.state < 3) return false;
 
 			// Stake filter
