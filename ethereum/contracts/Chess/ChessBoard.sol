@@ -54,6 +54,12 @@ contract ChessBoard {
     int8 internal enPassantCol = -1;
     uint8 internal enPassantRow;
 
+    // King position caching (avoids O(n²) search)
+    uint8 internal whiteKingRow;
+    uint8 internal whiteKingCol;
+    uint8 internal blackKingRow;
+    uint8 internal blackKingCol;
+
     /// @notice Initialize the board with starting positions
     function initializeBoard() internal {
         // Set up black pieces (row 0)
@@ -91,6 +97,12 @@ contract ChessBoard {
         blackKingMoved = false;
         blackLongRookMoved = false;
         blackShortRookMoved = false;
+
+        // Initialize king positions
+        whiteKingRow = ROW_WHITE_PIECES;
+        whiteKingCol = COL_KING;
+        blackKingRow = ROW_BLACK_PIECES;
+        blackKingCol = COL_KING;
     }
 
     /// @notice Absolute value of int8

@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/utils/Strings.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./ChessBoard.sol";
 
 /// @title ChessCore - Main chess game logic
 /// @notice Inherits from ChessBoard and implements move validation and game state
-contract ChessCore is ChessBoard {
+contract ChessCore is ChessBoard, ReentrancyGuard {
     uint public betting;
     bool private prizeClaimed;
 
@@ -52,9 +53,10 @@ contract ChessCore is ChessBoard {
         require(msg.value == betting, "Please send the same amount as the white player");
         require(blackPlayer == address(0), "Black player slot is already taken");
         blackPlayer = msg.sender;
+        gameState = GameState.InProgress;
     }
 
-    function claimPrize() external {
+    function claimPrize() external nonReentrant {
         require(!prizeClaimed, "Prize has already been claimed");
         require(
             gameState == GameState.WhiteWins ||
@@ -237,24 +239,16 @@ contract ChessCore is ChessBoard {
     }
 
 
-    function isKingInCheck(int8 player) private returns (bool) {
-        // Find the position of the player's king
-        uint8 kingX;
-        uint8 kingY;
-        for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
-            for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
-                if (board[rowPiece][colPiece] == player * KING) {
-                    kingX = rowPiece;
-                    kingY = colPiece;
-                }
-            }
-        }
+    function isKingInCheck(int8 player) private view returns (bool) {
+        // Use cached king position instead of O(n²) search
+        uint8 kingX = (player == PLAYER_WHITE) ? whiteKingRow : blackKingRow;
+        uint8 kingY = (player == PLAYER_WHITE) ? whiteKingCol : blackKingCol;
 
         // Check if any of the opponent's pieces can attack the king
         for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
             for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
                 if (player * board[rowPiece][colPiece] < 0) { // Check if piece belongs to opponent
-                    if (isValidMove(rowPiece, colPiece, kingX, kingY)) {
+                    if (isValidMoveView(rowPiece, colPiece, kingX, kingY)) {
                         return true;
                     }
                 }
@@ -264,12 +258,12 @@ contract ChessCore is ChessBoard {
         return false;
     }
 
-    function isSquareUnderAttack(int8 player, uint8 x, uint8 y) internal returns (bool) {
+    function isSquareUnderAttack(int8 player, uint8 x, uint8 y) internal view returns (bool) {
         for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
             for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
                 //check if the opponent pieces can do a valid move to that square
-                if (currentPlayer == whitePlayer && board[rowPiece][colPiece] * player < 0 && isValidMove(rowPiece, colPiece, x, y)
-                || currentPlayer == blackPlayer && board[rowPiece][colPiece] * player > 0 && isValidMove(rowPiece,colPiece, x, y)) {
+                if (currentPlayer == whitePlayer && board[rowPiece][colPiece] * player < 0 && isValidMoveView(rowPiece, colPiece, x, y)
+                || currentPlayer == blackPlayer && board[rowPiece][colPiece] * player > 0 && isValidMoveView(rowPiece,colPiece, x, y)) {
                     return true;
                 }
             }
@@ -285,7 +279,7 @@ contract ChessCore is ChessBoard {
         return a > b ? a : b;
     }
 
-    function isCastlingValid(uint8 startX, uint8 startY, uint8 endX, uint8 endY, int8 player) internal returns (bool) {
+    function isCastlingValid(uint8 startX, uint8 startY, uint8 endX, uint8 endY, int8 player) internal view returns (bool) {
         // Verifica se il re attraversa caselle minacciate
         //TODO fai double check per capire se questo if è superfluo, visto che viene controllato dentro il for
         if (isSquareUnderAttack(player, startX, startY) || isSquareUnderAttack(player, endX, endY)) {
@@ -305,33 +299,28 @@ contract ChessCore is ChessBoard {
         return true;
     }
 
-    function isValidMove(uint8 startX, uint8 startY, uint8 endX, uint8 endY) private returns (bool) {
+    /// @notice Pure view validation - does NOT modify any state (used for check detection)
+    function isValidMoveView(uint8 startX, uint8 startY, uint8 endX, uint8 endY) private view returns (bool) {
         int8 piece = board[startX][startY];
         int8 target = board[endX][endY];
 
-        // Check if the move is a king move and update kingMoved accordingly
+        // Check if the move is a castling attempt (king moves 2 squares)
         if (abs(int8(endY) - int8(startY)) == COL_BISHOP && abs(piece) == uint8(KING)) {
-            if (currentPlayer == whitePlayer) {
+            if (piece == KING) { // White king
                 if (startX == ROW_WHITE_PIECES && startY == COL_KING && !whiteKingMoved) {
-                    // Check if it's a valid long castling
                     if ((uint8(ROOK) == abs(board[startX][COL_LONGW_SHORTB_ROOK]) && endY == COL_QUEEN && !whiteLongRookMoved)
-                    // Check if it's a valid short castling
                     || (uint8(ROOK) == abs(board[startX][COL_SHORTW_LONGB_ROOK]) && endY == COL_BISHOP && !whiteShortRookMoved)){
                         return true;
                     }
                 }
-            } 
-            else {
+            } else { // Black king
                 if (startX == ROW_BLACK_PIECES && startY == COL_KING && !blackKingMoved) {
-                    // Check if it's a valid short castling
                     if ((uint8(ROOK) == abs(board[startX][COL_SHORTW_LONGB_ROOK]) && endY == COL_KNIGHT && !blackShortRookMoved)
-                    // Check if it's a valid long castling) {
                     || (uint8(ROOK) == abs(board[startX][COL_LONGW_SHORTB_ROOK]) && endY == COL_BISHOP && !blackLongRookMoved)){
                         return true;
                     }
                 }
             }
-            //it should never arrive here
             return false;
         }
 
@@ -339,53 +328,53 @@ contract ChessCore is ChessBoard {
         if (target == EMPTY || piece * target < 0) {
             if (abs(piece) == uint8(PAWN)) {
                 return isPawnMoveValid(startX, startY, endX, endY, piece, target);
-            } 
-            else 
-            if (abs(piece) == uint8(KNIGHT)) {
+            }
+            else if (abs(piece) == uint8(KNIGHT)) {
                 return isKnightMoveValid(startX, startY, endX, endY, piece, target);
-            } 
-            else 
-            if (abs(piece) == uint8(BISHOP)) {
+            }
+            else if (abs(piece) == uint8(BISHOP)) {
                 return isBishopMoveValid(startX, startY, endX, endY, piece, target);
             }
-            else 
-            if (abs(piece) == uint8(ROOK)) {
-
-                // Check if the move is a rook move and update rookMoved
-                if (startX == ROW_WHITE_PIECES && startY == COL_SHORTW_LONGB_ROOK && !whiteShortRookMoved) {
-                    whiteShortRookMoved = true;
-                } 
-                else 
-                if (startX == ROW_WHITE_PIECES && startY == COL_LONGW_SHORTB_ROOK && !whiteLongRookMoved) {
-                    whiteLongRookMoved = true;
-                }
-                else 
-                if (startX == ROW_BLACK_PIECES && startY == COL_LONGW_SHORTB_ROOK && !blackLongRookMoved) {
-                    blackLongRookMoved = true;
-                }
-                else 
-                if (startX == ROW_BLACK_PIECES && startY == COL_SHORTW_LONGB_ROOK && !blackShortRookMoved) {
-                    blackShortRookMoved = true;
-                }
-                
+            else if (abs(piece) == uint8(ROOK)) {
                 return isRookMoveValid(startX, startY, endX, endY, piece, target);
-            } 
-            else 
-            if (abs(piece) == uint8(QUEEN)) {
+            }
+            else if (abs(piece) == uint8(QUEEN)) {
                 return isQueenMoveValid(startX, startY, endX, endY, piece, target);
-            } 
-            else 
-            if (abs(piece) == uint8(KING)) {
+            }
+            else if (abs(piece) == uint8(KING)) {
                 return isKingMoveValid(startX, startY, endX, endY, piece, target);
             }
-            
-            
-        }
-        else{
-        
         }
 
         return false;
+    }
+
+    /// @notice Validates move and updates rook moved flags when rook moves
+    function isValidMove(uint8 startX, uint8 startY, uint8 endX, uint8 endY) private returns (bool) {
+        // First check if the move is valid using view function
+        if (!isValidMoveView(startX, startY, endX, endY)) {
+            return false;
+        }
+
+        int8 piece = board[startX][startY];
+
+        // Update rook moved flags only when a rook actually moves
+        if (abs(piece) == uint8(ROOK)) {
+            if (startX == ROW_WHITE_PIECES && startY == COL_SHORTW_LONGB_ROOK && !whiteShortRookMoved) {
+                whiteShortRookMoved = true;
+            }
+            else if (startX == ROW_WHITE_PIECES && startY == COL_LONGW_SHORTB_ROOK && !whiteLongRookMoved) {
+                whiteLongRookMoved = true;
+            }
+            else if (startX == ROW_BLACK_PIECES && startY == COL_LONGW_SHORTB_ROOK && !blackLongRookMoved) {
+                blackLongRookMoved = true;
+            }
+            else if (startX == ROW_BLACK_PIECES && startY == COL_SHORTW_LONGB_ROOK && !blackShortRookMoved) {
+                blackShortRookMoved = true;
+            }
+        }
+
+        return true;
     }
 
     function isPathClear(uint8 startX, uint8 startY, uint8 endX, uint8 endY) private view returns (bool) {
@@ -475,6 +464,17 @@ contract ChessCore is ChessBoard {
         // Make the move
         board[endX][endY] = movingPiece;
         board[startX][startY] = EMPTY;
+
+        // Update cached king position if king was moved
+        if (abs(movingPiece) == uint8(KING)) {
+            if (movingPiece == KING) {
+                whiteKingRow = endX;
+                whiteKingCol = endY;
+            } else {
+                blackKingRow = endX;
+                blackKingCol = endY;
+            }
+        }
 
         // Track if this move sets up en passant for the opponent
         bool isDoublePawnMove = false;
@@ -577,20 +577,10 @@ contract ChessCore is ChessBoard {
     }
 
     // Check if the given player's king can move out of check
-    function canKingMove(int8 player) internal returns (bool) {
-        // find the king position of the current player
-        uint8 kingX;
-        uint8 kingY;
-
-        for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
-            for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
-                if (board[colPiece][rowPiece] == player * KING) {
-                    kingX = colPiece;
-                    kingY = rowPiece;
-                    break;
-                }
-            }
-        }
+    function canKingMove(int8 player) internal view returns (bool) {
+        // Use cached king position instead of O(n²) search
+        uint8 kingX = (player == PLAYER_WHITE) ? whiteKingRow : blackKingRow;
+        uint8 kingY = (player == PLAYER_WHITE) ? whiteKingCol : blackKingCol;
 
         // check if the king can move on a free square
         for (int8 i = -1; i <= 1; i++) {
@@ -601,58 +591,52 @@ contract ChessCore is ChessBoard {
                     && x < int8(BOARD_SIZE)
                     && y >= 0
                     && y < int8(BOARD_SIZE)
-                    && (i != 0 
+                    && (i != 0
                         || j != 0
                     )
                 ){
                     uint8 newX = uint8(x);
                     uint8 newY = uint8(y);
 
-                    if (board[newX][newY] == EMPTY 
-                        && isValidMove(kingX, kingY, newX, newY)) {
+                    if (board[newX][newY] == EMPTY
+                        && isValidMoveView(kingX, kingY, newX, newY)) {
                         return true;
                     }
                 }
             }
         }
 
-        // Nessuna mossa valida per il re
+        // No valid move for the king
         return false;
-
     }
 
     // Check if the game is in stalemate
-    function isStalemate() internal returns (bool) {
+    function isStalemate() internal view returns (bool) {
         int8 player = (currentPlayer == whitePlayer) ? int8(PLAYER_WHITE) : int8(PLAYER_BLACK);
 
-        //TODO I think this can be removed, since it is override by the for loops at the bottom
-       // if (canKingMove(player)) {
-       //     return false;
-       // }
-
-        // Check if there are other valid moves for current player pieces
+        // Check if there are any valid moves for current player pieces
         for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
             for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
                 // If we find a piece belonging to the current player, then check if it can perform a move
-                if (board[rowPiece][colPiece] * player > 0 ) { 
+                if (board[rowPiece][colPiece] * player > 0 ) {
                     for (uint8 row_target = 0; row_target < BOARD_SIZE; row_target++) {
                         for (uint8 col_target = 0; col_target < BOARD_SIZE; col_target++) {
-                            if (board[row_target][col_target] != board[rowPiece][colPiece] 
-                                && isValidMove(rowPiece, colPiece, row_target, col_target)) {
+                            if (board[row_target][col_target] != board[rowPiece][colPiece]
+                                && isValidMoveView(rowPiece, colPiece, row_target, col_target)) {
                                 return false;
                             }
                         }
                     }
                 }
             }
-    }
+        }
 
-    // No any valid move for the current player
-    return true;
+        // No any valid move for the current player
+        return true;
     }
 
     // Check if the given player's king is in checkmate
-    function isCheckmate(int8 player, uint8 attackerI, uint8 attackerJ) internal returns (bool) {
+    function isCheckmate(int8 player, uint8 attackerI, uint8 attackerJ) internal view returns (bool) {
         // Check if the king can move out of check
         if (canKingMove(player)) {
             return false;
@@ -672,9 +656,8 @@ contract ChessCore is ChessBoard {
         return true;
     }
 
-
     // Check if the player pieces can capture the attacking piece
-    function canCaptureAttacker(int8 player, uint8 rowAttacker, uint8 colAttacker) internal returns (bool) {
+    function canCaptureAttacker(int8 player, uint8 rowAttacker, uint8 colAttacker) internal view returns (bool) {
         // Iterate over all pieces on the board
         for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
             for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
@@ -684,7 +667,7 @@ contract ChessCore is ChessBoard {
                 }
 
                 // Check if the piece can capture the attacking piece
-                if (isValidMove(rowPiece, colPiece, rowAttacker, colAttacker)) {
+                if (isValidMoveView(rowPiece, colPiece, rowAttacker, colAttacker)) {
                     // A piece can capture the attacking piece
                     return true;
                 }
@@ -695,7 +678,7 @@ contract ChessCore is ChessBoard {
         return false;
     }
 
-    function canBlockAttack(uint8 rowAttacker, uint8 colAttacker) internal returns (bool) {
+    function canBlockAttack(uint8 rowAttacker, uint8 colAttacker) internal view returns (bool) {
         // Iterate over all pieces on the board
         for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
             for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
@@ -721,7 +704,7 @@ contract ChessCore is ChessBoard {
                             // Check if the square can be blocked by a friendly piece
                             if (board[currentI][colCurrent] != EMPTY && board[currentI][colCurrent] * board[rowPiece][colPiece] > 0) {
                                 // Check if the blocking piece can move to the blocking square
-                                if (isValidMove(currentI, colCurrent, rowPiece, colPiece)) {
+                                if (isValidMoveView(currentI, colCurrent, rowPiece, colPiece)) {
                                     // A piece can block the attack
                                     return true;
                                 }
@@ -736,7 +719,7 @@ contract ChessCore is ChessBoard {
             }
         }
 
-        // No any piece can block the attack
+        // No piece can block the attack
         return false;
     }
 
@@ -744,8 +727,18 @@ contract ChessCore is ChessBoard {
         return (whitePlayer, blackPlayer);
     }
 
+    /// @notice DEBUG ONLY - Place a piece on the board (remove before mainnet deployment)
+    /// @dev This function is for testing purposes only
     function debugCreative(uint8 x, uint8 y, int8 piece) external returns (string memory) {
         board[x][y] = piece;
+        // Update king position cache if placing a king
+        if (piece == KING) {
+            whiteKingRow = x;
+            whiteKingCol = y;
+        } else if (piece == -KING) {
+            blackKingRow = x;
+            blackKingCol = y;
+        }
         return printBoard();
     }
 
