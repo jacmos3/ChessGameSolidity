@@ -1,53 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/utils/Strings.sol";
-import "./ChessMediaLibrary.sol";
-contract ChessCore {
-    uint8 constant BOARD_SIZE = 8;
-    using ChessMediaLibrary for int8[BOARD_SIZE][BOARD_SIZE];
-    int8[BOARD_SIZE][BOARD_SIZE] public board;
-    int8 immutable EMPTY = ChessMediaLibrary.EMPTY;
-    int8 immutable PAWN = ChessMediaLibrary.PAWN;
-    int8 immutable KNIGHT = ChessMediaLibrary.KNIGHT;
-    int8 immutable BISHOP = ChessMediaLibrary.BISHOP;
-    int8 immutable ROOK = ChessMediaLibrary.ROOK;
-    int8 immutable QUEEN = ChessMediaLibrary.QUEEN;
-    int8 immutable KING = ChessMediaLibrary.KING;
-    
-    uint8 constant ROW_BLACK_PIECES = 0;
-    uint8 constant ROW_BLACK_PAWNS = 1;
-    uint8 constant ROW_BLACK_PAWNS_LONG_OPENING = 3;
-    uint8 constant ROW_WHITE_PAWNS_LONG_OPENING = 4;
-    uint8 constant ROW_WHITE_PAWNS = 6;
-    uint8 constant ROW_WHITE_PIECES = 7;
+import "./ChessBoard.sol";
 
-    uint8 constant COL_SHORTW_LONGB_ROOK = 0;
-    uint8 constant COL_UNNAMED_KNIGHT = 1;
-    uint8 constant COL_BISHOP = 2;
-    uint8 constant COL_QUEEN = 3;
-    uint8 constant COL_KING = 4;
-    uint8 constant COL_UNNAMED_BISHOP = 5;
-    uint8 constant COL_KNIGHT = 6;
-    uint8 constant COL_LONGW_SHORTB_ROOK = 7;
-    
-    int8 constant PLAYER_WHITE = 1;
-    int8 constant PLAYER_BLACK = -1;
-    
-
-    bool private whiteKingMoved;
-    bool private whiteShortRookMoved;
-    bool private whiteLongRookMoved;
-
-    bool private blackKingMoved;
-    bool private blackLongRookMoved;
-    bool private blackShortRookMoved;
+/// @title ChessCore - Main chess game logic
+/// @notice Inherits from ChessBoard and implements move validation and game state
+contract ChessCore is ChessBoard {
     uint public betting;
     bool private prizeClaimed;
-
-    // En passant tracking: stores the column of the pawn that just moved two squares
-    // -1 means no en passant is available
-    int8 private enPassantCol = -1;
-    uint8 private enPassantRow; // Row where the capturable pawn is located
 
     event Debug(int8 player, uint8 startX, uint8 startY, uint8 endX, uint8 endY, string comment);
     event PrizeClaimed(address winner, uint256 amount);
@@ -153,46 +113,6 @@ contract ChessCore {
         }
 
         emit PlayerResigned(msg.sender, winner);
-    }
-
-    function initializeBoard() private {
-        // Set up white pieces
-        board[ROW_BLACK_PIECES][COL_SHORTW_LONGB_ROOK] = -ROOK;
-        board[ROW_BLACK_PIECES][COL_UNNAMED_KNIGHT] = -KNIGHT;
-        board[ROW_BLACK_PIECES][COL_BISHOP] = -BISHOP;
-        board[ROW_BLACK_PIECES][COL_QUEEN] = -QUEEN;
-        board[ROW_BLACK_PIECES][COL_KING] = -KING;
-        board[ROW_BLACK_PIECES][COL_UNNAMED_BISHOP] = -BISHOP;
-        board[ROW_BLACK_PIECES][COL_KNIGHT] = -KNIGHT;
-        board[ROW_BLACK_PIECES][COL_LONGW_SHORTB_ROOK] = -ROOK;
-        for (uint8 col = 0; col < BOARD_SIZE; col++) {
-            board[ROW_BLACK_PAWNS][col] = -PAWN;
-        }
-
-        // Set up black pieces
-        board[ROW_WHITE_PIECES][COL_SHORTW_LONGB_ROOK] = ROOK;
-        board[ROW_WHITE_PIECES][COL_UNNAMED_KNIGHT] = KNIGHT;
-        board[ROW_WHITE_PIECES][COL_BISHOP] = BISHOP;
-        board[ROW_WHITE_PIECES][COL_QUEEN] = QUEEN;
-        board[ROW_WHITE_PIECES][COL_KING] = KING;
-        board[ROW_WHITE_PIECES][COL_UNNAMED_BISHOP] = BISHOP;
-        board[ROW_WHITE_PIECES][COL_KNIGHT] = KNIGHT;
-        board[ROW_WHITE_PIECES][COL_LONGW_SHORTB_ROOK] = ROOK;
-        for (uint8 col = 0; col < BOARD_SIZE; col++) {
-            board[ROW_WHITE_PAWNS][col] = PAWN;
-        }
-
-        whiteKingMoved = false;
-        whiteShortRookMoved = false;
-        whiteLongRookMoved = false;
-        blackKingMoved = false;
-        blackLongRookMoved = false;
-        blackShortRookMoved = false;
-        
-    }
-
-    function abs(int8 x) private pure returns (uint8) {
-        return x >= 0 ? uint8(x) : uint8(-x);
     }
 
     function isPawnMoveValid(uint8 startX, uint8 startY, uint8 endX, uint8 endY, int8 piece, int8 target) private view returns (bool) {
@@ -820,79 +740,6 @@ contract ChessCore {
         return false;
     }
 
-
-    function printBoard() public view returns (string memory) {
-    string memory boardString = "";
-
-    for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
-        for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
-            // Aggiungi il valore del pezzo alla stringa
-            boardString = string(abi.encodePacked(boardString, pieceToString(board[rowPiece][colPiece]), " "));
-        }
-        // Aggiungi una nuova riga alla fine di ogni riga della scacchiera
-        boardString = string(abi.encodePacked(boardString, "\n"));
-    }
-
-    return boardString;
-    }
-
-    function pieceToString(int8 piece) internal view returns (string memory) {
-        if (piece == EMPTY) {
-            return "0";
-        } 
-        else 
-        if (piece == PAWN) {
-            return "1";
-        } 
-        else 
-        if (piece == KNIGHT) {
-            return "2";
-        } 
-        else 
-        if (piece == BISHOP) {
-            return "3";
-        } 
-        else 
-        if (piece == ROOK) {
-            return "4";
-        } 
-        else 
-        if (piece == QUEEN) {
-            return "5";
-        } 
-        else 
-        if (piece == KING) {
-            return "6";
-        } 
-        else 
-        if (piece == -PAWN) {
-            return "-1";
-        } 
-        else 
-        if (piece == -KNIGHT) {
-            return "-2";
-        } 
-        else 
-        if (piece == -BISHOP) {
-            return "-3";
-        } 
-        else 
-        if (piece == -ROOK) {
-            return "-4";
-        } 
-        else 
-        if (piece == -QUEEN) {
-            return "-5";
-        } 
-        else 
-        if (piece == -KING) {
-            return "-6";
-        } 
-        else {
-            return "XXXX";
-        }
-    }
-
     function getPlayers() external view returns (address, address) {
         return (whitePlayer, blackPlayer);
     }
@@ -900,10 +747,6 @@ contract ChessCore {
     function debugCreative(uint8 x, uint8 y, int8 piece) external returns (string memory) {
         board[x][y] = piece;
         return printBoard();
-    }
-
-    function printChessBoardLayoutSVG() external view returns (string memory) {
-        return board.getCurrentBoard();
     }
 
     function getGameState () external view returns (uint8) {
