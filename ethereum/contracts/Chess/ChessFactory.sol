@@ -9,25 +9,37 @@ contract ChessFactory {
     address public addressNFT;
     uint256 public totalChessGames;
 
+    // Bet limits (can be adjusted for different networks)
+    uint256 public constant MIN_BET = 0.001 ether;
+    uint256 public constant MAX_BET = 100 ether;
+
+    event GameCreated(
+        uint256 indexed gameId,
+        address indexed gameAddress,
+        address indexed whitePlayer,
+        uint256 betAmount,
+        ChessCore.TimeoutPreset timeoutPreset
+    );
+
     constructor(){
         ChessNFT newChessNFT = new ChessNFT(msg.sender);
         addressNFT = address(newChessNFT);
     }
 
-    /*function deployNFT() public {
-        ChessNFT newChessNFT = new ChessNFT(msg.sender);
-        addressNFT = address(newChessNFT);
-    }*/
+    function createChessGame(ChessCore.TimeoutPreset _timeoutPreset) public payable returns (address) {
+        require(msg.value >= MIN_BET, "Bet amount too low");
+        require(msg.value <= MAX_BET, "Bet amount too high");
 
-    function createChessGame() public payable returns (address) {
-        //require(msg.value > 0, "Send an amount greater than zero");
-        
-        ChessCore newChessGame = new ChessCore{value: msg.value}(msg.sender, msg.value);
+        ChessCore newChessGame = new ChessCore{value: msg.value}(msg.sender, msg.value, _timeoutPreset);
         address toRet = address(newChessGame);
         deployedChessGames.push(toRet);
+
+        uint256 gameId = totalChessGames;
         totalChessGames++;
 
-        ChessNFT(addressNFT).createGameNFT(totalChessGames - 1, toRet);
+        ChessNFT(addressNFT).createGameNFT(gameId, toRet, msg.sender);
+
+        emit GameCreated(gameId, toRet, msg.sender, msg.value, _timeoutPreset);
         return toRet;
     }
  

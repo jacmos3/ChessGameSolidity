@@ -15,7 +15,8 @@ contract("ChessCore - Resign and ClaimPrize", (accounts) => {
     chessFactory = await ChessFactory.new();
 
     // Create a new game with white player
-    const tx = await chessFactory.createChessGame({
+    // TimeoutPreset: 0=Blitz, 1=Rapid, 2=Classical
+    const tx = await chessFactory.createChessGame(2, {
       from: whitePlayer,
       value: betAmount
     });
@@ -52,7 +53,7 @@ contract("ChessCore - Resign and ClaimPrize", (accounts) => {
         await chessCore.resign({ from: nonPlayer });
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Only players can resign");
+        assert.include(error.message, "Not a player");
       }
     });
 
@@ -65,7 +66,7 @@ contract("ChessCore - Resign and ClaimPrize", (accounts) => {
         await chessCore.resign({ from: blackPlayer });
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Game is already finished");
+        assert.include(error.message, "Game finished");
       }
     });
 
@@ -107,7 +108,7 @@ contract("ChessCore - Resign and ClaimPrize", (accounts) => {
         await chessCore.claimPrize({ from: whitePlayer });
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Only the winner can claim the prize");
+        assert.include(error.message, "Not winner");
       }
     });
 
@@ -116,7 +117,7 @@ contract("ChessCore - Resign and ClaimPrize", (accounts) => {
         await chessCore.claimPrize({ from: whitePlayer });
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Game is not finished yet");
+        assert.include(error.message, "Not finished");
       }
     });
 
@@ -128,7 +129,7 @@ contract("ChessCore - Resign and ClaimPrize", (accounts) => {
         await chessCore.claimPrize({ from: blackPlayer });
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Prize has already been claimed");
+        assert.include(error.message, "Already claimed");
       }
     });
 
@@ -139,7 +140,7 @@ contract("ChessCore - Resign and ClaimPrize", (accounts) => {
         await chessCore.claimPrize({ from: nonPlayer });
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Only the winner can claim the prize");
+        assert.include(error.message, "Not winner");
       }
     });
 

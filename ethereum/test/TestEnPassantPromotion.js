@@ -23,10 +23,12 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
   let chessFactory;
   let chessCore;
 
-  beforeEach(async () => {
+  // Helper to create a fresh game
+  async function createGame() {
     chessFactory = await ChessFactory.new();
 
-    await chessFactory.createChessGame({
+    // TimeoutPreset: 0=Blitz, 1=Rapid, 2=Classical
+    await chessFactory.createChessGame(2, {
       from: whitePlayer,
       value: betAmount
     });
@@ -34,14 +36,17 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
     const deployedGames = await chessFactory.getDeployedChessGames();
     const chessCoreAddress = deployedGames[deployedGames.length - 1];
     chessCore = await ChessCore.at(chessCoreAddress);
-
-    await chessCore.joinGameAsBlack({
-      from: blackPlayer,
-      value: betAmount
-    });
-  });
+  }
 
   describe("En Passant", () => {
+    beforeEach(async () => {
+      await createGame();
+      await chessCore.joinGameAsBlack({
+        from: blackPlayer,
+        value: betAmount
+      });
+    });
+
     it("should allow white to capture black pawn en passant", async () => {
       // Setup: Get white pawn to row 3 (index 3), then black does double move
 
@@ -127,11 +132,20 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
   });
 
   describe("Pawn Promotion", () => {
+    // For promotion tests, we need to use debugCreative BEFORE joining the game
+    beforeEach(async () => {
+      await createGame();
+      // Note: We do NOT join as black here - tests will set up board first
+    });
+
     it("should promote white pawn to queen by default", async () => {
       // Setup board with white pawn at row 1, col 0 (a7) - away from black king
       // Clear a8 (row 0, col 0) which has black rook
-      await chessCore.debugCreative(0, 0, EMPTY); // Clear a8
-      await chessCore.debugCreative(1, 0, PAWN);  // Place white pawn at a7
+      await chessCore.debugCreative(0, 0, EMPTY, { from: whitePlayer }); // Clear a8
+      await chessCore.debugCreative(1, 0, PAWN, { from: whitePlayer });  // Place white pawn at a7
+
+      // Now join the game
+      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
 
       // White moves the pawn from a7 to a8 (row 1 -> row 0)
       await chessCore.makeMove(1, 0, 0, 0, { from: whitePlayer });
@@ -143,8 +157,10 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
 
     it("should promote white pawn to knight using makeMoveWithPromotion", async () => {
       // Setup board with white pawn at a7
-      await chessCore.debugCreative(0, 0, EMPTY);
-      await chessCore.debugCreative(1, 0, PAWN);
+      await chessCore.debugCreative(0, 0, EMPTY, { from: whitePlayer });
+      await chessCore.debugCreative(1, 0, PAWN, { from: whitePlayer });
+
+      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
 
       // Promote to knight
       await chessCore.makeMoveWithPromotion(1, 0, 0, 0, KNIGHT, { from: whitePlayer });
@@ -154,8 +170,10 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
     });
 
     it("should promote white pawn to rook using makeMoveWithPromotion", async () => {
-      await chessCore.debugCreative(0, 0, EMPTY);
-      await chessCore.debugCreative(1, 0, PAWN);
+      await chessCore.debugCreative(0, 0, EMPTY, { from: whitePlayer });
+      await chessCore.debugCreative(1, 0, PAWN, { from: whitePlayer });
+
+      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
 
       await chessCore.makeMoveWithPromotion(1, 0, 0, 0, ROOK, { from: whitePlayer });
 
@@ -164,8 +182,10 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
     });
 
     it("should promote white pawn to bishop using makeMoveWithPromotion", async () => {
-      await chessCore.debugCreative(0, 0, EMPTY);
-      await chessCore.debugCreative(1, 0, PAWN);
+      await chessCore.debugCreative(0, 0, EMPTY, { from: whitePlayer });
+      await chessCore.debugCreative(1, 0, PAWN, { from: whitePlayer });
+
+      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
 
       await chessCore.makeMoveWithPromotion(1, 0, 0, 0, BISHOP, { from: whitePlayer });
 
@@ -174,12 +194,14 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
     });
 
     it("should promote black pawn to queen", async () => {
+      // Setup board with black pawn at row 6 (one move from promotion)
+      await chessCore.debugCreative(6, 4, -PAWN, { from: whitePlayer });
+      await chessCore.debugCreative(7, 4, EMPTY, { from: whitePlayer }); // Clear e1
+
+      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+
       // First white makes a move
       await chessCore.makeMove(6, 0, 5, 0, { from: whitePlayer });
-
-      // Setup board with black pawn at row 6 (one move from promotion)
-      await chessCore.debugCreative(6, 4, -PAWN);
-      await chessCore.debugCreative(7, 4, EMPTY); // Clear e1 (remove white king if needed)
 
       // Black moves pawn from e2 to e1 (row 6 -> row 7)
       await chessCore.makeMove(6, 4, 7, 4, { from: blackPlayer });
@@ -190,8 +212,10 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
     });
 
     it("should not allow promotion to king", async () => {
-      await chessCore.debugCreative(1, 4, PAWN);
-      await chessCore.debugCreative(0, 4, EMPTY);
+      await chessCore.debugCreative(1, 4, PAWN, { from: whitePlayer });
+      await chessCore.debugCreative(0, 4, EMPTY, { from: whitePlayer });
+
+      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
 
       try {
         await chessCore.makeMoveWithPromotion(1, 4, 0, 4, KING, { from: whitePlayer });
@@ -202,8 +226,10 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
     });
 
     it("should not allow promotion to pawn", async () => {
-      await chessCore.debugCreative(1, 4, PAWN);
-      await chessCore.debugCreative(0, 4, EMPTY);
+      await chessCore.debugCreative(1, 4, PAWN, { from: whitePlayer });
+      await chessCore.debugCreative(0, 4, EMPTY, { from: whitePlayer });
+
+      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
 
       try {
         await chessCore.makeMoveWithPromotion(1, 4, 0, 4, PAWN, { from: whitePlayer });
@@ -215,8 +241,10 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
 
     it("should allow promotion while capturing", async () => {
       // Setup: white pawn at row 1, black piece at row 0 diagonally
-      await chessCore.debugCreative(1, 4, PAWN); // White pawn at e7
-      await chessCore.debugCreative(0, 5, -ROOK); // Black rook at f8
+      await chessCore.debugCreative(1, 4, PAWN, { from: whitePlayer }); // White pawn at e7
+      await chessCore.debugCreative(0, 5, -ROOK, { from: whitePlayer }); // Black rook at f8
+
+      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
 
       // White captures and promotes: e7->f8
       await chessCore.makeMoveWithPromotion(1, 4, 0, 5, QUEEN, { from: whitePlayer });
@@ -227,6 +255,14 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
   });
 
   describe("Integration - En Passant edge cases", () => {
+    beforeEach(async () => {
+      await createGame();
+      await chessCore.joinGameAsBlack({
+        from: blackPlayer,
+        value: betAmount
+      });
+    });
+
     it("should only allow en passant on correct column", async () => {
       // Setup en passant situation
       await chessCore.makeMove(6, 4, 4, 4, { from: whitePlayer }); // e2->e4

@@ -65,10 +65,10 @@ module.exports = {
     solc: {
       version: "0.8.20",
       settings: {
-        viaIR: true,
+        viaIR: true,  // Required for complex contracts
         optimizer: {
           enabled: true,
-          runs: 200,
+          runs: 1,  // Lowest runs = smallest contract size
         },
       },
     }
