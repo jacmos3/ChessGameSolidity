@@ -299,6 +299,34 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         return true;
     }
 
+    /// @notice Check if the path is clear for castling (squares between king and destination must be empty)
+    function isCastlingPathClear(uint8 row, uint8 kingCol, uint8 destCol) private view returns (bool) {
+        // Determine direction
+        uint8 minCol = kingCol < destCol ? kingCol : destCol;
+        uint8 maxCol = kingCol > destCol ? kingCol : destCol;
+
+        // Check all squares between king and destination (exclusive of king's start)
+        for (uint8 col = minCol + 1; col < maxCol; col++) {
+            if (board[row][col] != EMPTY) {
+                return false;
+            }
+        }
+
+        // For queenside castling, also check the b-file square (col 1) which rook passes through
+        if (destCol == COL_BISHOP) { // Queenside
+            if (board[row][COL_UNNAMED_KNIGHT] != EMPTY) { // b-file
+                return false;
+            }
+        }
+
+        // Check destination square is empty
+        if (board[row][destCol] != EMPTY) {
+            return false;
+        }
+
+        return true;
+    }
+
     /// @notice Pure view validation - does NOT modify any state (used for check detection)
     function isValidMoveView(uint8 startX, uint8 startY, uint8 endX, uint8 endY) private view returns (bool) {
         int8 piece = board[startX][startY];
@@ -308,16 +336,24 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         if (abs(int8(endY) - int8(startY)) == COL_BISHOP && abs(piece) == uint8(KING)) {
             if (piece == KING) { // White king
                 if (startX == ROW_WHITE_PIECES && startY == COL_KING && !whiteKingMoved) {
-                    if ((uint8(ROOK) == abs(board[startX][COL_LONGW_SHORTB_ROOK]) && endY == COL_QUEEN && !whiteLongRookMoved)
-                    || (uint8(ROOK) == abs(board[startX][COL_SHORTW_LONGB_ROOK]) && endY == COL_BISHOP && !whiteShortRookMoved)){
-                        return true;
+                    // Kingside castling: king e1->g1 (col 4->6), rook h1 (col 7)
+                    if (uint8(ROOK) == abs(board[startX][COL_LONGW_SHORTB_ROOK]) && endY == COL_KNIGHT && !whiteLongRookMoved) {
+                        return isCastlingPathClear(startX, startY, endY);
+                    }
+                    // Queenside castling: king e1->c1 (col 4->2), rook a1 (col 0)
+                    if (uint8(ROOK) == abs(board[startX][COL_SHORTW_LONGB_ROOK]) && endY == COL_BISHOP && !whiteShortRookMoved) {
+                        return isCastlingPathClear(startX, startY, endY);
                     }
                 }
             } else { // Black king
                 if (startX == ROW_BLACK_PIECES && startY == COL_KING && !blackKingMoved) {
-                    if ((uint8(ROOK) == abs(board[startX][COL_SHORTW_LONGB_ROOK]) && endY == COL_KNIGHT && !blackShortRookMoved)
-                    || (uint8(ROOK) == abs(board[startX][COL_LONGW_SHORTB_ROOK]) && endY == COL_BISHOP && !blackLongRookMoved)){
-                        return true;
+                    // Kingside castling: king e8->g8 (col 4->6), rook h8 (col 7)
+                    if (uint8(ROOK) == abs(board[startX][COL_LONGW_SHORTB_ROOK]) && endY == COL_KNIGHT && !blackLongRookMoved) {
+                        return isCastlingPathClear(startX, startY, endY);
+                    }
+                    // Queenside castling: king e8->c8 (col 4->2), rook a8 (col 0)
+                    if (uint8(ROOK) == abs(board[startX][COL_SHORTW_LONGB_ROOK]) && endY == COL_BISHOP && !blackShortRookMoved) {
+                        return isCastlingPathClear(startX, startY, endY);
                     }
                 }
             }
@@ -380,42 +416,38 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     function isPathClear(uint8 startX, uint8 startY, uint8 endX, uint8 endY) private view returns (bool) {
         uint8 deltaX = endX > startX ? endX - startX : startX - endX;
         uint8 deltaY = endY > startY ? endY - startY : startY - endY;
-        int8 stepX = (endX > startX) ? int8(1) : int8(-1);
-        int8 stepY = endY > startY ? int8(1) : int8(-1);
+        bool stepXPositive = endX > startX;
+        bool stepYPositive = endY > startY;
 
-        if (deltaX == deltaY) { 
-            // Check if bishop or queen
-            uint8 i = 1;
-            while (i < deltaX) {
-                if (EMPTY != board[uint(int(int8(startX) + int8(i) * stepX))][uint(int(int8(startY) + int8(i) * stepY))]) {
+        if (deltaX == deltaY) {
+            // Diagonal move (bishop or queen)
+            for (uint8 i = 1; i < deltaX; i++) {
+                uint8 checkX = stepXPositive ? startX + i : startX - i;
+                uint8 checkY = stepYPositive ? startY + i : startY - i;
+                if (EMPTY != board[checkX][checkY]) {
                     return false;
                 }
-                i++;
             }
         }
-        else 
-        if (startX == endX) { 
-            // Check if rook or queen moves vertically
-            uint8 i = 1;
-            while (i < deltaY) {
-                if (EMPTY != board[uint256(startX)][uint256(startY) + uint256(int256(int8(i) * int8(stepY)))]) {
+        else if (startX == endX) {
+            // Horizontal move (same row, different column)
+            for (uint8 i = 1; i < deltaY; i++) {
+                uint8 checkY = stepYPositive ? startY + i : startY - i;
+                if (EMPTY != board[startX][checkY]) {
                     return false;
                 }
-                i++;
             }
         }
-        else 
-        if (startY == endY) { 
-            // Check if rook or queen moves horizontally
-            uint8 i = 1;
-            while (i < deltaX) {
-                if (EMPTY != board[uint256(startX) + uint256(int256(int8(i) * stepX))][uint256(startY)]) {
+        else if (startY == endY) {
+            // Vertical move (same column, different row)
+            for (uint8 i = 1; i < deltaX; i++) {
+                uint8 checkX = stepXPositive ? startX + i : startX - i;
+                if (EMPTY != board[checkX][startY]) {
                     return false;
                 }
-                i++;
             }
         }
-        else { 
+        else {
             // Invalid move (not diagonal, horizontal, or vertical)
             return false;
         }
@@ -534,33 +566,26 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
             enPassantCol = -1;
         }
 
-        // Check if the move is a king move and update kingMoved accordingly
-        // Note: use movingPiece since we stored it before the move
-        if (uint8(KING) == abs(movingPiece) && abs(int8(endY) - int8(startY)) == 2) {
-
+        // Track king moves (any king move prevents future castling)
+        if (uint8(KING) == abs(movingPiece)) {
             if (currentPlayer == whitePlayer) {
-                if (whiteKingMoved) {
-                    revert("White king has already moved. cannot castle");
-                } else {
-                    whiteKingMoved = true;
-                }
+                whiteKingMoved = true;
             } else {
-                if (blackKingMoved) {
-                    revert("Black king has already moved. cannot castle");
-                } else {
-                    blackKingMoved = true;
-                }
+                blackKingMoved = true;
             }
 
-            // Move the rook during castling
-            if (endY == 6) {
-                // Right castling
-                board[startX][5] = board[startX][COL_LONGW_SHORTB_ROOK];
-                board[startX][COL_LONGW_SHORTB_ROOK] = EMPTY;
-            } else if (endY == 2) {
-                // Left castling
-                board[startX][COL_QUEEN] = board[startX][COL_SHORTW_LONGB_ROOK];
-                board[startX][COL_SHORTW_LONGB_ROOK] = EMPTY;
+            // Handle castling (king moves 2 squares horizontally)
+            if (abs(int8(endY) - int8(startY)) == 2) {
+                // Move the rook during castling
+                if (endY == COL_KNIGHT) {
+                    // Kingside castling - rook h1/h8 moves to f1/f8
+                    board[startX][COL_UNNAMED_BISHOP] = board[startX][COL_LONGW_SHORTB_ROOK];
+                    board[startX][COL_LONGW_SHORTB_ROOK] = EMPTY;
+                } else if (endY == COL_BISHOP) {
+                    // Queenside castling - rook a1/a8 moves to d1/d8
+                    board[startX][COL_QUEEN] = board[startX][COL_SHORTW_LONGB_ROOK];
+                    board[startX][COL_SHORTW_LONGB_ROOK] = EMPTY;
+                }
             }
         }
 
