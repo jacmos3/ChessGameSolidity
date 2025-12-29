@@ -603,36 +603,116 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
 
     // Check if the given player's king can move out of check
     function canKingMove(int8 player) internal view returns (bool) {
-        // Use cached king position instead of O(n²) search
         uint8 kingX = (player == PLAYER_WHITE) ? whiteKingRow : blackKingRow;
         uint8 kingY = (player == PLAYER_WHITE) ? whiteKingCol : blackKingCol;
 
-        // check if the king can move on a free square
+        // Check all 8 adjacent squares
         for (int8 i = -1; i <= 1; i++) {
             for (int8 j = -1; j <= 1; j++) {
-                int8 x = int8(kingX) + i;
-                int8 y = int8(kingY) + j;
-                if (x >= 0
-                    && x < int8(BOARD_SIZE)
-                    && y >= 0
-                    && y < int8(BOARD_SIZE)
-                    && (i != 0
-                        || j != 0
-                    )
-                ){
-                    uint8 newX = uint8(x);
-                    uint8 newY = uint8(y);
+                if (i == 0 && j == 0) continue;
+                if (isKingMoveEscape(player, kingX, kingY, i, j)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
 
-                    if (board[newX][newY] == EMPTY
-                        && isValidMoveView(kingX, kingY, newX, newY)) {
+    // Helper: Check if moving king by (di, dj) is a valid escape
+    function isKingMoveEscape(int8 player, uint8 kingX, uint8 kingY, int8 di, int8 dj) internal view returns (bool) {
+        int8 x = int8(kingX) + di;
+        int8 y = int8(kingY) + dj;
+
+        // Check bounds
+        if (x < 0 || x >= int8(BOARD_SIZE) || y < 0 || y >= int8(BOARD_SIZE)) {
+            return false;
+        }
+
+        uint8 newX = uint8(x);
+        uint8 newY = uint8(y);
+        int8 targetPiece = board[newX][newY];
+        int8 kingPiece = board[kingX][kingY];
+
+        // Can't capture own piece
+        if (targetPiece != EMPTY && targetPiece * kingPiece > 0) {
+            return false;
+        }
+
+        // Check if the destination square is safe (not under attack)
+        return !isSquareUnderAttackAfterKingMove(player, newX, newY, kingX, kingY);
+    }
+
+    // Check if a square would be under attack after king moves there
+    function isSquareUnderAttackAfterKingMove(int8 player, uint8 targetX, uint8 targetY, uint8 fromX, uint8 fromY) internal view returns (bool) {
+        for (uint8 row = 0; row < BOARD_SIZE; row++) {
+            for (uint8 col = 0; col < BOARD_SIZE; col++) {
+                // Skip the square king is moving from and the target square
+                if ((row == fromX && col == fromY) || (row == targetX && col == targetY)) continue;
+
+                int8 piece = board[row][col];
+                if (piece * player < 0) { // Opponent piece
+                    if (canPieceAttackSquare(row, col, targetX, targetY, fromX, fromY)) {
                         return true;
                     }
                 }
             }
         }
-
-        // No valid move for the king
         return false;
+    }
+
+    // Helper function to check if a piece can attack a square, considering that the king moved
+    function canPieceAttackSquare(uint8 pieceRow, uint8 pieceCol, uint8 targetRow, uint8 targetCol, uint8 ignoreRow, uint8 ignoreCol) internal view returns (bool) {
+        int8 piece = board[pieceRow][pieceCol];
+        uint8 absPiece = abs(piece);
+
+        if (absPiece == uint8(PAWN)) {
+            int8 direction = (piece > 0) ? int8(-1) : int8(1);
+            return (int8(targetRow) == int8(pieceRow) + direction && abs(int8(targetCol) - int8(pieceCol)) == 1);
+        }
+        if (absPiece == uint8(KNIGHT)) {
+            uint8 dX = abs(int8(targetRow) - int8(pieceRow));
+            uint8 dY = abs(int8(targetCol) - int8(pieceCol));
+            return (dX == 2 && dY == 1) || (dX == 1 && dY == 2);
+        }
+        if (absPiece == uint8(KING)) {
+            return abs(int8(targetRow) - int8(pieceRow)) <= 1 && abs(int8(targetCol) - int8(pieceCol)) <= 1;
+        }
+
+        // Sliding pieces (Bishop, Rook, Queen)
+        return canSlidingPieceAttack(pieceRow, pieceCol, targetRow, targetCol, ignoreRow, ignoreCol, absPiece);
+    }
+
+    // Helper for sliding pieces attack check
+    function canSlidingPieceAttack(uint8 pieceRow, uint8 pieceCol, uint8 targetRow, uint8 targetCol, uint8 ignoreRow, uint8 ignoreCol, uint8 absPiece) internal view returns (bool) {
+        int8 deltaRow = int8(targetRow) - int8(pieceRow);
+        int8 deltaCol = int8(targetCol) - int8(pieceCol);
+        uint8 absDeltaRow = abs(deltaRow);
+        uint8 absDeltaCol = abs(deltaCol);
+
+        bool isDiagonal = (absDeltaRow == absDeltaCol && absDeltaRow > 0);
+        bool isStraight = (deltaRow == 0 || deltaCol == 0) && (absDeltaRow > 0 || absDeltaCol > 0);
+
+        if (absPiece == uint8(BISHOP) && !isDiagonal) return false;
+        if (absPiece == uint8(ROOK) && !isStraight) return false;
+        if (absPiece == uint8(QUEEN) && !isDiagonal && !isStraight) return false;
+
+        // Check path is clear
+        int8 stepRow = (deltaRow == 0) ? int8(0) : (deltaRow > 0 ? int8(1) : int8(-1));
+        int8 stepCol = (deltaCol == 0) ? int8(0) : (deltaCol > 0 ? int8(1) : int8(-1));
+
+        uint8 checkRow = uint8(int8(pieceRow) + stepRow);
+        uint8 checkCol = uint8(int8(pieceCol) + stepCol);
+
+        while (checkRow != targetRow || checkCol != targetCol) {
+            if (!(checkRow == ignoreRow && checkCol == ignoreCol)) {
+                if (board[checkRow][checkCol] != EMPTY) {
+                    return false;
+                }
+            }
+            checkRow = uint8(int8(checkRow) + stepRow);
+            checkCol = uint8(int8(checkCol) + stepCol);
+        }
+        return true;
     }
 
     // Check if the game is in stalemate
@@ -704,44 +784,51 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     }
 
     function canBlockAttack(uint8 rowAttacker, uint8 colAttacker) internal view returns (bool) {
-        // Iterate over all pieces on the board
-        for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
-            for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
-                // Determine the direction of the attack
-                int8 deltaRow = int8(int(uint256(rowAttacker - rowPiece)));
-                int8 dj = int8(int(uint256(colAttacker - colPiece)));
-                // Determine the step size for moving along the attack direction
-                int8 stepi = 0;
-                int8 stepj = 0;
-                if (deltaRow != 0) {
-                    stepi = deltaRow / int8(int(uint(abs(deltaRow))));
-                }
-                if (dj != 0) {
-                    stepj = dj / int8(int(uint(abs(dj))));
-                }
+        // Get the king position for the player in check
+        // The player in check is the one whose turn it will be next (after the attacking move)
+        int8 attackerPiece = board[rowAttacker][colAttacker];
+        int8 defendingPlayer = (attackerPiece > 0) ? PLAYER_BLACK : PLAYER_WHITE;
 
-                // Iterate over all squares along the attack direction
-                uint8 currentI = uint8(int8(rowPiece) + stepi);
-                uint8 colCurrent = uint8(int8(colPiece) + stepj);
-                if (currentI < BOARD_SIZE && colCurrent < BOARD_SIZE) {
-                    while (currentI != rowAttacker || colCurrent != colAttacker) {
-                        if (currentI >= 0 && currentI < BOARD_SIZE && colCurrent >= 0 && colCurrent < BOARD_SIZE) {
-                            // Check if the square can be blocked by a friendly piece
-                            if (board[currentI][colCurrent] != EMPTY && board[currentI][colCurrent] * board[rowPiece][colPiece] > 0) {
-                                // Check if the blocking piece can move to the blocking square
-                                if (isValidMoveView(currentI, colCurrent, rowPiece, colPiece)) {
-                                    // A piece can block the attack
-                                    return true;
-                                }
-                            }
-                        }
+        uint8 kingRow = (defendingPlayer == PLAYER_WHITE) ? whiteKingRow : blackKingRow;
+        uint8 kingCol = (defendingPlayer == PLAYER_WHITE) ? whiteKingCol : blackKingCol;
 
-                        // Move to the next square along the attack direction
-                        currentI = uint8(int8(currentI) + stepi);
-                        colCurrent = uint8(int8(colCurrent) + stepj);
+        // Knights can't be blocked (they jump)
+        if (abs(attackerPiece) == uint8(KNIGHT)) {
+            return false;
+        }
+
+        // Find the squares between attacker and king that could be blocked
+        int8 deltaRow = int8(kingRow) - int8(rowAttacker);
+        int8 deltaCol = int8(kingCol) - int8(colAttacker);
+
+        // Get step direction
+        int8 stepRow = (deltaRow == 0) ? int8(0) : (deltaRow > 0 ? int8(1) : int8(-1));
+        int8 stepCol = (deltaCol == 0) ? int8(0) : (deltaCol > 0 ? int8(1) : int8(-1));
+
+        // Check each square between attacker and king
+        uint8 blockRow = uint8(int8(rowAttacker) + stepRow);
+        uint8 blockCol = uint8(int8(colAttacker) + stepCol);
+
+        while (blockRow != kingRow || blockCol != kingCol) {
+            // Check if any defending piece can move to this blocking square
+            for (uint8 pieceRow = 0; pieceRow < BOARD_SIZE; pieceRow++) {
+                for (uint8 pieceCol = 0; pieceCol < BOARD_SIZE; pieceCol++) {
+                    int8 piece = board[pieceRow][pieceCol];
+
+                    // Skip empty squares, opponent pieces, and the king (can't block with king)
+                    if (piece == EMPTY || piece * defendingPlayer <= 0 || abs(piece) == uint8(KING)) {
+                        continue;
+                    }
+
+                    // Check if this piece can move to the blocking square
+                    if (isValidMoveView(pieceRow, pieceCol, blockRow, blockCol)) {
+                        return true;
                     }
                 }
             }
+
+            blockRow = uint8(int8(blockRow) + stepRow);
+            blockCol = uint8(int8(blockCol) + stepCol);
         }
 
         // No piece can block the attack
