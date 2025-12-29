@@ -12,6 +12,7 @@
 	let actionError = null;
 	let actionSuccess = null;
 	let showResignModal = false;
+	let pendingMove = null;
 
 	onMount(() => {
 		activeGame.load(address);
@@ -32,6 +33,10 @@
 		actionError = null;
 		actionSuccess = null;
 
+		// Get the piece being moved for optimistic update
+		const piece = data.board[from.row][from.col];
+		pendingMove = { from, to, piece };
+
 		try {
 			await activeGame.makeMove(from.row, from.col, to.row, to.col);
 			actionSuccess = 'Move executed!';
@@ -40,6 +45,7 @@
 			actionError = err.message || 'Move failed';
 		}
 
+		pendingMove = null;
 		actionLoading = false;
 	}
 
@@ -204,14 +210,19 @@
 				board={data.board}
 				orientation={data.playerRole === 'black' ? 'black' : 'white'}
 				interactive={canMove && !actionLoading}
+				{pendingMove}
 				on:move={handleMove}
 			/>
 		</div>
 
 		<!-- Action loading -->
-		{#if actionLoading}
+		{#if actionLoading && pendingMove}
+			<div class="text-center text-chess-accent mb-4 animate-pulse">
+				Waiting for transaction confirmation...
+			</div>
+		{:else if actionLoading}
 			<div class="text-center text-chess-gray mb-4">
-				Processing transaction...
+				Processing...
 			</div>
 		{/if}
 
