@@ -13,10 +13,15 @@ contract ChessNFT is ERC721Enumerable, Ownable {
     using ChessMediaLibrary for uint8[8][8];
     mapping(uint256 => address) public gameNFTs;
     address[] public gameAddresses;
-    
+    address public immutable factory;
+
+    modifier onlyFactory() {
+        require(msg.sender == factory, "Only factory can mint NFTs");
+        _;
+    }
 
     constructor(address _initialOwner) ERC721("ChessNFT", "Chess") Ownable(_initialOwner) {
-        //transferOwnership(_initialOwner);
+        factory = msg.sender; // ChessFactory is the deployer
     }
     
     function tokenURI(uint256 _tokenId) public view virtual override returns (string memory) {
@@ -25,7 +30,7 @@ contract ChessNFT is ERC721Enumerable, Ownable {
         return c.printChessBoardLayoutSVG();
     }
 
-    function createGameNFT(uint256 gameId, address _chessCoreAddress) external {
+    function createGameNFT(uint256 gameId, address _chessCoreAddress) external onlyFactory {
         require(gameNFTs[gameId] == address(0), "NFT for the game already exists");
         gameAddresses.push(_chessCoreAddress);
         _mint(msg.sender, gameId);
