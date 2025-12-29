@@ -1,14 +1,18 @@
 <script>
 	import '../app.css';
+	import { page } from '$app/stores';
 	import { wallet, networkName, isSupported, truncateAddress } from '$lib/stores/wallet.js';
 
 	let connecting = false;
+	let mobileMenuOpen = false;
 
 	async function connect() {
 		connecting = true;
 		await wallet.connect();
 		connecting = false;
 	}
+
+	$: currentPath = $page.url.pathname;
 </script>
 
 <div class="min-h-screen flex flex-col">
@@ -17,13 +21,31 @@
 		<div class="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
 			<a href="/" class="flex items-center gap-3 hover:opacity-80 transition-opacity">
 				<span class="text-3xl text-chess-accent">♞</span>
-				<span class="font-display text-xl font-semibold">Solidity Chess</span>
+				<span class="font-display text-xl font-semibold hidden sm:block">Solidity Chess</span>
 			</a>
 
-			<nav class="flex items-center gap-4">
-				<a href="/#games" class="text-chess-gray hover:text-chess-light transition-colors">
-					Play
+			<!-- Desktop Navigation -->
+			<nav class="hidden md:flex items-center gap-6">
+				<a
+					href="/"
+					class="transition-colors {currentPath === '/' ? 'text-chess-accent' : 'text-chess-gray hover:text-chess-light'}"
+				>
+					Home
 				</a>
+				<a
+					href="/lobby"
+					class="transition-colors {currentPath.startsWith('/lobby') ? 'text-chess-accent' : 'text-chess-gray hover:text-chess-light'}"
+				>
+					Lobby
+				</a>
+				{#if $wallet.connected}
+					<a
+						href="/profile"
+						class="transition-colors {currentPath === '/profile' ? 'text-chess-accent' : 'text-chess-gray hover:text-chess-light'}"
+					>
+						Profile
+					</a>
+				{/if}
 				<a
 					href="https://github.com/jacmos3/ChessGameSolidity"
 					target="_blank"
@@ -32,30 +54,89 @@
 				>
 					GitHub
 				</a>
+			</nav>
 
+			<div class="flex items-center gap-3">
 				{#if $wallet.connected}
-					<div class="flex items-center gap-2">
-						<span class="px-3 py-1.5 rounded-lg text-sm font-medium {$isSupported ? 'bg-chess-success/20 text-chess-success' : 'bg-yellow-500/20 text-yellow-500'}">
-							{$networkName}
-						</span>
-						<button
-							class="btn-primary px-4 py-2 rounded-lg text-sm"
-							on:click={wallet.disconnect}
-						>
-							{truncateAddress($wallet.account)}
-						</button>
-					</div>
+					<span class="hidden sm:inline px-3 py-1.5 rounded-lg text-xs font-medium {$isSupported ? 'bg-chess-success/20 text-chess-success' : 'bg-yellow-500/20 text-yellow-500'}">
+						{$networkName}
+					</span>
+					<a
+						href="/profile"
+						class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-chess-accent/10 hover:bg-chess-accent/20 transition-colors"
+					>
+						<span class="text-chess-accent">♔</span>
+						<span class="text-sm">{truncateAddress($wallet.account)}</span>
+					</a>
 				{:else}
 					<button
 						class="btn btn-primary text-sm"
 						on:click={connect}
 						disabled={connecting}
 					>
-						{connecting ? 'Connecting...' : 'Connect Wallet'}
+						{connecting ? 'Connecting...' : 'Connect'}
+					</button>
+				{/if}
+
+				<!-- Mobile menu button -->
+				<button
+					class="md:hidden p-2 text-chess-gray hover:text-white"
+					on:click={() => mobileMenuOpen = !mobileMenuOpen}
+				>
+					{#if mobileMenuOpen}
+						✕
+					{:else}
+						☰
+					{/if}
+				</button>
+			</div>
+		</div>
+
+		<!-- Mobile Navigation -->
+		{#if mobileMenuOpen}
+			<nav class="md:hidden bg-chess-darker border-t border-chess-accent/10 px-4 py-4 space-y-2">
+				<a
+					href="/"
+					class="block py-2 px-3 rounded-lg {currentPath === '/' ? 'bg-chess-accent/10 text-chess-accent' : 'text-chess-gray'}"
+					on:click={() => mobileMenuOpen = false}
+				>
+					Home
+				</a>
+				<a
+					href="/lobby"
+					class="block py-2 px-3 rounded-lg {currentPath.startsWith('/lobby') ? 'bg-chess-accent/10 text-chess-accent' : 'text-chess-gray'}"
+					on:click={() => mobileMenuOpen = false}
+				>
+					Lobby
+				</a>
+				{#if $wallet.connected}
+					<a
+						href="/profile"
+						class="block py-2 px-3 rounded-lg {currentPath === '/profile' ? 'bg-chess-accent/10 text-chess-accent' : 'text-chess-gray'}"
+						on:click={() => mobileMenuOpen = false}
+					>
+						Profile
+					</a>
+				{/if}
+				<a
+					href="https://github.com/jacmos3/ChessGameSolidity"
+					target="_blank"
+					rel="noopener noreferrer"
+					class="block py-2 px-3 rounded-lg text-chess-gray"
+					on:click={() => mobileMenuOpen = false}
+				>
+					GitHub
+				</a>
+				{#if $wallet.connected}
+					<button
+						class="w-full text-left py-2 px-3 rounded-lg text-chess-danger"
+						on:click={() => { wallet.disconnect(); mobileMenuOpen = false; }}
+					>
+						Disconnect
 					</button>
 				{/if}
 			</nav>
-		</div>
+		{/if}
 	</header>
 
 	<!-- Main content -->

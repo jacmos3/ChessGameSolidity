@@ -1,11 +1,31 @@
 <script>
-	import { createEventDispatcher } from 'svelte';
+	import { createEventDispatcher, onMount } from 'svelte';
 
 	export let board = [];
 	export let orientation = 'white';
 	export let interactive = false;
+	export let pendingMove = null; // { from: {row, col}, to: {row, col}, piece: number }
 
 	const dispatch = createEventDispatcher();
+
+	// Global pointer move listener for drag
+	onMount(() => {
+		const handleGlobalPointerMove = (e) => {
+			if (isDragging && draggedPiece) {
+				const dx = Math.abs(e.clientX - startPos.x);
+				const dy = Math.abs(e.clientY - startPos.y);
+				if (dx > DRAG_THRESHOLD || dy > DRAG_THRESHOLD) {
+					hasMoved = true;
+				}
+				if (hasMoved) {
+					dragPos = { x: e.clientX, y: e.clientY };
+				}
+			}
+		};
+
+		window.addEventListener('pointermove', handleGlobalPointerMove);
+		return () => window.removeEventListener('pointermove', handleGlobalPointerMove);
+	});
 
 	// Piece mappings
 	const PIECES = {
@@ -24,8 +44,12 @@
 	};
 
 	let selectedSquare = null;
+	let isDragging = false;
+	let hasMoved = false; // Track if pointer moved significantly (to distinguish click vs drag)
 	let draggedPiece = null;
-	let dragPos = { x: 0, y: 0 };
+	let dragPos = { x: -1000, y: -1000 };
+	let startPos = { x: 0, y: 0 };
+	const DRAG_THRESHOLD = 5; // Pixels to move before considering it a drag
 
 	// Generate board display based on orientation
 	$: displayBoard = orientation === 'black'
@@ -47,69 +71,94 @@
 		return { row: displayRow, col: displayCol };
 	}
 
+	function handlePointerDown(e, displayRow, displayCol) {
+		if (!interactive) return;
+
+		const coords = getActualCoords(displayRow, displayCol);
+		const piece = board[coords.row][coords.col];
+
+		// Store start position to detect drag vs click
+		startPos = { x: e.clientX, y: e.clientY };
+		hasMoved = false;
+
+		// If clicking on a piece, prepare for potential drag
+		if (piece !== 0) {
+			isDragging = true;
+			draggedPiece = { ...coords, piece };
+			dragPos = { x: e.clientX, y: e.clientY };
+		}
+	}
+
+	function handlePointerUp(e, displayRow, displayCol) {
+		if (!interactive) {
+			isDragging = false;
+			draggedPiece = null;
+			hasMoved = false;
+			return;
+		}
+
+		const coords = getActualCoords(displayRow, displayCol);
+
+		if (isDragging && draggedPiece && hasMoved) {
+			// It was a drag - make the move if destination is different
+			if (draggedPiece.row !== coords.row || draggedPiece.col !== coords.col) {
+				dispatch('move', {
+					from: { row: draggedPiece.row, col: draggedPiece.col },
+					to: coords
+				});
+			}
+			selectedSquare = null;
+		}
+		// Click is handled separately by handleSquareClick
+
+		// Reset drag state
+		isDragging = false;
+		draggedPiece = null;
+		hasMoved = false;
+		dragPos = { x: -1000, y: -1000 };
+	}
+
 	function handleSquareClick(displayRow, displayCol) {
 		if (!interactive) return;
+		if (hasMoved) return; // Was a drag, not a click
 
 		const coords = getActualCoords(displayRow, displayCol);
 		const piece = board[coords.row][coords.col];
 
 		if (selectedSquare) {
-			// Make move
-			if (selectedSquare.row !== coords.row || selectedSquare.col !== coords.col) {
+			// A piece is already selected
+			if (selectedSquare.row === coords.row && selectedSquare.col === coords.col) {
+				// Clicked same square - deselect
+				selectedSquare = null;
+			} else {
+				// Clicked different square - make move
 				dispatch('move', {
 					from: selectedSquare,
 					to: coords
 				});
+				selectedSquare = null;
 			}
-			selectedSquare = null;
 		} else if (piece !== 0) {
-			// Select piece
+			// No piece selected yet - select this one
 			selectedSquare = coords;
 		}
 	}
 
-	function handleDragStart(e, displayRow, displayCol) {
-		if (!interactive) return;
-
-		const coords = getActualCoords(displayRow, displayCol);
-		const piece = board[coords.row][coords.col];
-
-		if (piece === 0) return;
-
-		draggedPiece = { ...coords, piece };
-		selectedSquare = coords;
-
-		// Set drag image to transparent (we'll render our own)
-		const img = new Image();
-		img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-		e.dataTransfer.setDragImage(img, 0, 0);
-	}
-
-	function handleDrag(e) {
-		if (draggedPiece && e.clientX && e.clientY) {
-			dragPos = { x: e.clientX, y: e.clientY };
-		}
-	}
-
-	function handleDrop(e, displayRow, displayCol) {
-		if (!draggedPiece) return;
-
-		const coords = getActualCoords(displayRow, displayCol);
-
-		if (draggedPiece.row !== coords.row || draggedPiece.col !== coords.col) {
-			dispatch('move', {
-				from: { row: draggedPiece.row, col: draggedPiece.col },
-				to: coords
-			});
-		}
-
+	function handlePointerCancel() {
+		isDragging = false;
 		draggedPiece = null;
-		selectedSquare = null;
+		hasMoved = false;
+		dragPos = { x: -1000, y: -1000 };
 	}
 
-	function handleDragEnd() {
-		draggedPiece = null;
-		selectedSquare = null;
+	// Check if a square is the pending move source (hide piece)
+	function isPendingFrom(row, col) {
+		return pendingMove && pendingMove.from.row === row && pendingMove.from.col === col;
+	}
+
+	// Check if a square is the pending move destination (show pending piece)
+	function isPendingTo(row, col) {
+		return pendingMove && pendingMove.to.row === row && pendingMove.to.col === col;
 	}
 
 	function isSelected(displayRow, displayCol) {
@@ -119,10 +168,9 @@
 	}
 </script>
 
-<div class="relative select-none">
+<div class="relative select-none flex justify-center">
 	<div
-		class="grid grid-cols-8 rounded-lg overflow-hidden shadow-2xl"
-		style="width: min(100%, 480px); aspect-ratio: 1;"
+		class="chess-board grid grid-cols-8 rounded-lg overflow-hidden shadow-2xl"
 	>
 		{#each displayBoard as row, displayRow}
 			{#each row as piece, displayCol}
@@ -130,26 +178,31 @@
 				{@const pieceData = PIECES[piece]}
 				{@const selected = isSelected(displayRow, displayCol)}
 
+				{@const coords = getActualCoords(displayRow, displayCol)}
+				{@const isBeingDragged = hasMoved && draggedPiece && draggedPiece.row === coords.row && draggedPiece.col === coords.col}
+				{@const isPendingSource = isPendingFrom(coords.row, coords.col)}
+				{@const isPendingDest = isPendingTo(coords.row, coords.col)}
+				{@const pendingPieceData = isPendingDest && pendingMove ? PIECES[pendingMove.piece] : null}
+
 				<button
-					class="aspect-square flex items-center justify-center text-4xl md:text-5xl transition-colors relative
-						{isLight ? 'bg-[#f0d9b5]' : 'bg-[#b58863]'}
-						{selected ? 'ring-4 ring-chess-accent ring-inset' : ''}
+					class="aspect-square flex items-center justify-center text-4xl md:text-5xl transition-colors relative touch-none
 						{interactive && piece !== 0 ? 'cursor-grab active:cursor-grabbing' : ''}
 						{interactive && piece === 0 ? 'cursor-pointer' : ''}"
+					style="background-color: {isLight ? '#f0d9b5' : '#b58863'}; {selected ? 'box-shadow: inset 0 0 0 4px #e4a853;' : ''}"
 					on:click={() => handleSquareClick(displayRow, displayCol)}
-					on:dragstart={(e) => handleDragStart(e, displayRow, displayCol)}
-					on:drag={handleDrag}
-					on:dragover|preventDefault
-					on:drop|preventDefault={(e) => handleDrop(e, displayRow, displayCol)}
-					on:dragend={handleDragEnd}
-					draggable={interactive && piece !== 0}
-					disabled={!interactive}
+					on:pointerdown={(e) => handlePointerDown(e, displayRow, displayCol)}
+					on:pointerup={(e) => handlePointerUp(e, displayRow, displayCol)}
+					on:pointercancel={handlePointerCancel}
 				>
-					{#if pieceData && !(draggedPiece && draggedPiece.row === getActualCoords(displayRow, displayCol).row && draggedPiece.col === getActualCoords(displayRow, displayCol).col)}
+					<!-- Show pending piece at destination with pulsing effect -->
+					{#if isPendingDest && pendingPieceData}
+						<span class="pending-piece {pendingPieceData.color === 'white' ? 'piece-white' : 'piece-black'}">
+							{pendingPieceData.char}
+						</span>
+					<!-- Show normal piece (hide if being dragged or is pending source) -->
+					{:else if pieceData && !isBeingDragged && !isPendingSource}
 						<span
-							class="drop-shadow-lg transition-transform hover:scale-110
-								{pieceData.color === 'white' ? 'text-white' : 'text-gray-900'}"
-							style="text-shadow: {pieceData.color === 'white' ? '1px 1px 2px rgba(0,0,0,0.5)' : '1px 1px 2px rgba(255,255,255,0.3)'};"
+							class="transition-transform hover:scale-110 {pieceData.color === 'white' ? 'piece-white' : 'piece-black'}"
 						>
 							{pieceData.char}
 						</span>
@@ -171,13 +224,13 @@
 		{/each}
 	</div>
 
-	<!-- Dragged piece overlay -->
-	{#if draggedPiece && PIECES[draggedPiece.piece]}
+	<!-- Dragged piece overlay (only shown when actually dragging, not clicking) -->
+	{#if isDragging && hasMoved && draggedPiece && PIECES[draggedPiece.piece]}
 		<div
-			class="fixed pointer-events-none text-5xl z-50"
-			style="left: {dragPos.x - 30}px; top: {dragPos.y - 30}px; text-shadow: 2px 2px 4px rgba(0,0,0,0.5);"
+			class="fixed pointer-events-none text-5xl z-50 dragged-overlay"
+			style="left: {dragPos.x}px; top: {dragPos.y}px;"
 		>
-			<span class="{PIECES[draggedPiece.piece].color === 'white' ? 'text-white' : 'text-gray-900'}">
+			<span class="{PIECES[draggedPiece.piece].color === 'white' ? 'piece-white' : 'piece-black'}">
 				{PIECES[draggedPiece.piece].char}
 			</span>
 		</div>
@@ -185,7 +238,63 @@
 </div>
 
 <style>
+	/* Chess board container with fixed square dimensions */
+	.chess-board {
+		width: min(90vw, 480px);
+		aspect-ratio: 1;
+	}
+
+	/* Reset button styles but preserve background */
+	button {
+		border: none !important;
+		outline: none !important;
+		padding: 0;
+		margin: 0;
+		-webkit-appearance: none;
+		-moz-appearance: none;
+		appearance: none;
+		box-sizing: border-box;
+	}
+
+	button:focus {
+		outline: none !important;
+	}
+
 	button:disabled {
 		cursor: default;
+	}
+
+	/* White pieces: cream/ivory with soft dark glow for visibility */
+	:global(.piece-white) {
+		color: #f8f0e0;
+		filter: drop-shadow(1px 1px 1px rgba(0, 0, 0, 0.4));
+	}
+
+	/* Black pieces: dark with soft light glow */
+	:global(.piece-black) {
+		color: #312e2b;
+		filter: drop-shadow(1px 1px 1px rgba(255, 255, 255, 0.2));
+	}
+
+	/* Pending piece - pulsing animation to show transaction in progress */
+	.pending-piece {
+		animation: pulse-pending 1.5s ease-in-out infinite;
+		opacity: 0.7;
+	}
+
+	@keyframes pulse-pending {
+		0%, 100% {
+			transform: scale(1);
+			filter: drop-shadow(0 0 4px rgba(228, 168, 83, 0.6));
+		}
+		50% {
+			transform: scale(1.05);
+			filter: drop-shadow(0 0 12px rgba(228, 168, 83, 1));
+		}
+	}
+
+	/* Dragged piece cursor style */
+	.dragged-overlay {
+		transform: translate(-50%, -50%);
 	}
 </style>

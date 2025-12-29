@@ -108,6 +108,29 @@ function createGamesStore() {
 
 export const games = createGamesStore();
 
+// Piece symbols for algebraic notation
+const PIECE_SYMBOLS = {
+	1: '', // pawn - no symbol
+	2: 'N', // knight
+	3: 'B', // bishop
+	4: 'R', // rook
+	5: 'Q', // queen
+	6: 'K', // king
+	'-1': '',
+	'-2': 'N',
+	'-3': 'B',
+	'-4': 'R',
+	'-5': 'Q',
+	'-6': 'K'
+};
+
+// Convert coordinates to algebraic notation
+function toAlgebraic(col, row) {
+	const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+	const ranks = ['8', '7', '6', '5', '4', '3', '2', '1'];
+	return files[col] + ranks[row];
+}
+
 // Active game store
 function createActiveGameStore() {
 	const { subscribe, set, update } = writable({
@@ -147,6 +170,59 @@ function createActiveGameStore() {
 					board.push(rowData);
 				}
 
+				// Fetch move history from events
+				let moveHistory = [];
+				try {
+					const filter = game.filters.Debug();
+					const events = await game.queryFilter(filter, 0, 'latest');
+
+					moveHistory = events.map((event, index) => {
+						const { player, startX, startY, endX, endY, comment } = event.args;
+						const isWhite = Number(player) > 0;
+						const from = toAlgebraic(Number(startY), Number(startX));
+						const to = toAlgebraic(Number(endY), Number(endX));
+
+						// Get piece symbol from comment or use generic
+						let pieceSymbol = '';
+						if (comment) {
+							const lowerComment = comment.toLowerCase();
+							if (lowerComment.includes('knight')) pieceSymbol = 'N';
+							else if (lowerComment.includes('bishop')) pieceSymbol = 'B';
+							else if (lowerComment.includes('rook')) pieceSymbol = 'R';
+							else if (lowerComment.includes('queen')) pieceSymbol = 'Q';
+							else if (lowerComment.includes('king')) pieceSymbol = 'K';
+							// pawn has no symbol
+						}
+
+						// Check for special moves
+						let notation = pieceSymbol + to;
+						if (comment && comment.toLowerCase().includes('capture')) {
+							notation = pieceSymbol + (pieceSymbol === '' ? from[0] : '') + 'x' + to;
+						}
+						if (comment && comment.toLowerCase().includes('castl')) {
+							if (Number(endY) === 6) notation = 'O-O'; // kingside
+							else if (Number(endY) === 2) notation = 'O-O-O'; // queenside
+						}
+						if (comment && comment.toLowerCase().includes('check')) {
+							notation += '+';
+						}
+						if (comment && comment.toLowerCase().includes('mate')) {
+							notation += '#';
+						}
+
+						return {
+							moveNumber: Math.floor(index / 2) + 1,
+							isWhite,
+							notation,
+							from,
+							to,
+							comment
+						};
+					});
+				} catch (eventErr) {
+					console.warn('Could not fetch move history:', eventErr);
+				}
+
 				const stateNum = Number(state);
 				const playerRole =
 					players[0].toLowerCase() === $wallet.account.toLowerCase() ? 'white' :
@@ -167,7 +243,8 @@ function createActiveGameStore() {
 						betting: ethers.utils.formatEther(betting),
 						board,
 						playerRole,
-						isMyTurn
+						isMyTurn,
+						moveHistory
 					}
 				});
 			} catch (err) {
