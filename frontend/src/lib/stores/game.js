@@ -313,14 +313,15 @@ function createActiveGameStore() {
 			try {
 				const game = new ethers.Contract(address, ChessCoreABI.abi, $wallet.signer);
 
-				const [players, currentPlayer, state, betting, boardState, timeoutStatus, drawOfferStatus] = await Promise.all([
+				const [players, currentPlayer, state, betting, boardState, timeoutStatus, drawOfferStatus, timeoutBlocks] = await Promise.all([
 					game.getPlayers(),
 					game.currentPlayer(),
 					game.getGameState(),
 					game.betting(),
 					game.getBoardState(), // Single call instead of 64!
 					game.getTimeoutStatus().catch(() => null), // May not exist on older contracts
-					game.getDrawOfferStatus().catch(() => null) // May not exist on older contracts
+					game.getDrawOfferStatus().catch(() => null), // May not exist on older contracts
+					game.timeoutBlocks().catch(() => 300) // Default to 300 blocks
 				]);
 
 				// Convert board state from contract format
@@ -391,16 +392,11 @@ function createActiveGameStore() {
 				// Parse timeout status
 				let timeout = null;
 				if (timeoutStatus) {
-					const whiteBlocks = Number(timeoutStatus.whiteBlocksRemaining);
-					const blackBlocks = Number(timeoutStatus.blackBlocksRemaining);
-					// Estimate time: ~12 seconds per block on Ethereum
-					const SECONDS_PER_BLOCK = 12;
 					timeout = {
-						whiteBlocksRemaining: whiteBlocks,
-						blackBlocksRemaining: blackBlocks,
-						whiteTimeRemaining: whiteBlocks * SECONDS_PER_BLOCK,
-						blackTimeRemaining: blackBlocks * SECONDS_PER_BLOCK,
-						currentPlayerIsWhite: timeoutStatus.currentPlayerIsWhite
+						whiteBlocksRemaining: Number(timeoutStatus.whiteBlocksRemaining),
+						blackBlocksRemaining: Number(timeoutStatus.blackBlocksRemaining),
+						currentPlayerIsWhite: timeoutStatus.currentPlayerIsWhite,
+						timeoutBlocks: Number(timeoutBlocks)
 					};
 				}
 
