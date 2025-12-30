@@ -88,8 +88,8 @@ export function sendNotification(title, options = {}) {
 
 	try {
 		const notification = new Notification(title, {
-			icon: '/favicon.png',
-			badge: '/favicon.png',
+			icon: '/favicon.svg',
+			badge: '/favicon.svg',
 			tag: options.tag || 'chess-game',
 			renotify: options.renotify || false,
 			...options
