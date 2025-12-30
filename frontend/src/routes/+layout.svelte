@@ -2,14 +2,24 @@
 	import '../app.css';
 	import { page } from '$app/stores';
 	import { wallet, networkName, isSupported, truncateAddress } from '$lib/stores/wallet.js';
+	import { onboarding } from '$lib/stores/onboarding.js';
+	import OnboardingTour from '$lib/components/OnboardingTour.svelte';
 
 	let connecting = false;
 	let mobileMenuOpen = false;
+	let wasConnected = false;
 
 	async function connect() {
 		connecting = true;
 		await wallet.connect();
 		connecting = false;
+	}
+
+	// Show onboarding tour when user first connects
+	$: if ($wallet.connected && !wasConnected && !$onboarding.completed) {
+		wasConnected = true;
+		// Small delay to let the UI settle
+		setTimeout(() => onboarding.start(), 500);
 	}
 
 	$: currentPath = $page.url.pathname;
@@ -166,3 +176,6 @@
 		<button on:click={wallet.clearError} class="opacity-70 hover:opacity-100">✕</button>
 	</div>
 {/if}
+
+<!-- Onboarding Tour -->
+<OnboardingTour />

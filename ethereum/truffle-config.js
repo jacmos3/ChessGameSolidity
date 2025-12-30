@@ -70,6 +70,9 @@ module.exports = {
           enabled: true,
           runs: 1,  // Lowest runs = smallest contract size
         },
+        debug: {
+          revertStrings: "strip"  // Remove revert strings to reduce size
+        }
       },
     }
   }

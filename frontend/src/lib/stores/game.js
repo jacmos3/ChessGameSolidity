@@ -267,7 +267,35 @@ function createActiveGameStore() {
 				data: {
 					...s.data,
 					state: stateNum,
-					stateInfo: GAME_STATES[stateNum] || GAME_STATES[1]
+					stateInfo: GAME_STATES[stateNum] || GAME_STATES[1],
+					drawOfferedBy: null // Clear draw offer on state change
+				}
+			};
+		});
+	}
+
+	// Handle draw offer events
+	function handleDrawOffered(player) {
+		update(s => {
+			if (!s.data) return s;
+			return {
+				...s,
+				data: {
+					...s.data,
+					drawOfferedBy: player
+				}
+			};
+		});
+	}
+
+	function handleDrawDeclined(player) {
+		update(s => {
+			if (!s.data) return s;
+			return {
+				...s,
+				data: {
+					...s.data,
+					drawOfferedBy: null
 				}
 			};
 		});
@@ -285,13 +313,14 @@ function createActiveGameStore() {
 			try {
 				const game = new ethers.Contract(address, ChessCoreABI.abi, $wallet.signer);
 
-				const [players, currentPlayer, state, betting, boardState, timeoutStatus] = await Promise.all([
+				const [players, currentPlayer, state, betting, boardState, timeoutStatus, drawOfferStatus] = await Promise.all([
 					game.getPlayers(),
 					game.currentPlayer(),
 					game.getGameState(),
 					game.betting(),
 					game.getBoardState(), // Single call instead of 64!
-					game.getTimeoutStatus().catch(() => null) // May not exist on older contracts
+					game.getTimeoutStatus().catch(() => null), // May not exist on older contracts
+					game.getDrawOfferStatus().catch(() => null) // May not exist on older contracts
 				]);
 
 				// Convert board state from contract format
@@ -373,6 +402,12 @@ function createActiveGameStore() {
 					};
 				}
 
+				// Parse draw offer status (returns just the address now)
+				let drawOfferedBy = null;
+				if (drawOfferStatus && drawOfferStatus !== '0x0000000000000000000000000000000000000000') {
+					drawOfferedBy = drawOfferStatus;
+				}
+
 				set({
 					address,
 					loading: false,
@@ -388,7 +423,8 @@ function createActiveGameStore() {
 						playerRole,
 						isMyTurn,
 						moveHistory,
-						timeout
+						timeout,
+						drawOfferedBy
 					}
 				});
 
@@ -404,8 +440,47 @@ function createActiveGameStore() {
 				gameStateListener = handleGameStateChanged;
 				game.on('GameStateChanged', gameStateListener);
 
+				// Listen for draw offer events
+				game.on('DrawOffered', handleDrawOffered);
+				game.on('DrawOfferDeclined', handleDrawDeclined);
+				game.on('DrawAccepted', handleGameStateChanged);
+
 			} catch (err) {
 				update(s => ({ ...s, loading: false, error: err.message }));
+			}
+		},
+
+		// Estimate gas for a move
+		async estimateGas(fromRow, fromCol, toRow, toCol, promotionPiece = 0) {
+			const $wallet = get(wallet);
+			const $state = get({ subscribe });
+
+			if (!$wallet.signer || !$state.address) {
+				return null;
+			}
+
+			try {
+				const game = new ethers.Contract($state.address, ChessCoreABI.abi, $wallet.signer);
+				let gasEstimate;
+
+				if (promotionPiece !== 0) {
+					gasEstimate = await game.estimateGas.makeMoveWithPromotion(fromRow, fromCol, toRow, toCol, promotionPiece);
+				} else {
+					gasEstimate = await game.estimateGas.makeMove(fromRow, fromCol, toRow, toCol);
+				}
+
+				const gasPrice = await $wallet.provider.getGasPrice();
+				const gasCost = gasEstimate.mul(gasPrice);
+
+				return {
+					gasLimit: gasEstimate.toString(),
+					gasPrice: ethers.utils.formatUnits(gasPrice, 'gwei'),
+					gasCostWei: gasCost.toString(),
+					gasCostEth: ethers.utils.formatEther(gasCost)
+				};
+			} catch (err) {
+				console.warn('Gas estimation failed:', err);
+				return null;
 			}
 		},
 
@@ -520,6 +595,76 @@ function createActiveGameStore() {
 			const game = new ethers.Contract($state.address, ChessCoreABI.abi, $wallet.signer);
 			const tx = await game.resign();
 			await tx.wait();
+		},
+
+		async offerDraw() {
+			const $wallet = get(wallet);
+			const $state = get({ subscribe });
+
+			if (!$wallet.signer || !$state.address) {
+				throw new Error('No game loaded');
+			}
+
+			const game = new ethers.Contract($state.address, ChessCoreABI.abi, $wallet.signer);
+			const tx = await game.offerDraw();
+			await tx.wait();
+
+			// Optimistically update local state
+			update(s => ({
+				...s,
+				data: s.data ? { ...s.data, drawOfferedBy: $wallet.account } : null
+			}));
+		},
+
+		async acceptDraw() {
+			const $wallet = get(wallet);
+			const $state = get({ subscribe });
+
+			if (!$wallet.signer || !$state.address) {
+				throw new Error('No game loaded');
+			}
+
+			const game = new ethers.Contract($state.address, ChessCoreABI.abi, $wallet.signer);
+			const tx = await game.acceptDraw();
+			await tx.wait();
+		},
+
+		async declineDraw() {
+			const $wallet = get(wallet);
+			const $state = get({ subscribe });
+
+			if (!$wallet.signer || !$state.address) {
+				throw new Error('No game loaded');
+			}
+
+			const game = new ethers.Contract($state.address, ChessCoreABI.abi, $wallet.signer);
+			const tx = await game.declineDraw();
+			await tx.wait();
+
+			// Optimistically update local state
+			update(s => ({
+				...s,
+				data: s.data ? { ...s.data, drawOfferedBy: null } : null
+			}));
+		},
+
+		async cancelDrawOffer() {
+			const $wallet = get(wallet);
+			const $state = get({ subscribe });
+
+			if (!$wallet.signer || !$state.address) {
+				throw new Error('No game loaded');
+			}
+
+			const game = new ethers.Contract($state.address, ChessCoreABI.abi, $wallet.signer);
+			const tx = await game.cancelDrawOffer();
+			await tx.wait();
+
+			// Optimistically update local state
+			update(s => ({
+				...s,
+				data: s.data ? { ...s.data, drawOfferedBy: null } : null
+			}));
 		},
 
 		async claimPrize() {

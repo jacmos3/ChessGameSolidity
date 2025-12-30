@@ -1,10 +1,12 @@
 <script>
 	import { wallet, isSupported, contractAddress, truncateAddress } from '$lib/stores/wallet.js';
 	import { games } from '$lib/stores/game.js';
+	import { leaderboard } from '$lib/stores/leaderboard.js';
 
-	// Fetch games when wallet connects
+	// Fetch games and leaderboard when wallet connects
 	$: if ($wallet.connected && $isSupported && $contractAddress) {
 		games.fetchGames();
+		leaderboard.fetchLeaderboard();
 	}
 
 	// Separate games by user involvement
@@ -15,13 +17,6 @@
 
 	$: myActiveGames = myGames.filter(g => g.state === 1 || g.state === 2);
 	$: openGames = $games.games.filter(g => g.state === 1); // NotStarted = waiting for opponent
-
-	// Mock leaderboard data (in real app, fetch from contract events)
-	const leaderboard = [
-		{ address: '0x1234...5678', wins: 15, ens: 'player1.eth' },
-		{ address: '0xabcd...efgh', wins: 12, ens: null },
-		{ address: '0x9876...5432', wins: 10, ens: 'chessgm.eth' },
-	];
 </script>
 
 <svelte:head>
@@ -207,27 +202,47 @@
 					<!-- Leaderboard -->
 					<div class="card">
 						<h3 class="font-display text-lg mb-4">Leaderboard</h3>
-						<div class="space-y-3">
-							{#each leaderboard as player, i}
-								<div class="flex items-center gap-3">
-									<div class="w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold
-										{i === 0 ? 'bg-yellow-500/20 text-yellow-500' : ''}
-										{i === 1 ? 'bg-gray-400/20 text-gray-400' : ''}
-										{i === 2 ? 'bg-orange-600/20 text-orange-600' : ''}
-									">
-										{i + 1}
+						{#if $leaderboard.loading}
+							<div class="text-center py-4">
+								<span class="text-chess-gray text-sm animate-pulse">Loading...</span>
+							</div>
+						{:else if $leaderboard.players.length === 0}
+							<p class="text-chess-gray text-sm text-center py-4">No completed games yet</p>
+						{:else}
+							<div class="space-y-3">
+								{#each $leaderboard.players.slice(0, 5) as player, i}
+									<div class="flex items-center gap-3">
+										<div class="w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold
+											{i === 0 ? 'bg-yellow-500/20 text-yellow-500' : ''}
+											{i === 1 ? 'bg-gray-400/20 text-gray-400' : ''}
+											{i === 2 ? 'bg-orange-600/20 text-orange-600' : ''}
+											{i > 2 ? 'bg-chess-darker text-chess-gray' : ''}
+										">
+											{i + 1}
+										</div>
+										<div class="flex-1 truncate text-sm">
+											{truncateAddress(player.address)}
+										</div>
+										<div class="text-right">
+											<div class="text-chess-accent font-medium text-sm">
+												{player.wins}W/{player.losses}L
+											</div>
+											<div class="text-xs text-chess-gray">
+												{player.winRatio}%
+											</div>
+										</div>
 									</div>
-									<div class="flex-1 truncate text-sm">
-										{player.ens || player.address}
-									</div>
-									<div class="text-chess-accent font-medium text-sm">
-										{player.wins}W
-									</div>
-								</div>
-							{/each}
-						</div>
+								{/each}
+							</div>
+						{/if}
 						<div class="border-t border-chess-accent/10 mt-4 pt-4 text-center">
-							<span class="text-chess-gray text-xs">Updated from on-chain data</span>
+							<span class="text-chess-gray text-xs">
+								{#if $leaderboard.lastUpdated}
+									Updated from on-chain data
+								{:else}
+									Connect wallet to load
+								{/if}
+							</span>
 						</div>
 					</div>
 

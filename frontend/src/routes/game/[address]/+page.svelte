@@ -6,7 +6,9 @@
 	import { wallet, truncateAddress, explorer } from '$lib/stores/wallet.js';
 	import ChessBoard from '$lib/components/ChessBoard.svelte';
 	import GameTimer from '$lib/components/GameTimer.svelte';
+	import GameReplay from '$lib/components/GameReplay.svelte';
 	import { playMoveSound, playSound, preloadAllSounds, audioSettings, toggleSound } from '$lib/stores/audio.js';
+	import { notificationSettings, toggleNotifications, notifyYourTurn, notifyGameEnd, notifyOpponentJoined } from '$lib/stores/notifications.js';
 
 	$: address = $page.params.address;
 
@@ -15,9 +17,31 @@
 	let actionSuccess = null;
 	let showResignModal = false;
 	let showPromotionModal = false;
+	let showReplay = false;
 	let promotionMoveData = null;
 	let pendingMove = null;
 	let errorTimeout = null;
+	let gasEstimate = null;
+	let estimatingGas = false;
+
+	// Estimate gas when it's user's turn
+	async function updateGasEstimate() {
+		if (!canMove || !data?.board) return;
+
+		estimatingGas = true;
+		// Estimate for a typical move (e2-e4 or similar)
+		try {
+			gasEstimate = await activeGame.estimateGas(6, 4, 4, 4, 0);
+		} catch {
+			gasEstimate = null;
+		}
+		estimatingGas = false;
+	}
+
+	// Update gas estimate when it becomes user's turn
+	$: if (canMove && !gasEstimate && !estimatingGas) {
+		updateGasEstimate();
+	}
 
 	// Promotion pieces: Queen, Rook, Bishop, Knight
 	const promotionPieces = [
@@ -49,7 +73,7 @@
 		};
 	});
 
-	// Play sound when opponent makes a move (animatingMove is set)
+	// Play sound and send notification when opponent makes a move (animatingMove is set)
 	$: if (data?.animatingMove) {
 		// Detect if it's a capture, check, etc. from the last move notation
 		const lastNotation = moveHistory[moveHistory.length - 1]?.notation || '';
@@ -59,7 +83,34 @@
 			isMate: lastNotation.includes('#'),
 			isCastle: lastNotation.includes('O-O')
 		});
+
+		// Notify it's now their turn
+		if (data.isMyTurn && data.playerRole !== 'spectator') {
+			notifyYourTurn(address);
+		}
 	}
+
+	// Track previous game state for notifications
+	let previousState = null;
+	$: if (data?.state && previousState !== null && previousState !== data.state) {
+		// Game state changed
+		if (previousState === 1 && data.state === 2) {
+			// Game started (opponent joined)
+			notifyOpponentJoined(address);
+		} else if (data.state >= 3 && data.state <= 5) {
+			// Game ended
+			const isWhite = data.playerRole === 'white';
+			const isBlack = data.playerRole === 'black';
+			if (data.state === 3) {
+				notifyGameEnd('draw', address);
+			} else if ((data.state === 4 && isWhite) || (data.state === 5 && isBlack)) {
+				notifyGameEnd('win', address);
+			} else if ((data.state === 4 && isBlack) || (data.state === 5 && isWhite)) {
+				notifyGameEnd('lose', address);
+			}
+		}
+	}
+	$: if (data?.state) previousState = data.state;
 
 	// Reload when address changes
 	$: if (address) {
@@ -82,6 +133,15 @@
 	$: canClaim = (data?.state === 3) ||
 		(data?.state === 4 && data?.playerRole === 'white') ||
 		(data?.state === 5 && data?.playerRole === 'black');
+
+	// Game finished - can replay
+	$: isGameFinished = data?.state >= 3 && data?.state <= 5;
+
+	// Draw offer state
+	$: hasDrawOffer = data?.drawOfferedBy && data.drawOfferedBy !== '0x0000000000000000000000000000000000000000';
+	$: isMyDrawOffer = hasDrawOffer && data?.drawOfferedBy?.toLowerCase() === $wallet.account?.toLowerCase();
+	$: isOpponentDrawOffer = hasDrawOffer && !isMyDrawOffer && data?.playerRole !== 'spectator';
+	$: canOfferDraw = data?.stateInfo.isActive && data?.playerRole !== 'spectator' && !hasDrawOffer;
 
 	// Move history from contract events
 	$: moveHistory = data?.moveHistory || [];
@@ -254,6 +314,67 @@
 		actionLoading = false;
 	}
 
+	async function handleOfferDraw() {
+		actionLoading = true;
+		actionError = null;
+
+		try {
+			await activeGame.offerDraw();
+			actionSuccess = 'Draw offered!';
+		} catch (err) {
+			console.error('Draw offer error:', err);
+			setError(parseError(err));
+		}
+
+		actionLoading = false;
+	}
+
+	async function handleAcceptDraw() {
+		actionLoading = true;
+		actionError = null;
+
+		try {
+			await activeGame.acceptDraw();
+			actionSuccess = 'Draw accepted!';
+			await activeGame.load(address);
+		} catch (err) {
+			console.error('Accept draw error:', err);
+			setError(parseError(err));
+		}
+
+		actionLoading = false;
+	}
+
+	async function handleDeclineDraw() {
+		actionLoading = true;
+		actionError = null;
+
+		try {
+			await activeGame.declineDraw();
+			actionSuccess = 'Draw declined';
+		} catch (err) {
+			console.error('Decline draw error:', err);
+			setError(parseError(err));
+		}
+
+		actionLoading = false;
+	}
+
+	async function handleCancelDrawOffer() {
+		actionLoading = true;
+		actionError = null;
+
+		try {
+			await activeGame.cancelDrawOffer();
+			actionSuccess = 'Draw offer cancelled';
+		} catch (err) {
+			console.error('Cancel draw offer error:', err);
+			setError(parseError(err));
+		}
+
+		actionLoading = false;
+	}
+
 	function copyGameLink() {
 		navigator.clipboard.writeText(window.location.href);
 		actionSuccess = 'Link copied!';
@@ -318,6 +439,14 @@
 							>
 								{$audioSettings.enabled ? '🔊' : '🔇'}
 							</button>
+							<!-- Notification Toggle -->
+							<button
+								class="btn btn-secondary !px-3 !py-1.5 text-sm"
+								on:click={toggleNotifications}
+								title={$notificationSettings.enabled ? 'Disable notifications' : 'Enable notifications'}
+							>
+								{$notificationSettings.enabled ? '🔔' : '🔕'}
+							</button>
 							<button
 								class="btn btn-secondary !px-3 !py-1.5 text-sm"
 								on:click={copyGameLink}
@@ -368,6 +497,53 @@
 						</div>
 					{/if}
 
+					<!-- Draw offer received banner -->
+					{#if isOpponentDrawOffer}
+						<div class="mb-4 py-3 px-4 rounded-lg bg-chess-blue/10 border border-chess-blue/30">
+							<div class="flex items-center justify-between gap-4">
+								<div class="flex items-center gap-2">
+									<span class="text-lg">🤝</span>
+									<span class="text-chess-blue font-medium">Opponent offers a draw</span>
+								</div>
+								<div class="flex gap-2">
+									<button
+										class="btn btn-secondary !px-3 !py-1.5 text-sm"
+										on:click={handleDeclineDraw}
+										disabled={actionLoading}
+									>
+										Decline
+									</button>
+									<button
+										class="btn btn-primary !px-3 !py-1.5 text-sm"
+										on:click={handleAcceptDraw}
+										disabled={actionLoading}
+									>
+										Accept
+									</button>
+								</div>
+							</div>
+						</div>
+					{/if}
+
+					<!-- My draw offer pending banner -->
+					{#if isMyDrawOffer}
+						<div class="mb-4 py-3 px-4 rounded-lg bg-chess-gray/10 border border-chess-gray/30">
+							<div class="flex items-center justify-between gap-4">
+								<div class="flex items-center gap-2">
+									<span class="text-lg">⏳</span>
+									<span class="text-chess-gray">Draw offer sent - waiting for response</span>
+								</div>
+								<button
+									class="btn btn-secondary !px-3 !py-1.5 text-sm"
+									on:click={handleCancelDrawOffer}
+									disabled={actionLoading}
+								>
+									Cancel
+								</button>
+							</div>
+						</div>
+					{/if}
+
 					<!-- Pending move indicator -->
 					{#if actionLoading && pendingMove}
 						<div class="mb-4 py-2 px-4 rounded-lg text-center text-chess-accent bg-chess-accent/10 animate-pulse">
@@ -400,6 +576,11 @@
 						{#if canResign}
 							<button class="btn btn-danger" on:click={() => showResignModal = true} disabled={actionLoading}>
 								Resign
+							</button>
+						{/if}
+						{#if canOfferDraw}
+							<button class="btn btn-secondary" on:click={handleOfferDraw} disabled={actionLoading}>
+								🤝 Draw
 							</button>
 						{/if}
 						{#if canClaim}
@@ -510,6 +691,16 @@
 								</button>
 							{/if}
 
+							{#if canOfferDraw}
+								<button
+									class="btn btn-secondary w-full"
+									on:click={handleOfferDraw}
+									disabled={actionLoading}
+								>
+									🤝 Offer Draw
+								</button>
+							{/if}
+
 							{#if canClaim}
 								<button
 									class="btn btn-primary w-full"
@@ -520,7 +711,7 @@
 								</button>
 							{/if}
 
-							{#if !canJoin && !canResign && !canClaim}
+							{#if !canJoin && !canResign && !canClaim && !isGameFinished}
 								<p class="text-chess-gray text-sm text-center py-2">
 									{#if data.playerRole === 'spectator'}
 										You are spectating this game
@@ -529,7 +720,44 @@
 									{/if}
 								</p>
 							{/if}
+
+							{#if isGameFinished && moveHistory.length > 0}
+								<button
+									class="btn btn-secondary w-full"
+									on:click={() => showReplay = true}
+								>
+									Replay Game
+								</button>
+							{/if}
 						</div>
+
+						<!-- Gas Estimation -->
+						{#if canMove && gasEstimate}
+							<div class="mt-4 pt-4 border-t border-chess-accent/10">
+								<div class="text-xs text-chess-gray mb-2 uppercase tracking-wider">Estimated Gas Cost</div>
+								<div class="bg-chess-darker rounded-lg p-3 space-y-1.5">
+									<div class="flex justify-between text-sm">
+										<span class="text-chess-gray">Gas Limit:</span>
+										<span class="font-mono">{parseInt(gasEstimate.gasLimit).toLocaleString()}</span>
+									</div>
+									<div class="flex justify-between text-sm">
+										<span class="text-chess-gray">Gas Price:</span>
+										<span class="font-mono">{parseFloat(gasEstimate.gasPrice).toFixed(2)} gwei</span>
+									</div>
+									<div class="flex justify-between text-sm font-medium pt-1 border-t border-chess-accent/10">
+										<span class="text-chess-gray">Est. Cost:</span>
+										<span class="text-chess-accent font-mono">{parseFloat(gasEstimate.gasCostEth).toFixed(6)} ETH</span>
+									</div>
+								</div>
+							</div>
+						{:else if canMove && estimatingGas}
+							<div class="mt-4 pt-4 border-t border-chess-accent/10">
+								<div class="text-xs text-chess-gray mb-2 uppercase tracking-wider">Estimated Gas Cost</div>
+								<div class="bg-chess-darker rounded-lg p-3 text-center">
+									<span class="text-chess-gray text-sm animate-pulse">Estimating...</span>
+								</div>
+							</div>
+						{/if}
 					</div>
 
 					<!-- Move History Card -->
@@ -660,4 +888,13 @@
 			</button>
 		</div>
 	</div>
+{/if}
+
+<!-- Game Replay -->
+{#if showReplay}
+	<GameReplay
+		{moveHistory}
+		playerRole={data?.playerRole || 'white'}
+		on:close={() => showReplay = false}
+	/>
 {/if}

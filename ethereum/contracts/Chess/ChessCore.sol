@@ -44,6 +44,9 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     event PrizeClaimed(address winner, uint256 amount);
     event PlayerResigned(address player, address winner);
     event GameTimeout(address winner, address loser);
+    event DrawOffered(address indexed player);
+    event DrawOfferDeclined(address indexed player);
+    event DrawAccepted();
 
     // Define the GameState enum
     enum GameState { NotStarted, InProgress, Draw, WhiteWins, BlackWins }
@@ -53,6 +56,9 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     address whitePlayer;
     address blackPlayer;
     address public currentPlayer;
+
+    // Draw offer tracking
+    address public drawOfferedBy;
 
     constructor(address _whitePlayer, uint _value, TimeoutPreset _preset) payable {
         // Chiamare initializeBoard nel costruttore
@@ -162,6 +168,45 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         }
 
         emit PlayerResigned(msg.sender, winner);
+    }
+
+    /// @notice Offer a draw to the opponent
+    function offerDraw() external {
+        require(msg.sender == whitePlayer || msg.sender == blackPlayer, "Not player");
+        require(gameState == GameState.InProgress && drawOfferedBy == address(0), "Bad state");
+        drawOfferedBy = msg.sender;
+        emit DrawOffered(msg.sender);
+    }
+
+    /// @notice Accept a draw offer from the opponent
+    function acceptDraw() external {
+        require(msg.sender == whitePlayer || msg.sender == blackPlayer, "Not player");
+        require(drawOfferedBy != address(0) && drawOfferedBy != msg.sender, "Bad offer");
+        gameState = GameState.Draw;
+        drawOfferedBy = address(0);
+        emit DrawAccepted();
+        emit GameStateChanged(GameState.Draw);
+    }
+
+    /// @notice Decline a draw offer
+    function declineDraw() external {
+        require(msg.sender == whitePlayer || msg.sender == blackPlayer, "Not player");
+        require(drawOfferedBy != address(0) && drawOfferedBy != msg.sender, "Bad offer");
+        address offerer = drawOfferedBy;
+        drawOfferedBy = address(0);
+        emit DrawOfferDeclined(offerer);
+    }
+
+    /// @notice Cancel your own draw offer
+    function cancelDrawOffer() external {
+        require(drawOfferedBy == msg.sender, "Not yours");
+        drawOfferedBy = address(0);
+        emit DrawOfferDeclined(msg.sender);
+    }
+
+    /// @notice Get current draw offer status
+    function getDrawOfferStatus() external view returns (address) {
+        return drawOfferedBy;
     }
 
     /// @notice Claim victory when opponent has not moved within timeout period
@@ -562,6 +607,11 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         require(startX < BOARD_SIZE && startY < BOARD_SIZE && endX < BOARD_SIZE && endY < BOARD_SIZE, "Bad coords");
 
         require(gameState == GameState.InProgress || gameState == GameState.NotStarted, "Bad state");
+
+        // Making a move automatically declines any pending draw offer
+        if (drawOfferedBy != address(0)) {
+            drawOfferedBy = address(0);
+        }
 
         // Check if the move is valid
         require(isValidMove(startX, startY, endX, endY), "Invalid move");
