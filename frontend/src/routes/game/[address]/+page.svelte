@@ -611,15 +611,13 @@
 						</div>
 
 						<!-- Timer -->
-						{#if data.timeout && data.stateInfo.isActive}
+						{#if data.timeout}
 							<div class="mb-4">
-								<h4 class="text-xs text-chess-gray mb-2 uppercase tracking-wider">Time Remaining</h4>
 								<GameTimer
-									whiteTimeRemaining={data.timeout.whiteTimeRemaining}
-									blackTimeRemaining={data.timeout.blackTimeRemaining}
 									whiteBlocksRemaining={data.timeout.whiteBlocksRemaining}
 									blackBlocksRemaining={data.timeout.blackBlocksRemaining}
 									currentPlayerIsWhite={data.timeout.currentPlayerIsWhite}
+									timeoutBlocks={data.timeout.timeoutBlocks}
 									isActive={data.stateInfo.isActive}
 								/>
 							</div>
