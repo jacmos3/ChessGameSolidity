@@ -372,7 +372,9 @@ function createActiveGameStore() {
 							notation,
 							from,
 							to,
-							comment
+							comment,
+							blockNumber: event.blockNumber,
+							transactionHash: event.transactionHash
 						};
 					});
 				} catch (eventErr) {
