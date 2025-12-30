@@ -769,43 +769,53 @@
 							<div class="max-h-64 overflow-y-auto text-sm font-mono">
 								{#each moveHistory as move, i}
 									{#if move.isWhite}
-										<div class="flex gap-2 py-1.5 px-2 {move.moveNumber % 2 === 1 ? 'bg-chess-darker/50' : ''} rounded items-center">
-											<span class="text-chess-gray w-6 flex-shrink-0">{move.moveNumber}.</span>
-											<span class="w-14 flex-shrink-0" title={move.comment || ''}>{move.notation}</span>
-											{#if $explorer && move.blockNumber}
-												<a
-													href="{$explorer}/block/{move.blockNumber}"
-													target="_blank"
-													rel="noopener noreferrer"
-													class="text-xs text-chess-accent/60 hover:text-chess-accent"
-													title="View block #{move.blockNumber}"
-												>
-													#{move.blockNumber}
-												</a>
-											{/if}
-											{#if moveHistory[i + 1] && !moveHistory[i + 1].isWhite}
-												<span class="w-14 flex-shrink-0 ml-auto" title={moveHistory[i + 1].comment || ''}>{moveHistory[i + 1].notation}</span>
-												{#if $explorer && moveHistory[i + 1].blockNumber}
+										<div class="flex gap-1 py-1.5 px-2 {move.moveNumber % 2 === 1 ? 'bg-chess-darker/50' : ''} rounded items-center text-xs">
+											<span class="text-chess-gray w-5 flex-shrink-0">{move.moveNumber}.</span>
+											<span class="w-12 flex-shrink-0" title={move.comment || ''}>{move.notation}</span>
+											{#if move.blockNumber}
+												{#if $explorer}
 													<a
-														href="{$explorer}/block/{moveHistory[i + 1].blockNumber}"
+														href="{$explorer}/block/{move.blockNumber}"
 														target="_blank"
 														rel="noopener noreferrer"
-														class="text-xs text-chess-accent/60 hover:text-chess-accent"
-														title="View block #{moveHistory[i + 1].blockNumber}"
+														class="text-chess-accent/60 hover:text-chess-accent"
+														title="View block #{move.blockNumber}"
 													>
-														#{moveHistory[i + 1].blockNumber}
+														@{move.blockNumber}
 													</a>
+												{:else}
+													<span class="text-chess-gray/50">@{move.blockNumber}</span>
+												{/if}
+											{/if}
+											{#if moveHistory[i + 1] && !moveHistory[i + 1].isWhite}
+												<span class="w-12 flex-shrink-0 ml-2" title={moveHistory[i + 1].comment || ''}>{moveHistory[i + 1].notation}</span>
+												{#if moveHistory[i + 1].blockNumber}
+													{#if $explorer}
+														<a
+															href="{$explorer}/block/{moveHistory[i + 1].blockNumber}"
+															target="_blank"
+															rel="noopener noreferrer"
+															class="text-chess-accent/60 hover:text-chess-accent"
+															title="View block #{moveHistory[i + 1].blockNumber}"
+														>
+															@{moveHistory[i + 1].blockNumber}
+														</a>
+													{:else}
+														<span class="text-chess-gray/50">@{moveHistory[i + 1].blockNumber}</span>
+													{/if}
 												{/if}
 											{/if}
 										</div>
 									{/if}
 								{/each}
 							</div>
-							{#if $explorer}
-								<p class="text-xs text-chess-gray/60 text-center mt-3 pt-3 border-t border-chess-accent/10">
+							<p class="text-xs text-chess-gray/60 text-center mt-3 pt-3 border-t border-chess-accent/10">
+								{#if $explorer}
 									Click block numbers to verify on-chain
-								</p>
-							{/if}
+								{:else}
+									Block numbers shown (no explorer on localhost)
+								{/if}
+							</p>
 						{/if}
 					</div>
 
