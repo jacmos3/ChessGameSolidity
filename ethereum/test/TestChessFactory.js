@@ -17,15 +17,15 @@ contract("ChessFactory", (accounts) => {
   it("should create chess game", async () => {
     const initialChessGames = await chessFactory.totalChessGames();
     // TimeoutPreset: 0=Blitz, 1=Rapid, 2=Classical
-    await chessFactory.createChessGame(2, { from: accounts[0], value: web3.utils.toWei("1", "ether") });
+    await chessFactory.createChessGame(2, 0, { from: accounts[0], value: web3.utils.toWei("1", "ether") });
     const newChessGames = await chessFactory.totalChessGames();
 
     assert.equal(newChessGames.toNumber(), (initialChessGames + 1), "Total number of ChessGame should be increased by 1");
   });
 
   it("should get deployed chess games", async () => {
-    await chessFactory.createChessGame(2, { from: accounts[0], value: web3.utils.toWei("1", "ether") });
-    await chessFactory.createChessGame(2, { from: accounts[0], value: web3.utils.toWei("1", "ether") });
+    await chessFactory.createChessGame(2, 0, { from: accounts[0], value: web3.utils.toWei("1", "ether") });
+    await chessFactory.createChessGame(2, 0, { from: accounts[0], value: web3.utils.toWei("1", "ether") });
 
     const deployedGames = await chessFactory.getDeployedChessGames();
 

@@ -21,6 +21,10 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     uint256 public constant RAPID_BLOCKS = 2100;     // ~7 hours
     uint256 public constant CLASSICAL_BLOCKS = 50400; // ~7 days
 
+    // Game mode: Tournament (strict validation) vs Friendly (relaxed, illegal moves = loss)
+    enum GameMode { Tournament, Friendly }
+    GameMode public gameMode;
+
     // Legacy event (kept for backward compatibility)
     event Debug(int8 player, uint8 startX, uint8 startY, uint8 endX, uint8 endY, string comment);
 
@@ -60,12 +64,13 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     // Draw offer tracking
     address public drawOfferedBy;
 
-    constructor(address _whitePlayer, uint _value, TimeoutPreset _preset) payable {
+    constructor(address _whitePlayer, uint _value, TimeoutPreset _preset, GameMode _mode) payable {
         // Chiamare initializeBoard nel costruttore
         initializeBoard();
         whitePlayer = _whitePlayer;
         currentPlayer = _whitePlayer;
         betting = _value;
+        gameMode = _mode;
 
         // Set timeout based on preset
         if (_preset == TimeoutPreset.Blitz) {
@@ -379,6 +384,58 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         return false;
     }
 
+    /// @notice Check if a move would leave the current player's king in check
+    function wouldMoveLeaveKingInCheck(uint8 sX, uint8 sY, uint8 eX, uint8 eY) private view returns (bool) {
+        int8 p = board[sX][sY];
+        int8 pl = (p > 0) ? PLAYER_WHITE : PLAYER_BLACK;
+        uint8 kX = (abs(p) == uint8(KING)) ? eX : ((pl == PLAYER_WHITE) ? whiteKingRow : blackKingRow);
+        uint8 kY = (abs(p) == uint8(KING)) ? eY : ((pl == PLAYER_WHITE) ? whiteKingCol : blackKingCol);
+
+        for (uint8 r = 0; r < BOARD_SIZE; r++) {
+            for (uint8 c = 0; c < BOARD_SIZE; c++) {
+                if (r == eX && c == eY) continue;
+                int8 pc = board[r][c];
+                if (pc * pl >= 0) continue;
+                if (_canAttack(r, c, pc, kX, kY, sX, sY, eX, eY)) return true;
+            }
+        }
+        return false;
+    }
+
+    function _canAttack(uint8 aR, uint8 aC, int8 ap, uint8 kR, uint8 kC, uint8 fR, uint8 fC, uint8 tR, uint8 tC) private view returns (bool) {
+        uint8 a = abs(ap);
+        if (a == uint8(PAWN)) {
+            int8 d = (ap > 0) ? int8(-1) : int8(1);
+            return (int8(kR) == int8(aR) + d && abs(int8(kC) - int8(aC)) == 1);
+        }
+        if (a == uint8(KNIGHT)) {
+            uint8 dX = abs(int8(kR) - int8(aR));
+            uint8 dY = abs(int8(kC) - int8(aC));
+            return (dX == 2 && dY == 1) || (dX == 1 && dY == 2);
+        }
+        if (a == uint8(KING)) return abs(int8(kR) - int8(aR)) <= 1 && abs(int8(kC) - int8(aC)) <= 1;
+
+        int8 dR = int8(kR) - int8(aR);
+        int8 dC = int8(kC) - int8(aC);
+        uint8 adR = abs(dR); uint8 adC = abs(dC);
+        bool diag = (adR == adC && adR > 0);
+        bool str = (dR == 0 || dC == 0) && (adR > 0 || adC > 0);
+        if (a == uint8(BISHOP) && !diag) return false;
+        if (a == uint8(ROOK) && !str) return false;
+        if (a == uint8(QUEEN) && !diag && !str) return false;
+
+        int8 sR = (dR == 0) ? int8(0) : (dR > 0 ? int8(1) : int8(-1));
+        int8 sC = (dC == 0) ? int8(0) : (dC > 0 ? int8(1) : int8(-1));
+        uint8 cR = uint8(int8(aR) + sR); uint8 cC = uint8(int8(aC) + sC);
+        while (cR != kR || cC != kC) {
+            if (!(cR == fR && cC == fC)) {
+                if ((cR == tR && cC == tC) || board[cR][cC] != EMPTY) return false;
+            }
+            cR = uint8(int8(cR) + sR); cC = uint8(int8(cC) + sC);
+        }
+        return true;
+    }
+
     function isSquareUnderAttack(int8 player, uint8 x, uint8 y) internal view returns (bool) {
         for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
             for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
@@ -613,8 +670,15 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
             drawOfferedBy = address(0);
         }
 
-        // Check if the move is valid
+        // Check if the move is valid for this piece type
         require(isValidMove(startX, startY, endX, endY), "Invalid move");
+
+        // Check that this move doesn't leave our own king in check
+        bool leavesKingInCheck = wouldMoveLeaveKingInCheck(startX, startY, endX, endY);
+        if (gameMode == GameMode.Friendly) {
+            // Friendly mode: reject illegal moves (protect player from mistakes)
+            require(!leavesKingInCheck, "Move leaves king in check");
+        }
 
         // Store the piece being moved before clearing the start position
         int8 movingPiece = board[startX][startY];
@@ -730,7 +794,12 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         bool isMate = false;
         GameState previousState = gameState;
 
-        if (isKingInCheck(PLAYER_BLACK)) {
+        // In Tournament mode, if the player left their own king in check, they lose (penalty)
+        if (gameMode == GameMode.Tournament && leavesKingInCheck) {
+            // The current player made an illegal move - opponent wins (tournament penalty)
+            isMate = true;
+            gameState = (currentPlayer == whitePlayer) ? GameState.BlackWins : GameState.WhiteWins;
+        } else if (isKingInCheck(PLAYER_BLACK)) {
             isMate = isCheckmate(PLAYER_BLACK, endX, endY);
             isCheck = !isMate;
             gameState = isMate ? GameState.WhiteWins : GameState.InProgress;
@@ -779,34 +848,9 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         switchTurn();
     }
 
-    /// @notice Build a comment string for the move event
-    function _buildMoveComment(int8 piece, int8 captured, uint8 startCol, uint8 endCol, bool isCheck, bool isMate) internal view returns (string memory) {
-        string memory pieceName;
-        uint8 absPiece = abs(piece);
-
-        if (absPiece == uint8(PAWN)) pieceName = "pawn";
-        else if (absPiece == uint8(KNIGHT)) pieceName = "knight";
-        else if (absPiece == uint8(BISHOP)) pieceName = "bishop";
-        else if (absPiece == uint8(ROOK)) pieceName = "rook";
-        else if (absPiece == uint8(QUEEN)) pieceName = "queen";
-        else if (absPiece == uint8(KING)) {
-            // Check for castling
-            if (abs(int8(endCol) - int8(startCol)) == 2) {
-                return endCol == COL_KNIGHT ? "castling kingside" : "castling queenside";
-            }
-            pieceName = "king";
-        }
-        else pieceName = "unknown";
-
-        if (captured != EMPTY) {
-            if (isMate) return string(abi.encodePacked(pieceName, " capture checkmate"));
-            if (isCheck) return string(abi.encodePacked(pieceName, " capture check"));
-            return string(abi.encodePacked(pieceName, " capture"));
-        }
-
-        if (isMate) return string(abi.encodePacked(pieceName, " checkmate"));
-        if (isCheck) return string(abi.encodePacked(pieceName, " check"));
-        return pieceName;
+    /// @notice Build a comment string for the move event (simplified for size)
+    function _buildMoveComment(int8, int8, uint8, uint8, bool, bool) internal pure returns (string memory) {
+        return "";
     }
 
     // Check if the given player's king can move out of check

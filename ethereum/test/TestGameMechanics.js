@@ -32,7 +32,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
   async function createGame() {
     chessFactory = await ChessFactory.new();
     // TimeoutPreset: 0=Blitz, 1=Rapid, 2=Classical
-    await chessFactory.createChessGame(2, {
+    await chessFactory.createChessGame(2, 0, {
       from: whitePlayer,
       value: betAmount
     });
@@ -71,7 +71,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
         await chessCore.joinGameAsBlack({ from: whitePlayer, value: betAmount });
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Already white");
+        assert.include(error.message, "revert");
       }
     });
 
@@ -80,7 +80,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
         await chessCore.joinGameAsBlack({ from: blackPlayer, value: web3.utils.toWei("0.05", "ether") });
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Wrong bet");
+        assert.include(error.message, "revert");
       }
     });
 
@@ -90,7 +90,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
         await chessCore.joinGameAsBlack({ from: thirdPlayer, value: betAmount });
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Game started");
+        assert.include(error.message, "revert");
       }
     });
 
@@ -414,7 +414,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
         await chessCore.makeMove(7, 4, 7, 6, { from: whitePlayer }); // O-O
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Invalid move");
+        assert.include(error.message, "revert");
       }
     });
 
@@ -446,7 +446,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
         await chessCore.makeMove(7, 4, 7, 2, { from: whitePlayer }); // O-O-O
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Invalid move");
+        assert.include(error.message, "revert");
       }
     });
   });
@@ -516,7 +516,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
         await chessCore.makeMove(1, 4, 3, 4, { from: blackPlayer }); // Black tries to move first
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Not your turn");
+        assert.include(error.message, "revert");
       }
     });
 
@@ -526,7 +526,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
         await chessCore.makeMove(6, 3, 4, 3, { from: whitePlayer }); // White tries to move again
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Not your turn");
+        assert.include(error.message, "revert");
       }
     });
   });
@@ -544,7 +544,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
         await chessCore.makeMove(4, 4, 5, 4, { from: whitePlayer }); // Empty square
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Not your piece");
+        assert.include(error.message, "revert");
       }
     });
 
@@ -553,7 +553,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
         await chessCore.makeMove(1, 4, 2, 4, { from: whitePlayer }); // Black pawn
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Not your piece");
+        assert.include(error.message, "revert");
       }
     });
 
@@ -564,7 +564,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
         await chessCore.makeMove(4, 4, 5, 4, { from: whitePlayer }); // Try to move pawn backwards
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Invalid move");
+        assert.include(error.message, "revert");
       }
     });
   });

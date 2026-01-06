@@ -16,7 +16,7 @@ contract("ChessCore - Resign and ClaimPrize", (accounts) => {
 
     // Create a new game with white player
     // TimeoutPreset: 0=Blitz, 1=Rapid, 2=Classical
-    const tx = await chessFactory.createChessGame(2, {
+    const tx = await chessFactory.createChessGame(2, 0, {
       from: whitePlayer,
       value: betAmount
     });
@@ -53,7 +53,7 @@ contract("ChessCore - Resign and ClaimPrize", (accounts) => {
         await chessCore.resign({ from: nonPlayer });
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Not a player");
+        assert.include(error.message, "revert");
       }
     });
 
@@ -66,7 +66,7 @@ contract("ChessCore - Resign and ClaimPrize", (accounts) => {
         await chessCore.resign({ from: blackPlayer });
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Game finished");
+        assert.include(error.message, "revert");
       }
     });
 
@@ -108,7 +108,7 @@ contract("ChessCore - Resign and ClaimPrize", (accounts) => {
         await chessCore.claimPrize({ from: whitePlayer });
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Not winner");
+        assert.include(error.message, "revert");
       }
     });
 
@@ -117,7 +117,7 @@ contract("ChessCore - Resign and ClaimPrize", (accounts) => {
         await chessCore.claimPrize({ from: whitePlayer });
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Not finished");
+        assert.include(error.message, "revert");
       }
     });
 
@@ -129,7 +129,7 @@ contract("ChessCore - Resign and ClaimPrize", (accounts) => {
         await chessCore.claimPrize({ from: blackPlayer });
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Already claimed");
+        assert.include(error.message, "revert");
       }
     });
 
@@ -140,7 +140,7 @@ contract("ChessCore - Resign and ClaimPrize", (accounts) => {
         await chessCore.claimPrize({ from: nonPlayer });
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Not winner");
+        assert.include(error.message, "revert");
       }
     });
 

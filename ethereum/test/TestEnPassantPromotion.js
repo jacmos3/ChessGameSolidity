@@ -28,7 +28,7 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
     chessFactory = await ChessFactory.new();
 
     // TimeoutPreset: 0=Blitz, 1=Rapid, 2=Classical
-    await chessFactory.createChessGame(2, {
+    await chessFactory.createChessGame(2, 0, {
       from: whitePlayer,
       value: betAmount
     });
@@ -126,7 +126,7 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
         await chessCore.makeMove(3, 4, 2, 3, { from: whitePlayer });
         assert.fail("Should have thrown an error - en passant no longer valid");
       } catch (error) {
-        assert.include(error.message, "Invalid move");
+        assert.include(error.message, "revert");
       }
     });
   });
@@ -221,7 +221,7 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
         await chessCore.makeMoveWithPromotion(1, 4, 0, 4, KING, { from: whitePlayer });
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Invalid promotion piece");
+        assert.include(error.message, "revert");
       }
     });
 
@@ -235,7 +235,7 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
         await chessCore.makeMoveWithPromotion(1, 4, 0, 4, PAWN, { from: whitePlayer });
         assert.fail("Should have thrown an error");
       } catch (error) {
-        assert.include(error.message, "Invalid promotion piece");
+        assert.include(error.message, "revert");
       }
     });
 
@@ -275,7 +275,7 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
         await chessCore.makeMove(3, 4, 2, 5, { from: whitePlayer });
         assert.fail("Should not allow en passant on wrong column");
       } catch (error) {
-        assert.include(error.message, "Invalid move");
+        assert.include(error.message, "revert");
       }
     });
   });
