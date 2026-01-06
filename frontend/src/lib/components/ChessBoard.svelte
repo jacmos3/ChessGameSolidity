@@ -9,8 +9,23 @@
 	export let isCheck = false; // true if current player's king is in check
 	export let currentPlayerIsWhite = true; // whose turn it is
 	export let animateMove = null; // { from: {row, col}, to: {row, col}, piece: number } - for animating incoming moves
+	export let resetKey = 0; // Used to force reset state when account changes
 
 	const dispatch = createEventDispatcher();
+
+	// Track previous resetKey to detect actual changes
+	let prevResetKey = resetKey;
+	$: if (resetKey !== prevResetKey) {
+		prevResetKey = resetKey;
+		// Reset all UI state when account switches
+		selectedSquare = null;
+		isDragging = false;
+		hasMoved = false;
+		draggedPiece = null;
+		dragPos = { x: -1000, y: -1000 };
+		animatingPiece = null;
+		animationStyle = '';
+	}
 
 	// Animation state
 	let animatingPiece = null;
@@ -107,10 +122,16 @@
 	let startPos = { x: 0, y: 0 };
 	const DRAG_THRESHOLD = 5; // Pixels to move before considering it a drag
 
+	// Validate board data
+	$: isValidBoard = board && Array.isArray(board) && board.length === 8 &&
+		board.every(row => Array.isArray(row) && row.length === 8);
+
 	// Generate board display based on orientation
-	$: displayBoard = orientation === 'black'
-		? board.slice().reverse().map(row => row.slice().reverse())
-		: board;
+	$: displayBoard = isValidBoard
+		? (orientation === 'black'
+			? board.slice().reverse().map(row => row.slice().reverse())
+			: board)
+		: Array(8).fill(null).map(() => Array(8).fill(0)); // Empty board as fallback
 
 	$: files = orientation === 'black'
 		? ['h', 'g', 'f', 'e', 'd', 'c', 'b', 'a']
@@ -232,10 +253,11 @@
 
 	// Find king position
 	function findKing(isWhite) {
+		if (!isValidBoard) return null;
 		const kingValue = isWhite ? 6 : -6;
 		for (let r = 0; r < 8; r++) {
 			for (let c = 0; c < 8; c++) {
-				if (board[r] && board[r][c] === kingValue) {
+				if (board[r][c] === kingValue) {
 					return { row: r, col: c };
 				}
 			}
@@ -252,7 +274,7 @@
 
 	// Calculate legal moves for selected piece (simplified - actual validation on chain)
 	function getLegalMoves(fromRow, fromCol) {
-		if (!board[fromRow]) return [];
+		if (!isValidBoard || !board[fromRow]) return [];
 		const piece = board[fromRow][fromCol];
 		if (piece === 0) return [];
 

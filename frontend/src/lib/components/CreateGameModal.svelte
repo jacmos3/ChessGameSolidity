@@ -6,6 +6,7 @@
 
 	let betAmount = '0.01';
 	let timeoutPreset = 2; // Default to Classical
+	let gameMode = 1; // Default to Friendly (safer for casual players)
 	let creating = false;
 	let error = null;
 
@@ -16,12 +17,18 @@
 		{ value: 2, name: 'Classical', blocks: 50400, time: '~7 giorni', description: 'Partite rilassate' }
 	];
 
+	// Game mode options
+	const gameModeOptions = [
+		{ value: 0, name: 'Tournament', icon: '🏆', description: 'Mosse illegali = sconfitta' },
+		{ value: 1, name: 'Friendly', icon: '🤝', description: 'Mosse illegali rifiutate' }
+	];
+
 	async function handleCreate() {
 		creating = true;
 		error = null;
 
 		try {
-			await games.createGame(betAmount, timeoutPreset);
+			await games.createGame(betAmount, timeoutPreset, gameMode);
 			await games.fetchGames();
 			dispatch('close');
 		} catch (err) {
@@ -97,6 +104,31 @@
 					{timeoutOptions[timeoutPreset].description} -
 					{timeoutOptions[timeoutPreset].blocks} blocchi per mossa
 				</p>
+			</div>
+
+			<!-- Game Mode -->
+			<div role="group" aria-labelledby="game-mode-label">
+				<span id="game-mode-label" class="block text-sm font-medium mb-3">
+					Game Mode
+				</span>
+				<div class="grid grid-cols-2 gap-2">
+					{#each gameModeOptions as option}
+						<button
+							type="button"
+							class="p-3 rounded-lg border transition-all text-center
+								{gameMode === option.value
+									? 'border-chess-accent bg-chess-accent/10'
+									: 'border-chess-accent/20 hover:border-chess-accent/50 bg-chess-darker'}"
+							on:click={() => gameMode = option.value}
+						>
+							<div class="text-xl mb-1">{option.icon}</div>
+							<div class="font-display text-sm {gameMode === option.value ? 'text-chess-accent' : ''}">
+								{option.name}
+							</div>
+							<div class="text-xs text-chess-gray mt-1">{option.description}</div>
+						</button>
+					{/each}
+				</div>
 			</div>
 
 			{#if error}

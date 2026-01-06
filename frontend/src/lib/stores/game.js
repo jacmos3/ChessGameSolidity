@@ -83,7 +83,7 @@ function createGamesStore() {
 			}
 		},
 
-		async createGame(betAmount, timeoutPreset = 2) {
+		async createGame(betAmount, timeoutPreset = 2, gameMode = 0) {
 			const $wallet = get(wallet);
 			const $contractAddress = get(contractAddress);
 
@@ -98,7 +98,8 @@ function createGamesStore() {
 			);
 
 			// TimeoutPreset: 0=Blitz (~1h), 1=Rapid (~7h), 2=Classical (~7d)
-			const tx = await factory.createChessGame(timeoutPreset, {
+			// GameMode: 0=Tournament (strict), 1=Friendly (relaxed)
+			const tx = await factory.createChessGame(timeoutPreset, gameMode, {
 				value: ethers.utils.parseEther(betAmount)
 			});
 
@@ -144,6 +145,9 @@ function createActiveGameStore() {
 	let currentGameContract = null;
 	let moveMadeListener = null;
 	let gameStateListener = null;
+	let drawOfferedListener = null;
+	let drawDeclinedListener = null;
+	let drawAcceptedListener = null;
 
 	// Cleanup event listeners
 	function cleanupListeners() {
@@ -156,6 +160,18 @@ function createActiveGameStore() {
 				currentGameContract.off('GameStateChanged', gameStateListener);
 				gameStateListener = null;
 			}
+			if (drawOfferedListener) {
+				currentGameContract.off('DrawOffered', drawOfferedListener);
+				drawOfferedListener = null;
+			}
+			if (drawDeclinedListener) {
+				currentGameContract.off('DrawOfferDeclined', drawDeclinedListener);
+				drawDeclinedListener = null;
+			}
+			if (drawAcceptedListener) {
+				currentGameContract.off('DrawAccepted', drawAcceptedListener);
+				drawAcceptedListener = null;
+			}
 			currentGameContract = null;
 		}
 	}
@@ -163,7 +179,8 @@ function createActiveGameStore() {
 	// Handle incoming move from blockchain event
 	function handleMoveMade(player, fromRow, fromCol, toRow, toCol, piece, capturedPiece, promotionPiece, isCheck, isMate, isCastling, isEnPassant) {
 		update(s => {
-			if (!s.data) return s;
+			// Skip if no data or listeners were cleared (account switched)
+			if (!s.data || !currentGameContract) return s;
 
 			const $wallet = get(wallet);
 			const isMyMove = player.toLowerCase() === $wallet.account?.toLowerCase();
@@ -176,8 +193,14 @@ function createActiveGameStore() {
 			const pieceValue = Number(piece);
 			const promoValue = Number(promotionPiece);
 
+			// Only use promotionPiece if it's an actual pawn promotion
+			// (pawn reaching the last rank). Otherwise use the actual piece.
+			const isPawn = Math.abs(pieceValue) === 1;
+			const isPromotion = isPawn && (Number(toRow) === 0 || Number(toRow) === 7);
+			const finalPiece = isPromotion ? promoValue : pieceValue;
+
 			// Apply move
-			newBoard[Number(toRow)][Number(toCol)] = promoValue !== 0 ? promoValue : pieceValue;
+			newBoard[Number(toRow)][Number(toCol)] = finalPiece;
 			newBoard[Number(fromRow)][Number(fromCol)] = 0;
 
 			// Handle en passant capture
@@ -201,12 +224,12 @@ function createActiveGameStore() {
 			// Build notation
 			const pieceSymbols = { 1: '', 2: 'N', 3: 'B', 4: 'R', 5: 'Q', 6: 'K' };
 			const symbol = pieceSymbols[Math.abs(pieceValue)] || '';
-			const from = toAlgebraic(Number(fromCol), Number(fromRow));
-			const to = toAlgebraic(Number(toCol), Number(toRow));
+			const fromSquare = toAlgebraic(Number(fromCol), Number(fromRow));
+			const toSquare = toAlgebraic(Number(toCol), Number(toRow));
 
-			let notation = symbol + to;
+			let notation = symbol + toSquare;
 			if (Number(capturedPiece) !== 0) {
-				notation = symbol + (symbol === '' ? from[0] : '') + 'x' + to;
+				notation = symbol + (symbol === '' ? fromSquare[0] : '') + 'x' + toSquare;
 			}
 			if (isCastling) {
 				notation = Number(toCol) === 6 ? 'O-O' : 'O-O-O';
@@ -214,12 +237,18 @@ function createActiveGameStore() {
 			if (isCheck) notation += '+';
 			if (isMate) notation += '#';
 
+			// Check for duplicate - if move with same from/to already exists, skip
+			const isDuplicate = s.data.moveHistory.some(m =>
+				m.from === fromSquare && m.to === toSquare
+			);
+			if (isDuplicate) return s;
+
 			const newMove = {
 				moveNumber: Math.floor(s.data.moveHistory.length / 2) + 1,
 				isWhite: pieceValue > 0,
 				notation,
-				from,
-				to
+				from: fromSquare,
+				to: toSquare
 			};
 
 			// Store animation data for the ChessBoard component
@@ -261,7 +290,7 @@ function createActiveGameStore() {
 	function handleGameStateChanged(newState) {
 		const stateNum = Number(newState);
 		update(s => {
-			if (!s.data) return s;
+			if (!s.data || !currentGameContract) return s;
 			return {
 				...s,
 				data: {
@@ -277,7 +306,7 @@ function createActiveGameStore() {
 	// Handle draw offer events
 	function handleDrawOffered(player) {
 		update(s => {
-			if (!s.data) return s;
+			if (!s.data || !currentGameContract) return s;
 			return {
 				...s,
 				data: {
@@ -290,7 +319,7 @@ function createActiveGameStore() {
 
 	function handleDrawDeclined(player) {
 		update(s => {
-			if (!s.data) return s;
+			if (!s.data || !currentGameContract) return s;
 			return {
 				...s,
 				data: {
@@ -313,7 +342,7 @@ function createActiveGameStore() {
 			try {
 				const game = new ethers.Contract(address, ChessCoreABI.abi, $wallet.signer);
 
-				const [players, currentPlayer, state, betting, boardState, timeoutStatus, drawOfferStatus, timeoutBlocks] = await Promise.all([
+				const [players, currentPlayer, state, betting, boardState, timeoutStatus, drawOfferStatus, timeoutBlocks, gameMode] = await Promise.all([
 					game.getPlayers(),
 					game.currentPlayer(),
 					game.getGameState(),
@@ -321,51 +350,40 @@ function createActiveGameStore() {
 					game.getBoardState(), // Single call instead of 64!
 					game.getTimeoutStatus().catch(() => null), // May not exist on older contracts
 					game.getDrawOfferStatus().catch(() => null), // May not exist on older contracts
-					game.timeoutBlocks().catch(() => 300) // Default to 300 blocks
+					game.timeoutBlocks().catch(() => 300), // Default to 300 blocks
+					game.gameMode().catch(() => 0) // Default to Tournament if not available
 				]);
 
 				// Convert board state from contract format
 				const board = boardState.map(row => row.map(cell => Number(cell)));
 
-				// Fetch move history from events
+				// Fetch move history from MoveMade events (has isCheck/isMate flags)
 				let moveHistory = [];
 				try {
-					const filter = game.filters.Debug();
+					const filter = game.filters.MoveMade();
 					const events = await game.queryFilter(filter, 0, 'latest');
 
 					moveHistory = events.map((event, index) => {
-						const { player, startX, startY, endX, endY, comment } = event.args;
-						const isWhite = Number(player) > 0;
-						const from = toAlgebraic(Number(startY), Number(startX));
-						const to = toAlgebraic(Number(endY), Number(endX));
+						const { player, fromRow, fromCol, toRow, toCol, piece, capturedPiece, isCheck, isMate, isCastling } = event.args;
+						const pieceValue = Number(piece);
+						const isWhite = pieceValue > 0;
+						const from = toAlgebraic(Number(fromCol), Number(fromRow));
+						const to = toAlgebraic(Number(toCol), Number(toRow));
 
-						// Get piece symbol from comment or use generic
-						let pieceSymbol = '';
-						if (comment) {
-							const lowerComment = comment.toLowerCase();
-							if (lowerComment.includes('knight')) pieceSymbol = 'N';
-							else if (lowerComment.includes('bishop')) pieceSymbol = 'B';
-							else if (lowerComment.includes('rook')) pieceSymbol = 'R';
-							else if (lowerComment.includes('queen')) pieceSymbol = 'Q';
-							else if (lowerComment.includes('king')) pieceSymbol = 'K';
-							// pawn has no symbol
-						}
+						// Get piece symbol
+						const pieceSymbols = { 1: '', 2: 'N', 3: 'B', 4: 'R', 5: 'Q', 6: 'K' };
+						const symbol = pieceSymbols[Math.abs(pieceValue)] || '';
 
-						// Check for special moves
-						let notation = pieceSymbol + to;
-						if (comment && comment.toLowerCase().includes('capture')) {
-							notation = pieceSymbol + (pieceSymbol === '' ? from[0] : '') + 'x' + to;
+						// Build notation
+						let notation = symbol + to;
+						if (Number(capturedPiece) !== 0) {
+							notation = symbol + (symbol === '' ? from[0] : '') + 'x' + to;
 						}
-						if (comment && comment.toLowerCase().includes('castl')) {
-							if (Number(endY) === 6) notation = 'O-O'; // kingside
-							else if (Number(endY) === 2) notation = 'O-O-O'; // queenside
+						if (isCastling) {
+							notation = Number(toCol) === 6 ? 'O-O' : 'O-O-O';
 						}
-						if (comment && comment.toLowerCase().includes('check')) {
-							notation += '+';
-						}
-						if (comment && comment.toLowerCase().includes('mate')) {
-							notation += '#';
-						}
+						if (isCheck) notation += '+';
+						if (isMate) notation += '#';
 
 						return {
 							moveNumber: Math.floor(index / 2) + 1,
@@ -373,7 +391,8 @@ function createActiveGameStore() {
 							notation,
 							from,
 							to,
-							comment,
+							isCheck,
+							isMate,
 							blockNumber: event.blockNumber,
 							transactionHash: event.transactionHash
 						};
@@ -422,7 +441,8 @@ function createActiveGameStore() {
 						isMyTurn,
 						moveHistory,
 						timeout,
-						drawOfferedBy
+						drawOfferedBy,
+						gameMode: Number(gameMode) // 0=Tournament, 1=Friendly
 					}
 				});
 
@@ -439,9 +459,12 @@ function createActiveGameStore() {
 				game.on('GameStateChanged', gameStateListener);
 
 				// Listen for draw offer events
-				game.on('DrawOffered', handleDrawOffered);
-				game.on('DrawOfferDeclined', handleDrawDeclined);
-				game.on('DrawAccepted', handleGameStateChanged);
+				drawOfferedListener = handleDrawOffered;
+				drawDeclinedListener = handleDrawDeclined;
+				drawAcceptedListener = handleGameStateChanged;
+				game.on('DrawOffered', drawOfferedListener);
+				game.on('DrawOfferDeclined', drawDeclinedListener);
+				game.on('DrawAccepted', drawAcceptedListener);
 
 			} catch (err) {
 				update(s => ({ ...s, loading: false, error: err.message }));
