@@ -110,34 +110,9 @@ contract ChessBoard {
         return x >= 0 ? uint8(x) : uint8(-x);
     }
 
-    /// @notice Convert piece to string representation
-    function pieceToString(int8 piece) internal view returns (string memory) {
-        if (piece == EMPTY) return "0";
-        if (piece == PAWN) return "1";
-        if (piece == KNIGHT) return "2";
-        if (piece == BISHOP) return "3";
-        if (piece == ROOK) return "4";
-        if (piece == QUEEN) return "5";
-        if (piece == KING) return "6";
-        if (piece == -PAWN) return "-1";
-        if (piece == -KNIGHT) return "-2";
-        if (piece == -BISHOP) return "-3";
-        if (piece == -ROOK) return "-4";
-        if (piece == -QUEEN) return "-5";
-        if (piece == -KING) return "-6";
-        return "XXXX";
-    }
-
-    /// @notice Print board as string (for debugging)
-    function printBoard() public view returns (string memory) {
-        string memory boardString = "";
-        for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
-            for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
-                boardString = string(abi.encodePacked(boardString, pieceToString(board[rowPiece][colPiece]), " "));
-            }
-            boardString = string(abi.encodePacked(boardString, "\n"));
-        }
-        return boardString;
+    /// @notice Print board as string (deprecated - use getBoardState)
+    function printBoard() public pure returns (string memory) {
+        return "";
     }
 
     /// @notice Get SVG representation of the board

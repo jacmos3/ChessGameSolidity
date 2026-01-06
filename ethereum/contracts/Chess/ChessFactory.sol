@@ -18,7 +18,8 @@ contract ChessFactory {
         address indexed gameAddress,
         address indexed whitePlayer,
         uint256 betAmount,
-        ChessCore.TimeoutPreset timeoutPreset
+        ChessCore.TimeoutPreset timeoutPreset,
+        ChessCore.GameMode gameMode
     );
 
     constructor(){
@@ -26,11 +27,11 @@ contract ChessFactory {
         addressNFT = address(newChessNFT);
     }
 
-    function createChessGame(ChessCore.TimeoutPreset _timeoutPreset) public payable returns (address) {
+    function createChessGame(ChessCore.TimeoutPreset _timeoutPreset, ChessCore.GameMode _gameMode) public payable returns (address) {
         require(msg.value >= MIN_BET, "Bet amount too low");
         require(msg.value <= MAX_BET, "Bet amount too high");
 
-        ChessCore newChessGame = new ChessCore{value: msg.value}(msg.sender, msg.value, _timeoutPreset);
+        ChessCore newChessGame = new ChessCore{value: msg.value}(msg.sender, msg.value, _timeoutPreset, _gameMode);
         address toRet = address(newChessGame);
         deployedChessGames.push(toRet);
 
@@ -39,7 +40,7 @@ contract ChessFactory {
 
         ChessNFT(addressNFT).createGameNFT(gameId, toRet, msg.sender);
 
-        emit GameCreated(gameId, toRet, msg.sender, msg.value, _timeoutPreset);
+        emit GameCreated(gameId, toRet, msg.sender, msg.value, _timeoutPreset, _gameMode);
         return toRet;
     }
  
