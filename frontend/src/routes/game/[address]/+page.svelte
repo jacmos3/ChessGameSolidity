@@ -119,10 +119,19 @@
 
 	// Reload when wallet account changes (user switched accounts)
 	let previousAccount = null;
+	let accountSwitchKey = 0; // Increments on account switch to reset ChessBoard state
 	$: if ($wallet.account && $wallet.account !== previousAccount) {
+		const wasNull = previousAccount === null;
 		previousAccount = $wallet.account;
-		if (address && previousAccount !== null) {
-			activeGame.load(address);
+		if (address && !wasNull) {
+			// Account switched - clear state and reload
+			gasEstimate = null;
+			actionError = null;
+			actionSuccess = null;
+			pendingMove = null;
+			activeGame.clear(); // Clear old data FIRST (sets data to null, moveHistory becomes [])
+			accountSwitchKey++; // Now increment key - component remounts with empty moveHistory
+			activeGame.load(address); // Then load fresh data
 		}
 	}
 
@@ -164,7 +173,8 @@
 	})() : null;
 
 	// Check if current player's king is in check (detect from last move notation)
-	$: isCheck = moveHistory.length > 0 &&
+	// Only show check indicator in Friendly mode (gameMode === 1) to help players
+	$: isCheck = data?.gameMode === 1 && moveHistory.length > 0 &&
 		(moveHistory[moveHistory.length - 1]?.notation?.includes('+') ||
 		 moveHistory[moveHistory.length - 1]?.notation?.includes('#'));
 
@@ -551,19 +561,22 @@
 						</div>
 					{/if}
 
-					<!-- Chess Board -->
+					<!-- Chess Board - key forces full re-render on account switch, move history, or orientation change -->
 					<div class="flex justify-center">
-						<ChessBoard
-							board={data.board}
-							orientation={data.playerRole === 'black' ? 'black' : 'white'}
-							interactive={canMove && !actionLoading}
-							{pendingMove}
-							{lastMove}
-							{isCheck}
-							{currentPlayerIsWhite}
-							animateMove={data.animatingMove}
-							on:move={handleMove}
-						/>
+						{#key `${accountSwitchKey}_${moveHistory.length}_${data.playerRole}`}
+							<ChessBoard
+								board={data.board}
+								orientation={data.playerRole === 'black' ? 'black' : 'white'}
+								interactive={canMove && !actionLoading}
+								{pendingMove}
+								{lastMove}
+								{isCheck}
+								{currentPlayerIsWhite}
+								animateMove={data.animatingMove}
+								resetKey={accountSwitchKey}
+								on:move={handleMove}
+							/>
+						{/key}
 					</div>
 
 					<!-- Mobile: Action buttons -->
@@ -597,9 +610,14 @@
 					<div class="card">
 						<div class="flex items-center justify-between mb-4">
 							<span class="text-chess-gray text-sm">Game #{truncateAddress(address)}</span>
-							<span class="px-2 py-1 rounded text-xs font-medium text-white {stateColors[data.stateInfo.color] || 'bg-chess-gray'}">
-								{data.stateInfo.text}
-							</span>
+							<div class="flex items-center gap-2">
+								<span class="px-2 py-1 rounded text-xs font-medium {data.gameMode === 0 ? 'bg-amber-600 text-white' : 'bg-cyan-600 text-white'}">
+									{data.gameMode === 0 ? '🏆 Tournament' : '🤝 Friendly'}
+								</span>
+								<span class="px-2 py-1 rounded text-xs font-medium text-white {stateColors[data.stateInfo.color] || 'bg-chess-gray'}">
+									{data.stateInfo.text}
+								</span>
+							</div>
 						</div>
 
 						<!-- Prize Pool -->
