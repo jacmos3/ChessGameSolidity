@@ -90,10 +90,10 @@ You can withdraw any bond that isn't locked in active games:
 2. Click **"Create Game"**
 3. Configure your game:
    - **Stake**: Amount of ETH to bet (0.001 - 100 ETH)
-   - **Time Control**:
-     - Blitz: ~1 hour per player
-     - Rapid: ~7 hours per player
-     - Classical: ~7 days per player
+   - **Time Control** (named after crypto pioneers):
+     - Finney: ~1 hour per player (Hal Finney - fast)
+     - Buterin: ~7 hours per player (Vitalik Buterin - medium)
+     - Nakamoto: ~7 days per player (Satoshi Nakamoto - slow)
    - **Mode**:
      - Tournament: Illegal moves result in automatic loss
      - Friendly: Illegal moves are rejected, you can try again

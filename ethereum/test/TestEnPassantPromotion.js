@@ -28,7 +28,7 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
     const chessCoreImpl = await ChessCore.new();
     chessFactory = await ChessFactory.new(chessCoreImpl.address);
 
-    // TimeoutPreset: 0=Blitz, 1=Rapid, 2=Classical
+    // TimeoutPreset: 0=Finney, 1=Buterin, 2=Nakamoto
     await chessFactory.createChessGame(2, 0, {
       from: whitePlayer,
       value: betAmount

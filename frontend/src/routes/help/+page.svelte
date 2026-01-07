@@ -193,7 +193,7 @@
 							</tr>
 							<tr class="border-b border-chess-dark">
 								<td class="py-2 font-medium">Time Control</td>
-								<td class="py-2">Blitz (~1h) / Rapid (~7h) / Classical (~7d)</td>
+								<td class="py-2">Finney (~1h) / Buterin (~7h) / Nakamoto (~7d)</td>
 							</tr>
 							<tr>
 								<td class="py-2 font-medium">Mode</td>

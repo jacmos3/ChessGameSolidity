@@ -11,15 +11,15 @@ import "../Rating/PlayerRating.sol";
 /// @notice Inherits from ChessBoard and implements move validation and game state
 contract ChessCore is ChessBoard, ReentrancyGuard {
     // ========== ENUMS (must be declared before state variables) ==========
-    enum TimeoutPreset { Blitz, Rapid, Classical }
+    enum TimeoutPreset { Finney, Buterin, Nakamoto }
     enum GameMode { Tournament, Friendly }
     enum GameState { NotStarted, InProgress, Draw, WhiteWins, BlackWins }
 
     // ========== CONSTANTS ==========
     // Timeout presets (based on ~12 sec/block on Ethereum)
-    uint48 public constant BLITZ_BLOCKS = 300;       // ~1 hour
-    uint48 public constant RAPID_BLOCKS = 2100;      // ~7 hours
-    uint48 public constant CLASSICAL_BLOCKS = 50400; // ~7 days
+    uint48 public constant FINNEY_BLOCKS = 300;      // ~1 hour (Hal Finney - fast)
+    uint48 public constant BUTERIN_BLOCKS = 2100;    // ~7 hours (Vitalik Buterin - medium)
+    uint48 public constant NAKAMOTO_BLOCKS = 50400;  // ~7 days (Satoshi Nakamoto - slow)
 
     // ========== STORAGE LAYOUT OPTIMIZED FOR GAS ==========
     // Slot 1: betting (32 bytes)
@@ -107,7 +107,7 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     /// @notice Initialize the game (called by factory on clones)
     /// @param _whitePlayer Address of white player
     /// @param _value Bet amount in wei
-    /// @param _preset Timeout preset (Blitz/Rapid/Classical)
+    /// @param _preset Timeout preset (Finney/Buterin/Nakamoto)
     /// @param _mode Game mode (Tournament/Friendly)
     /// @param _gameId Unique game identifier
     /// @param _bondingManager BondingManager contract address
@@ -144,12 +144,12 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         }
 
         // Set timeout based on preset
-        if (_preset == TimeoutPreset.Blitz) {
-            timeoutBlocks = BLITZ_BLOCKS;
-        } else if (_preset == TimeoutPreset.Rapid) {
-            timeoutBlocks = RAPID_BLOCKS;
+        if (_preset == TimeoutPreset.Finney) {
+            timeoutBlocks = FINNEY_BLOCKS;
+        } else if (_preset == TimeoutPreset.Buterin) {
+            timeoutBlocks = BUTERIN_BLOCKS;
         } else {
-            timeoutBlocks = CLASSICAL_BLOCKS;
+            timeoutBlocks = NAKAMOTO_BLOCKS;
         }
 
         // Record initial position for threefold repetition
