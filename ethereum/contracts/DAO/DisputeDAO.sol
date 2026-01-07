@@ -90,6 +90,8 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
 
     uint256 public disputeCounter;
     uint256 public constant MAX_ACTIVE_CHALLENGES = 3;
+    uint256 public constant MAX_DISPUTE_DURATION = 30 days;
+    uint256 private constant PERCENTAGE_BASE = 100;
 
     // Events
     event GameRegistered(uint256 indexed gameId, address white, address black, uint256 stake);
@@ -273,13 +275,25 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
      */
     function resolveDispute(uint256 disputeId) external nonReentrant {
         Dispute storage dispute = disputes[disputeId];
+        require(!dispute.resolved, "Already resolved");
+
+        // L-6: Absolute maximum dispute duration to prevent indefinite escalation
+        if (block.timestamp > dispute.registeredAt + MAX_DISPUTE_DURATION) {
+            dispute.resolved = true;
+            dispute.state = DisputeState.Resolved;
+            // Return challenger deposit without penalty - timeout not their fault
+            chessToken.safeTransfer(dispute.challenger, challengeDeposit);
+            activeChallenges[dispute.challenger]--;
+            emit DisputeResolved(disputeId, Vote.None, 0, 0);
+            return;
+        }
+
         require(
             dispute.state == DisputeState.Revealing ||
             (dispute.state == DisputeState.Challenged && block.timestamp > dispute.commitDeadline),
             "Cannot resolve yet"
         );
         require(block.timestamp > dispute.revealDeadline, "Reveal period not ended");
-        require(!dispute.resolved, "Already resolved");
 
         uint256 totalVotes = dispute.legitVotes + dispute.cheatVotes;
 
@@ -291,8 +305,8 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         }
 
         // Check for supermajority
-        uint256 legitPercent = (dispute.legitVotes * 100) / totalVotes;
-        uint256 cheatPercent = (dispute.cheatVotes * 100) / totalVotes;
+        uint256 legitPercent = (dispute.legitVotes * PERCENTAGE_BASE) / totalVotes;
+        uint256 cheatPercent = (dispute.cheatVotes * PERCENTAGE_BASE) / totalVotes;
 
         if (cheatPercent >= supermajority) {
             // CHEAT: Accused is guilty
@@ -446,13 +460,14 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
     function _updateArbitratorReputations(uint256 disputeId) internal {
         Dispute storage dispute = disputes[disputeId];
 
-        for (uint256 i = 0; i < dispute.selectedArbitrators.length; i++) {
+        for (uint256 i = 0; i < dispute.selectedArbitrators.length;) {
             address arbitrator = dispute.selectedArbitrators[i];
             VoteCommit storage voteCommit = votes[disputeId][arbitrator];
 
             if (!voteCommit.revealed) {
                 // Didn't reveal - penalty
                 arbitratorRegistry.updateReputation(arbitrator, false);
+                unchecked { ++i; }
                 continue;
             }
 
@@ -463,13 +478,15 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
             );
 
             arbitratorRegistry.updateReputation(arbitrator, votedWithMajority);
+            unchecked { ++i; }
         }
     }
 
     function _isSelectedArbitrator(uint256 disputeId, address arbitrator) internal view returns (bool) {
         address[] storage selected = disputes[disputeId].selectedArbitrators;
-        for (uint256 i = 0; i < selected.length; i++) {
+        for (uint256 i = 0; i < selected.length;) {
             if (selected[i] == arbitrator) return true;
+            unchecked { ++i; }
         }
         return false;
     }
