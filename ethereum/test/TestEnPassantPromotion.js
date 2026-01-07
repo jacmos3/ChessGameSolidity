@@ -24,12 +24,13 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
   let chessCore;
 
   // Helper to create a fresh game
-  async function createGame() {
+  // gameMode: 0=Tournament, 1=Friendly
+  async function createGame(gameMode = 0) {
     const chessCoreImpl = await ChessCore.new();
     chessFactory = await ChessFactory.new(chessCoreImpl.address);
 
     // TimeoutPreset: 0=Finney, 1=Buterin, 2=Nakamoto
-    await chessFactory.createChessGame(2, 0, {
+    await chessFactory.createChessGame(2, gameMode, {
       from: whitePlayer,
       value: betAmount
     });
@@ -134,8 +135,9 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
 
   describe("Pawn Promotion", () => {
     // For promotion tests, we need to use debugCreative BEFORE joining the game
+    // debugCreative only works in Friendly mode (gameMode=1)
     beforeEach(async () => {
-      await createGame();
+      await createGame(1); // Friendly mode
       // Note: We do NOT join as black here - tests will set up board first
     });
 

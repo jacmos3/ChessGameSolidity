@@ -43,11 +43,19 @@ contract ChessToken is ERC20, ERC20Burnable, ERC20Votes, ERC20Permit, AccessCont
     uint256 public teamVestingClaimed;
     address public teamWallet;
 
+    // Team wallet change timelock (2-step process with 48h delay)
+    address public pendingTeamWallet;
+    uint256 public teamWalletChangeInitiated;
+    uint256 public constant TEAM_WALLET_TIMELOCK = 48 hours;
+
     event PlayToEarnMinted(address indexed to, uint256 amount);
     event TreasuryMinted(address indexed to, uint256 amount);
     event TeamVestingClaimed(address indexed to, uint256 amount);
     event LiquidityMinted(address indexed to, uint256 amount);
     event CommunityMinted(address indexed to, uint256 amount);
+    event TeamWalletChangeProposed(address indexed currentWallet, address indexed newWallet, uint256 effectiveTime);
+    event TeamWalletChangeCancelled(address indexed cancelledWallet);
+    event TeamWalletChanged(address indexed oldWallet, address indexed newWallet);
 
     constructor(address _teamWallet, address _treasury)
         ERC20("Chess Token", "CHESS")
@@ -129,13 +137,68 @@ contract ChessToken is ERC20, ERC20Burnable, ERC20Votes, ERC20Permit, AccessCont
     }
 
     /**
-     * @notice Update team wallet address
+     * @notice Propose a new team wallet address (starts 48h timelock)
      * @param newTeamWallet New team wallet address
      */
-    function setTeamWallet(address newTeamWallet) external {
+    function proposeTeamWallet(address newTeamWallet) external {
         require(msg.sender == teamWallet, "Only team wallet");
         require(newTeamWallet != address(0), "Invalid address");
-        teamWallet = newTeamWallet;
+        require(newTeamWallet != teamWallet, "Same as current");
+
+        pendingTeamWallet = newTeamWallet;
+        teamWalletChangeInitiated = block.timestamp;
+
+        emit TeamWalletChangeProposed(teamWallet, newTeamWallet, block.timestamp + TEAM_WALLET_TIMELOCK);
+    }
+
+    /**
+     * @notice Accept the pending team wallet change (after 48h timelock)
+     * @dev Can be called by either current or pending team wallet
+     */
+    function acceptTeamWalletChange() external {
+        require(pendingTeamWallet != address(0), "No pending change");
+        require(
+            msg.sender == teamWallet || msg.sender == pendingTeamWallet,
+            "Not authorized"
+        );
+        require(
+            block.timestamp >= teamWalletChangeInitiated + TEAM_WALLET_TIMELOCK,
+            "Timelock not expired"
+        );
+
+        address oldWallet = teamWallet;
+        teamWallet = pendingTeamWallet;
+        pendingTeamWallet = address(0);
+        teamWalletChangeInitiated = 0;
+
+        emit TeamWalletChanged(oldWallet, teamWallet);
+    }
+
+    /**
+     * @notice Cancel a pending team wallet change
+     */
+    function cancelTeamWalletChange() external {
+        require(msg.sender == teamWallet, "Only team wallet");
+        require(pendingTeamWallet != address(0), "No pending change");
+
+        address cancelled = pendingTeamWallet;
+        pendingTeamWallet = address(0);
+        teamWalletChangeInitiated = 0;
+
+        emit TeamWalletChangeCancelled(cancelled);
+    }
+
+    /**
+     * @notice Get time remaining before team wallet change can be accepted
+     * @return Seconds remaining (0 if no pending change or already acceptable)
+     */
+    function getTeamWalletTimelockRemaining() external view returns (uint256) {
+        if (pendingTeamWallet == address(0)) return 0;
+
+        uint256 unlockTime = teamWalletChangeInitiated + TEAM_WALLET_TIMELOCK;
+        if (block.timestamp >= unlockTime) return 0;
+
+        return unlockTime - block.timestamp;
     }
 
     /**

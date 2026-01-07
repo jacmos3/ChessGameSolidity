@@ -122,15 +122,29 @@ contract("ChessToken", (accounts) => {
       }
     });
 
-    it("should allow team wallet to update address", async () => {
-      await chessToken.setTeamWallet(user1, { from: teamWallet });
+    it("should allow team wallet to propose and accept new address after timelock", async () => {
+      // Propose new team wallet
+      await chessToken.proposeTeamWallet(user1, { from: teamWallet });
+
+      // Verify pending wallet is set
+      const pending = await chessToken.pendingTeamWallet();
+      assert.equal(pending, user1);
+
+      // Fast forward 48 hours
+      await new Promise(resolve => setTimeout(resolve, 100));
+      await web3.currentProvider.send({ jsonrpc: "2.0", method: "evm_increaseTime", params: [48 * 60 * 60 + 1], id: Date.now() }, () => {});
+      await web3.currentProvider.send({ jsonrpc: "2.0", method: "evm_mine", params: [], id: Date.now() }, () => {});
+
+      // Accept the change
+      await chessToken.acceptTeamWalletChange({ from: teamWallet });
+
       const newWallet = await chessToken.teamWallet();
       assert.equal(newWallet, user1);
     });
 
-    it("should reject team wallet update from non-team address", async () => {
+    it("should reject team wallet proposal from non-team address", async () => {
       try {
-        await chessToken.setTeamWallet(user1, { from: admin });
+        await chessToken.proposeTeamWallet(user1, { from: admin });
         assert.fail("Should have reverted");
       } catch (error) {
         assert.include(error.message, "revert");
