@@ -1,22 +1,25 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Votes.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 
 /**
  * @title ChessToken
  * @notice ERC20 token for the Chess platform with controlled minting
  * @dev Uses AccessControl for role-based minting permissions
+ *      Includes ERC20Votes for governance delegation
  *
  * Token Utility:
  * - BONDING: Deposit to play games (skin in the game)
  * - STAKING: Stake to become an arbitrator
  * - CHALLENGE: Deposit to open disputes
- * - GOVERNANCE: Vote on protocol parameters
+ * - GOVERNANCE: Vote on protocol parameters (via delegation)
  */
-contract ChessToken is ERC20, ERC20Burnable, AccessControl {
+contract ChessToken is ERC20, ERC20Burnable, ERC20Votes, ERC20Permit, AccessControl {
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
 
     uint256 public constant MAX_SUPPLY = 100_000_000 * 10**18; // 100M tokens
@@ -46,7 +49,10 @@ contract ChessToken is ERC20, ERC20Burnable, AccessControl {
     event LiquidityMinted(address indexed to, uint256 amount);
     event CommunityMinted(address indexed to, uint256 amount);
 
-    constructor(address _teamWallet, address _treasury) ERC20("Chess Token", "CHESS") {
+    constructor(address _teamWallet, address _treasury)
+        ERC20("Chess Token", "CHESS")
+        ERC20Permit("Chess Token")
+    {
         require(_teamWallet != address(0), "Invalid team wallet");
         require(_treasury != address(0), "Invalid treasury");
 
@@ -183,5 +189,23 @@ contract ChessToken is ERC20, ERC20Burnable, AccessControl {
         team = TEAM_CAP - teamMinted;
         liquidity = LIQUIDITY_CAP - liquidityMinted;
         community = COMMUNITY_CAP - communityMinted;
+    }
+
+    // Required overrides for ERC20Votes
+
+    function _update(address from, address to, uint256 value)
+        internal
+        override(ERC20, ERC20Votes)
+    {
+        super._update(from, to, value);
+    }
+
+    function nonces(address owner)
+        public
+        view
+        override(ERC20Permit, Nonces)
+        returns (uint256)
+    {
+        return super.nonces(owner);
     }
 }

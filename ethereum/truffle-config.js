@@ -63,8 +63,9 @@ module.exports = {
   // Configure your compilers
   compilers: {
     solc: {
-      version: "0.8.20",
+      version: "0.8.24",
       settings: {
+        evmVersion: "cancun",  // Required for mcopy opcode in OZ 5.x
         viaIR: true,  // Required for complex contracts
         optimizer: {
           enabled: true,

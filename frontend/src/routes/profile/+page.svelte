@@ -3,6 +3,7 @@
 	import { games } from '$lib/stores/game.js';
 	import BondingPanel from '$lib/components/BondingPanel.svelte';
 	import ArbitratorPanel from '$lib/components/ArbitratorPanel.svelte';
+	import GovernancePanel from '$lib/components/GovernancePanel.svelte';
 
 	// Fetch games
 	$: if ($wallet.connected && $isSupported && $contractAddress) {
@@ -164,6 +165,11 @@
 			<!-- Arbitrator Program -->
 			<div class="mb-8">
 				<ArbitratorPanel />
+			</div>
+
+			<!-- Governance -->
+			<div class="mb-8">
+				<GovernancePanel />
 			</div>
 
 			<!-- Game History -->
