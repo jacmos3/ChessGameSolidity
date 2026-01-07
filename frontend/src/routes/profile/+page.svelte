@@ -1,6 +1,7 @@
 <script>
 	import { wallet, truncateAddress, isSupported, contractAddress } from '$lib/stores/wallet.js';
 	import { games } from '$lib/stores/game.js';
+	import BondingPanel from '$lib/components/BondingPanel.svelte';
 
 	// Fetch games
 	$: if ($wallet.connected && $isSupported && $contractAddress) {
@@ -152,6 +153,11 @@
 				<div class="text-4xl font-display {netProfit >= 0 ? 'text-chess-success' : 'text-chess-danger'}">
 					{netProfit >= 0 ? '+' : ''}{netProfit.toFixed(4)} ETH
 				</div>
+			</div>
+
+			<!-- Bond Management -->
+			<div class="mb-8">
+				<BondingPanel />
 			</div>
 
 			<!-- Game History -->
