@@ -10,32 +10,46 @@ import "../Rating/PlayerRating.sol";
 /// @title ChessCore - Main chess game logic
 /// @notice Inherits from ChessBoard and implements move validation and game state
 contract ChessCore is ChessBoard, ReentrancyGuard {
-    uint public betting;
-    bool private prizeClaimed;
-
-    // Anti-cheating system integration
-    BondingManager public bondingManager;
-    DisputeDAO public disputeDAO;
-    PlayerRating public playerRating;
-    uint256 public gameId;
-    bool public bondsLocked;
-    bool public gameRegisteredForDispute;
-    bool public ratingReported;
-
-    // Per-player timeout tracking
-    uint256 public whiteLastMoveBlock;
-    uint256 public blackLastMoveBlock;
-    uint256 public timeoutBlocks;
-
-    // Timeout presets (based on ~12 sec/block on Ethereum)
+    // ========== ENUMS (must be declared before state variables) ==========
     enum TimeoutPreset { Blitz, Rapid, Classical }
-    uint256 public constant BLITZ_BLOCKS = 300;      // ~1 hour
-    uint256 public constant RAPID_BLOCKS = 2100;     // ~7 hours
-    uint256 public constant CLASSICAL_BLOCKS = 50400; // ~7 days
-
-    // Game mode: Tournament (strict validation) vs Friendly (relaxed, illegal moves = loss)
     enum GameMode { Tournament, Friendly }
-    GameMode public gameMode;
+    enum GameState { NotStarted, InProgress, Draw, WhiteWins, BlackWins }
+
+    // ========== CONSTANTS ==========
+    // Timeout presets (based on ~12 sec/block on Ethereum)
+    uint48 public constant BLITZ_BLOCKS = 300;       // ~1 hour
+    uint48 public constant RAPID_BLOCKS = 2100;      // ~7 hours
+    uint48 public constant CLASSICAL_BLOCKS = 50400; // ~7 days
+
+    // ========== STORAGE LAYOUT OPTIMIZED FOR GAS ==========
+    // Slot 1: betting (32 bytes)
+    uint256 public betting;
+
+    // Slot 2: gameId (32 bytes)
+    uint256 public gameId;
+
+    // Slot 3: Anti-cheating contracts (addresses stored separately for external access)
+    BondingManager public bondingManager;  // 20 bytes
+
+    // Slot 4
+    DisputeDAO public disputeDAO;          // 20 bytes
+
+    // Slot 5
+    PlayerRating public playerRating;      // 20 bytes
+
+    // Slot 6: PACKED - timeout tracking + state flags (32 bytes total)
+    // uint48 max = 281 trillion blocks, far exceeds any realistic blockchain lifetime
+    uint48 public whiteLastMoveBlock;      // 6 bytes
+    uint48 public blackLastMoveBlock;      // 6 bytes
+    uint48 public timeoutBlocks;           // 6 bytes
+    GameState private gameState;           // 1 byte
+    GameMode public gameMode;              // 1 byte
+    bool public bondsLocked;               // 1 byte
+    bool public gameRegisteredForDispute;  // 1 byte
+    bool public ratingReported;            // 1 byte
+    bool private prizeClaimed;             // 1 byte
+    bool private initialized;              // 1 byte
+    // Total: 6+6+6+1+1+1+1+1+1+1 = 25 bytes (fits in 1 slot with 7 bytes spare)
 
     // Legacy event (kept for backward compatibility)
     event Debug(int8 player, uint8 startX, uint8 startY, uint8 endX, uint8 endY, string comment);
@@ -66,20 +80,15 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     event DrawByRepetition(address indexed claimant);
     event DrawByFiftyMoveRule(address indexed claimant);
 
-    // Define the GameState enum
-    enum GameState { NotStarted, InProgress, Draw, WhiteWins, BlackWins }
-    // Add a gameState variable to the contract
-    GameState private gameState = GameState.NotStarted;
-
+    // Slot 7: Player addresses
     address whitePlayer;
     address blackPlayer;
     address public currentPlayer;
 
-    // Draw offer tracking
+    // Slot 8: Draw offer tracking
     address public drawOfferedBy;
 
-    // Clone pattern support
-    bool private initialized;
+    // NOTE: initialized is in the packed slot 6 above
 
     /// @notice Modifier to prevent re-initialization
     modifier initializer() {
@@ -163,12 +172,9 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         require(msg.value == betting, "Wrong bet");
         require(blackPlayer == address(0), "Black taken");
 
-        // If bonding is enabled, lock bonds for both players
+        // If bonding is enabled, lock bonds for both players (single external call)
         if (address(bondingManager) != address(0)) {
-            // Lock white's bond (should have been checked in factory, but verify)
-            bondingManager.lockBondForGame(gameId, whitePlayer, betting);
-            // Lock black's bond
-            bondingManager.lockBondForGame(gameId, msg.sender, betting);
+            bondingManager.lockBondsForGame(gameId, whitePlayer, msg.sender, betting);
             bondsLocked = true;
         }
 
@@ -176,7 +182,7 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         gameState = GameState.InProgress;
 
         // Start white's clock (white moves first)
-        whiteLastMoveBlock = block.number;
+        whiteLastMoveBlock = uint48(block.number);
 
         // Record initial position for threefold repetition
         bytes32 posHash = _computePositionHash(true); // White to move
@@ -990,9 +996,9 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         // Update opponent's clock (they now need to move)
         // currentPlayer is still the player who just moved
         if (currentPlayer == whitePlayer) {
-            blackLastMoveBlock = block.number;
+            blackLastMoveBlock = uint48(block.number);
         } else {
-            whiteLastMoveBlock = block.number;
+            whiteLastMoveBlock = uint48(block.number);
         }
 
         // Update 50-move rule counter
