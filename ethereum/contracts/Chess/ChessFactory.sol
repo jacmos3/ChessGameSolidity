@@ -131,6 +131,14 @@ contract ChessFactory {
         deployedChessGames.push(clone);
         totalChessGames++;
 
+        // Register game contract with RewardPool and PlayerRating for O(1) validation
+        if (rewardPool != address(0)) {
+            RewardPool(rewardPool).registerGameContract(clone);
+        }
+        if (playerRating != address(0)) {
+            PlayerRating(playerRating).registerGameContract(clone);
+        }
+
         ChessNFT(addressNFT).createGameNFT(gameId, clone, msg.sender);
 
         emit GameCreated(gameId, clone, msg.sender, msg.value, _timeoutPreset, _gameMode);

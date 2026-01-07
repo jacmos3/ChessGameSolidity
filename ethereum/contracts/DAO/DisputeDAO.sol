@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "../Token/ChessToken.sol";
 import "../Token/BondingManager.sol";
 import "./ArbitratorRegistry.sol";
@@ -19,6 +20,8 @@ import "./ArbitratorRegistry.sol";
  * - Slashing for cheaters, rewards for honest challengers
  */
 contract DisputeDAO is AccessControl, ReentrancyGuard {
+    using SafeERC20 for ChessToken;
+
     bytes32 public constant GAME_MANAGER_ROLE = keccak256("GAME_MANAGER_ROLE");
 
     ChessToken public immutable chessToken;
@@ -57,6 +60,7 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
 
         DisputeState state;
 
+        uint256 registeredAt;      // When game was registered (start of challenge window)
         uint256 challengedAt;
         uint256 commitDeadline;
         uint256 revealDeadline;
@@ -138,6 +142,7 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
             otherPlayer: address(0),
             gameStake: stake,
             state: DisputeState.Pending,
+            registeredAt: block.timestamp,  // Track when challenge window opens
             challengedAt: 0,
             commitDeadline: 0,
             revealDeadline: 0,
@@ -171,11 +176,14 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         require(dispute.state == DisputeState.Pending, "Not in challenge window");
         require(activeChallenges[msg.sender] < MAX_ACTIVE_CHALLENGES, "Too many active challenges");
 
-        // Transfer challenge deposit
+        // Enforce challenge window (48 hours from registration)
         require(
-            chessToken.transferFrom(msg.sender, address(this), challengeDeposit),
-            "Deposit transfer failed"
+            block.timestamp <= dispute.registeredAt + challengeWindow,
+            "Challenge window expired"
         );
+
+        // Transfer challenge deposit (using SafeERC20)
+        chessToken.safeTransferFrom(msg.sender, address(this), challengeDeposit);
 
         dispute.challenger = msg.sender;
         dispute.accusedPlayer = accusedPlayer;
@@ -321,12 +329,49 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         Dispute storage dispute = disputes[disputeId];
         require(dispute.state == DisputeState.Pending, "Not pending");
 
-        // Challenge window implementation would check timestamp
-        // For now, this can be called by game manager after window expires
+        // Enforce that challenge window has actually expired
+        require(
+            block.timestamp > dispute.registeredAt + challengeWindow,
+            "Challenge window still open"
+        );
+
         dispute.state = DisputeState.Resolved;
         dispute.resolved = true;
 
         emit ChallengeWindowClosed(gameId);
+    }
+
+    /**
+     * @notice Check if challenge window is still open for a game
+     * @param gameId Game identifier
+     * @return True if window is still open
+     */
+    function isChallengeWindowOpen(uint256 gameId) external view returns (bool) {
+        uint256 disputeId = gameToDispute[gameId];
+        if (disputeId == 0) return false;
+
+        Dispute storage dispute = disputes[disputeId];
+        if (dispute.state != DisputeState.Pending) return false;
+
+        return block.timestamp <= dispute.registeredAt + challengeWindow;
+    }
+
+    /**
+     * @notice Get time remaining in challenge window
+     * @param gameId Game identifier
+     * @return Seconds remaining (0 if expired or not registered)
+     */
+    function getChallengeWindowRemaining(uint256 gameId) external view returns (uint256) {
+        uint256 disputeId = gameToDispute[gameId];
+        if (disputeId == 0) return 0;
+
+        Dispute storage dispute = disputes[disputeId];
+        if (dispute.state != DisputeState.Pending) return 0;
+
+        uint256 deadline = dispute.registeredAt + challengeWindow;
+        if (block.timestamp >= deadline) return 0;
+
+        return deadline - block.timestamp;
     }
 
     // Internal functions
@@ -337,11 +382,16 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         // Slash cheater's bond (burned)
         bondingManager.slashBond(dispute.gameId, dispute.accusedPlayer);
 
-        // Return challenge deposit + reward to challenger
+        // Return challenge deposit + reward to challenger (using SafeERC20)
         uint256 challengerReward = challengeDeposit + (challengeDeposit / 2); // 150% back
-        if (chessToken.balanceOf(address(this)) >= challengerReward) {
-            chessToken.transfer(dispute.challenger, challengerReward);
+        uint256 balance = chessToken.balanceOf(address(this));
+        if (balance >= challengerReward) {
+            chessToken.safeTransfer(dispute.challenger, challengerReward);
             emit RewardDistributed(disputeId, dispute.challenger, challengerReward);
+        } else if (balance > 0) {
+            // Transfer whatever is available
+            chessToken.safeTransfer(dispute.challenger, balance);
+            emit RewardDistributed(disputeId, dispute.challenger, balance);
         }
     }
 
@@ -349,13 +399,12 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         Dispute storage dispute = disputes[disputeId];
 
         // Challenger loses deposit
-        // 50% to accused (compensation)
+        // 50% to accused (compensation) - using SafeERC20
         uint256 accusedCompensation = challengeDeposit / 2;
-        chessToken.transfer(dispute.accusedPlayer, accusedCompensation);
+        chessToken.safeTransfer(dispute.accusedPlayer, accusedCompensation);
         emit RewardDistributed(disputeId, dispute.accusedPlayer, accusedCompensation);
 
-        // 50% to arbitrators (distributed in _updateArbitratorReputations)
-        // For simplicity, burn the rest or send to treasury
+        // 50% burned (deflationary)
         uint256 remaining = challengeDeposit - accusedCompensation;
         chessToken.burn(remaining);
     }
@@ -365,10 +414,10 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         dispute.escalationLevel++;
 
         if (dispute.escalationLevel >= 3) {
-            // Max escalation reached - return deposits, no penalty
+            // Max escalation reached - return deposits, no penalty (using SafeERC20)
             dispute.resolved = true;
             dispute.state = DisputeState.Resolved;
-            chessToken.transfer(dispute.challenger, challengeDeposit);
+            chessToken.safeTransfer(dispute.challenger, challengeDeposit);
             activeChallenges[dispute.challenger]--;
             return;
         }
