@@ -1,0 +1,5 @@
+# Ignore all deployment JSON files (contain network-specific addresses)
+*.json
+
+# But keep this .gitignore
+!.gitignore
