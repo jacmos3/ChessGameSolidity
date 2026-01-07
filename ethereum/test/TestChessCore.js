@@ -183,4 +183,152 @@ contract("ChessCore - Resign and ClaimPrize", (accounts) => {
       assert.equal(finalBalance.toString(), "0", "Contract should be empty after claim");
     });
   });
+
+  describe("Draw Prize - Pull Pattern (finalizePrizes/withdrawPrize)", () => {
+    beforeEach(async () => {
+      // Offer and accept draw to create draw state
+      await chessCore.offerDraw({ from: whitePlayer });
+      await chessCore.acceptDraw({ from: blackPlayer });
+    });
+
+    it("should have game state as Draw after accepting draw", async () => {
+      const gameState = await chessCore.getGameState();
+      // getGameState() returns: NotStarted=1, InProgress=2, Draw=3, WhiteWins=4, BlackWins=5
+      assert.equal(gameState.toNumber(), 3, "Game state should be Draw (3 from getGameState)");
+    });
+
+    it("should not allow claimPrize for draws - must use finalizePrizes", async () => {
+      try {
+        await chessCore.claimPrize({ from: whitePlayer });
+        assert.fail("Should have thrown an error");
+      } catch (error) {
+        assert.include(error.message, "revert", "Should revert for draws");
+      }
+    });
+
+    it("should allow finalizePrizes to allocate prizes for draw", async () => {
+      await chessCore.finalizePrizes({ from: whitePlayer });
+
+      // Check pending prizes
+      const whitePending = await chessCore.pendingPrize(whitePlayer);
+      const blackPending = await chessCore.pendingPrize(blackPlayer);
+
+      const expectedHalf = BigInt(betAmount);
+      assert.equal(whitePending.toString(), expectedHalf.toString(), "White should have half prize pending");
+      assert.equal(blackPending.toString(), expectedHalf.toString(), "Black should have half prize pending");
+    });
+
+    it("should allow either player to call finalizePrizes", async () => {
+      // Black player calls finalizePrizes
+      await chessCore.finalizePrizes({ from: blackPlayer });
+
+      const whitePending = await chessCore.pendingPrize(whitePlayer);
+      assert.ok(BigInt(whitePending.toString()) > 0n, "White should have pending prize");
+    });
+
+    it("should not allow double finalizePrizes", async () => {
+      await chessCore.finalizePrizes({ from: whitePlayer });
+
+      try {
+        await chessCore.finalizePrizes({ from: blackPlayer });
+        assert.fail("Should have thrown an error");
+      } catch (error) {
+        assert.include(error.message, "revert", "Should revert on double finalize");
+      }
+    });
+
+    it("should allow withdrawPrize after finalizePrizes", async () => {
+      await chessCore.finalizePrizes({ from: whitePlayer });
+
+      const whiteBalanceBefore = BigInt(await web3.eth.getBalance(whitePlayer));
+
+      const tx = await chessCore.withdrawPrize({ from: whitePlayer });
+      const gasUsed = BigInt(tx.receipt.gasUsed);
+      const gasPrice = BigInt((await web3.eth.getTransaction(tx.tx)).gasPrice);
+      const gasCost = gasUsed * gasPrice;
+
+      const whiteBalanceAfter = BigInt(await web3.eth.getBalance(whitePlayer));
+      const expectedPrize = BigInt(betAmount); // Half of total
+
+      const actualIncrease = whiteBalanceAfter - whiteBalanceBefore + gasCost;
+      assert.equal(actualIncrease.toString(), expectedPrize.toString(), "White should receive half prize");
+    });
+
+    it("should allow both players to withdraw independently", async () => {
+      await chessCore.finalizePrizes({ from: whitePlayer });
+
+      // White withdraws
+      await chessCore.withdrawPrize({ from: whitePlayer });
+
+      // Black withdraws
+      const blackBalanceBefore = BigInt(await web3.eth.getBalance(blackPlayer));
+      const tx = await chessCore.withdrawPrize({ from: blackPlayer });
+      const gasUsed = BigInt(tx.receipt.gasUsed);
+      const gasPrice = BigInt((await web3.eth.getTransaction(tx.tx)).gasPrice);
+      const gasCost = gasUsed * gasPrice;
+      const blackBalanceAfter = BigInt(await web3.eth.getBalance(blackPlayer));
+
+      const expectedPrize = BigInt(betAmount);
+      const actualIncrease = blackBalanceAfter - blackBalanceBefore + gasCost;
+      assert.equal(actualIncrease.toString(), expectedPrize.toString(), "Black should receive half prize");
+
+      // Contract should be empty
+      const contractBalance = await web3.eth.getBalance(chessCore.address);
+      assert.equal(contractBalance.toString(), "0", "Contract should be empty");
+    });
+
+    it("should not allow withdrawPrize before finalizePrizes", async () => {
+      // Reset to fresh draw game
+      const chessCoreImpl = await ChessCore.new();
+      const newFactory = await ChessFactory.new(chessCoreImpl.address);
+      const tx = await newFactory.createChessGame(2, 0, { from: whitePlayer, value: betAmount });
+      const deployedGames = await newFactory.getDeployedChessGames();
+      const newGame = await ChessCore.at(deployedGames[0]);
+      await newGame.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+      await newGame.offerDraw({ from: whitePlayer });
+      await newGame.acceptDraw({ from: blackPlayer });
+
+      try {
+        await newGame.withdrawPrize({ from: whitePlayer });
+        assert.fail("Should have thrown an error");
+      } catch (error) {
+        assert.include(error.message, "revert", "Should revert before finalize");
+      }
+    });
+
+    it("should not allow double withdrawPrize", async () => {
+      await chessCore.finalizePrizes({ from: whitePlayer });
+      await chessCore.withdrawPrize({ from: whitePlayer });
+
+      try {
+        await chessCore.withdrawPrize({ from: whitePlayer });
+        assert.fail("Should have thrown an error");
+      } catch (error) {
+        assert.include(error.message, "revert", "Should revert on double withdraw");
+      }
+    });
+
+    it("should emit PrizeClaimed event on withdrawPrize", async () => {
+      await chessCore.finalizePrizes({ from: whitePlayer });
+      const tx = await chessCore.withdrawPrize({ from: whitePlayer });
+
+      assert.equal(tx.logs.length, 1, "Should emit one event");
+      assert.equal(tx.logs[0].event, "PrizeClaimed", "Should be PrizeClaimed event");
+      assert.equal(tx.logs[0].args.winner, whitePlayer, "Winner should be white");
+
+      const expectedPrize = BigInt(betAmount);
+      assert.equal(tx.logs[0].args.amount.toString(), expectedPrize.toString(), "Amount should be half prize");
+    });
+
+    it("should not allow non-players to withdraw", async () => {
+      await chessCore.finalizePrizes({ from: whitePlayer });
+
+      try {
+        await chessCore.withdrawPrize({ from: nonPlayer });
+        assert.fail("Should have thrown an error");
+      } catch (error) {
+        assert.include(error.message, "revert", "Should revert for non-players");
+      }
+    });
+  });
 });

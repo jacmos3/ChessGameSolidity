@@ -276,7 +276,31 @@ contract("DisputeDAO", (accounts) => {
       await disputeDAO.registerGame(gameId, player1, player2, stake, { from: gameManager });
     });
 
-    it("should close challenge window if not challenged", async () => {
+    it("should not close window before 48 hours expire", async () => {
+      // Try to close immediately - should fail
+      try {
+        await disputeDAO.closeChallengeWindow(gameId);
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert", "Should revert before window expires");
+      }
+    });
+
+    it("should close challenge window after 48 hours if not challenged", async () => {
+      // Advance time by 48 hours + 1 second
+      await web3.currentProvider.send({
+        jsonrpc: "2.0",
+        method: "evm_increaseTime",
+        params: [48 * 3600 + 1],
+        id: new Date().getTime()
+      }, () => {});
+      await web3.currentProvider.send({
+        jsonrpc: "2.0",
+        method: "evm_mine",
+        params: [],
+        id: new Date().getTime()
+      }, () => {});
+
       await disputeDAO.closeChallengeWindow(gameId);
 
       const dispute = await disputeDAO.getDispute(1);
@@ -286,12 +310,100 @@ contract("DisputeDAO", (accounts) => {
     it("should not close window if already challenged", async () => {
       await disputeDAO.challenge(gameId, player1, { from: challenger });
 
+      // Advance time
+      await web3.currentProvider.send({
+        jsonrpc: "2.0",
+        method: "evm_increaseTime",
+        params: [48 * 3600 + 1],
+        id: new Date().getTime()
+      }, () => {});
+      await web3.currentProvider.send({
+        jsonrpc: "2.0",
+        method: "evm_mine",
+        params: [],
+        id: new Date().getTime()
+      }, () => {});
+
       try {
         await disputeDAO.closeChallengeWindow(gameId);
         assert.fail("Should have reverted");
       } catch (error) {
-        assert.include(error.message, "revert");
+        assert.include(error.message, "revert", "Should revert if not pending");
       }
+    });
+  });
+
+  describe("Challenge Window Timestamp Enforcement", () => {
+    const gameId = 1;
+    const stake = web3.utils.toWei("0.1", "ether");
+
+    beforeEach(async () => {
+      await disputeDAO.registerGame(gameId, player1, player2, stake, { from: gameManager });
+    });
+
+    it("should allow challenge within 48 hours", async () => {
+      // Challenge immediately - should work
+      await disputeDAO.challenge(gameId, player1, { from: challenger });
+
+      const dispute = await disputeDAO.getDispute(1);
+      assert.equal(dispute.state.toString(), "2"); // Challenged
+    });
+
+    it("should reject challenge after 48 hours", async () => {
+      // Advance time by 48 hours + 1 second
+      await web3.currentProvider.send({
+        jsonrpc: "2.0",
+        method: "evm_increaseTime",
+        params: [48 * 3600 + 1],
+        id: new Date().getTime()
+      }, () => {});
+      await web3.currentProvider.send({
+        jsonrpc: "2.0",
+        method: "evm_mine",
+        params: [],
+        id: new Date().getTime()
+      }, () => {});
+
+      try {
+        await disputeDAO.challenge(gameId, player1, { from: challenger });
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert", "Should revert after window expires");
+      }
+    });
+
+    it("should return correct isChallengeWindowOpen status initially", async () => {
+      // Should be open immediately after registration
+      const isOpen = await disputeDAO.isChallengeWindowOpen(gameId);
+      assert.equal(isOpen, true, "Window should be open initially");
+    });
+
+    it("should return correct getChallengeWindowRemaining", async () => {
+      // Get remaining time immediately after registration
+      const remaining = await disputeDAO.getChallengeWindowRemaining(gameId);
+
+      // Should be greater than 0 (window is open)
+      assert.isTrue(
+        remaining.toNumber() > 0,
+        `Remaining time should be > 0, got ${remaining.toNumber()}`
+      );
+    });
+
+    it("should return false for isChallengeWindowOpen on non-registered game", async () => {
+      const isOpen = await disputeDAO.isChallengeWindowOpen(999);
+      assert.equal(isOpen, false, "Should return false for non-registered game");
+    });
+
+    it("should return 0 remaining for non-registered game", async () => {
+      const remaining = await disputeDAO.getChallengeWindowRemaining(999);
+      assert.equal(remaining.toString(), "0", "Should return 0 for non-registered game");
+    });
+
+    it("should return false for isChallengeWindowOpen after challenge", async () => {
+      await disputeDAO.challenge(gameId, player1, { from: challenger });
+
+      const isOpen = await disputeDAO.isChallengeWindowOpen(gameId);
+      assert.equal(isOpen, false, "Should return false after challenge (state not Pending)");
     });
   });
 
