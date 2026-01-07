@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.24;
 
 import "./ChessCore.sol";
 import "./ChessNFT.sol";
 import "../Token/BondingManager.sol";
+import "../Rating/PlayerRating.sol";
 
 contract ChessFactory {
     address[] public deployedChessGames;
@@ -13,6 +14,7 @@ contract ChessFactory {
     // Anti-cheating system contracts
     address public bondingManager;
     address public disputeDAO;
+    address public playerRating;
     address public owner;
 
     // Bet limits (can be adjusted for different networks)
@@ -29,6 +31,7 @@ contract ChessFactory {
     );
     event BondingManagerUpdated(address indexed oldAddress, address indexed newAddress);
     event DisputeDAOUpdated(address indexed oldAddress, address indexed newAddress);
+    event PlayerRatingUpdated(address indexed oldAddress, address indexed newAddress);
 
     modifier onlyOwner() {
         require(msg.sender == owner, "Not owner");
@@ -53,6 +56,13 @@ contract ChessFactory {
     function setDisputeDAO(address _disputeDAO) external onlyOwner {
         emit DisputeDAOUpdated(disputeDAO, _disputeDAO);
         disputeDAO = _disputeDAO;
+    }
+
+    /// @notice Set the PlayerRating contract address
+    /// @param _playerRating Address of PlayerRating (address(0) to disable)
+    function setPlayerRating(address _playerRating) external onlyOwner {
+        emit PlayerRatingUpdated(playerRating, _playerRating);
+        playerRating = _playerRating;
     }
 
     /// @notice Transfer ownership
@@ -82,7 +92,8 @@ contract ChessFactory {
             _gameMode,
             gameId,
             bondingManager,
-            disputeDAO
+            disputeDAO,
+            playerRating
         );
         address toRet = address(newChessGame);
         deployedChessGames.push(toRet);

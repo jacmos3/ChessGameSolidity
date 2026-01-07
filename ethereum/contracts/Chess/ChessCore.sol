@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/utils/Strings.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./ChessBoard.sol";
 import "../Token/BondingManager.sol";
 import "../DAO/DisputeDAO.sol";
+import "../Rating/PlayerRating.sol";
 
 /// @title ChessCore - Main chess game logic
 /// @notice Inherits from ChessBoard and implements move validation and game state
@@ -15,9 +16,11 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     // Anti-cheating system integration
     BondingManager public bondingManager;
     DisputeDAO public disputeDAO;
+    PlayerRating public playerRating;
     uint256 public gameId;
     bool public bondsLocked;
     bool public gameRegisteredForDispute;
+    bool public ratingReported;
 
     // Per-player timeout tracking
     uint256 public whiteLastMoveBlock;
@@ -60,6 +63,8 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     event DrawOffered(address indexed player);
     event DrawOfferDeclined(address indexed player);
     event DrawAccepted();
+    event DrawByRepetition(address indexed claimant);
+    event DrawByFiftyMoveRule(address indexed claimant);
 
     // Define the GameState enum
     enum GameState { NotStarted, InProgress, Draw, WhiteWins, BlackWins }
@@ -80,7 +85,8 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         GameMode _mode,
         uint256 _gameId,
         address _bondingManager,
-        address _disputeDAO
+        address _disputeDAO,
+        address _playerRating
     ) payable {
         // Chiamare initializeBoard nel costruttore
         initializeBoard();
@@ -96,6 +102,9 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         }
         if (_disputeDAO != address(0)) {
             disputeDAO = DisputeDAO(_disputeDAO);
+        }
+        if (_playerRating != address(0)) {
+            playerRating = PlayerRating(_playerRating);
         }
 
         // Set timeout based on preset
@@ -147,6 +156,11 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         // Start white's clock (white moves first)
         whiteLastMoveBlock = block.number;
 
+        // Record initial position for threefold repetition
+        bytes32 posHash = _computePositionHash(true); // White to move
+        positionHistory.push(posHash);
+        positionCount[posHash] = 1;
+
         emit GameStarted(whitePlayer, blackPlayer, betting);
         emit GameStateChanged(GameState.InProgress);
     }
@@ -165,6 +179,27 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         if (address(bondingManager) != address(0) && bondsLocked) {
             bondingManager.releaseBond(gameId, whitePlayer);
             bondingManager.releaseBond(gameId, blackPlayer);
+        }
+    }
+
+    /// @notice Report game result to rating system
+    function _reportRating() internal {
+        if (address(playerRating) != address(0) && !ratingReported && blackPlayer != address(0)) {
+            ratingReported = true;
+
+            // Determine result: 0 = draw, 1 = white wins, 2 = black wins
+            uint8 result;
+            if (gameState == GameState.Draw) {
+                result = 0;
+            } else if (gameState == GameState.WhiteWins) {
+                result = 1;
+            } else if (gameState == GameState.BlackWins) {
+                result = 2;
+            } else {
+                return; // Game not finished
+            }
+
+            try playerRating.reportGame(whitePlayer, blackPlayer, result) {} catch {}
         }
     }
 
@@ -220,6 +255,9 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
 
         // Release bonds if bonding was used
         _releaseBonds();
+
+        // Report game result to rating system
+        _reportRating();
 
         prizeClaimed = true;
         uint256 totalPrize = address(this).balance;
@@ -317,6 +355,38 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     /// @notice Get current draw offer status
     function getDrawOfferStatus() external view returns (address) {
         return drawOfferedBy;
+    }
+
+    /// @notice Claim draw by threefold repetition
+    /// @dev Can be called by either player when position has occurred 3+ times
+    function claimDrawByRepetition() external {
+        require(msg.sender == whitePlayer || msg.sender == blackPlayer, "Not player");
+        require(gameState == GameState.InProgress, "Not in progress");
+
+        // Check current position count
+        bool isWhiteTurn = (currentPlayer == whitePlayer);
+        bytes32 posHash = _computePositionHash(isWhiteTurn);
+        require(positionCount[posHash] >= 3, "Position not repeated 3 times");
+
+        gameState = GameState.Draw;
+        _registerGameForDispute();
+
+        emit DrawByRepetition(msg.sender);
+        emit GameStateChanged(GameState.Draw);
+    }
+
+    /// @notice Claim draw by 50-move rule
+    /// @dev Can be called by either player when 50 moves have passed without pawn move or capture
+    function claimDrawByFiftyMoveRule() external {
+        require(msg.sender == whitePlayer || msg.sender == blackPlayer, "Not player");
+        require(gameState == GameState.InProgress, "Not in progress");
+        require(halfMoveClock >= 100, "50 moves not reached"); // 100 half-moves = 50 full moves
+
+        gameState = GameState.Draw;
+        _registerGameForDispute();
+
+        emit DrawByFiftyMoveRule(msg.sender);
+        emit GameStateChanged(GameState.Draw);
     }
 
     /// @notice Claim victory when opponent has not moved within timeout period
@@ -903,7 +973,31 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
             whiteLastMoveBlock = block.number;
         }
 
+        // Update 50-move rule counter
+        // Reset if pawn moved or capture occurred, otherwise increment
+        bool isPawnMove = (abs(movingPiece) == uint8(PAWN));
+        bool isCapture = (targetPiece != EMPTY) ||
+                         (isPawnMove && abs(int8(endY) - int8(startY)) == 1 && targetPiece == EMPTY); // en passant
+
+        if (isPawnMove || isCapture) {
+            halfMoveClock = 0;
+        } else {
+            halfMoveClock++;
+        }
+
         switchTurn();
+
+        // Track position for threefold repetition (after turn switch)
+        // Only track if game is still in progress
+        if (gameState == GameState.InProgress) {
+            bool isWhiteTurn = (currentPlayer == whitePlayer);
+            bytes32 posHash = _computePositionHash(isWhiteTurn);
+
+            if (positionCount[posHash] == 0) {
+                positionHistory.push(posHash);
+            }
+            positionCount[posHash]++;
+        }
     }
 
     /// @notice Build a comment string for the move event (simplified for size)
