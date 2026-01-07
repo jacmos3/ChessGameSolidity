@@ -4,6 +4,7 @@
 	let activeSection = 'getting-started';
 
 	const sections = [
+		{ id: 'new-to-crypto', title: 'New to Crypto?', icon: '🌟' },
 		{ id: 'getting-started', title: 'Getting Started', icon: '🚀' },
 		{ id: 'wallet', title: 'Connecting Wallet', icon: '👛' },
 		{ id: 'bonds', title: 'Bond System', icon: '🔒' },
@@ -12,6 +13,7 @@
 		{ id: 'disputes', title: 'Dispute Resolution', icon: '⚖️' },
 		{ id: 'arbitrator', title: 'Becoming an Arbitrator', icon: '🏛️' },
 		{ id: 'governance', title: 'Governance', icon: '🗳️' },
+		{ id: 'glossary', title: 'Glossary', icon: '📖' },
 		{ id: 'faq', title: 'FAQ', icon: '❓' }
 	];
 
@@ -58,6 +60,62 @@
 
 		<!-- Main Content -->
 		<main class="flex-1 max-w-3xl">
+			<!-- New to Crypto -->
+			<section id="new-to-crypto" class="card mb-8">
+				<h2 class="font-display text-2xl mb-6 flex items-center gap-3">
+					<span class="text-3xl">🌟</span> New to Crypto? Start Here!
+				</h2>
+
+				<p class="text-chess-light mb-6">
+					Never used cryptocurrency before? No problem! Here's a quick guide to get you started.
+				</p>
+
+				<div class="space-y-6">
+					<div class="p-4 bg-chess-darker rounded-lg">
+						<h3 class="font-semibold text-lg mb-2">What is a Wallet?</h3>
+						<p class="text-chess-light text-sm">
+							A <strong>wallet</strong> is like a digital bank account for cryptocurrency.
+							Unlike a regular bank, YOU control it completely - no company can freeze your funds.
+							We recommend <a href="https://metamask.io" target="_blank" class="text-chess-accent hover:underline">MetaMask</a> for beginners.
+						</p>
+					</div>
+
+					<div class="p-4 bg-chess-darker rounded-lg">
+						<h3 class="font-semibold text-lg mb-2">What is ETH?</h3>
+						<p class="text-chess-light text-sm">
+							<strong>ETH (Ether)</strong> is the currency of Ethereum. You need it to pay small fees
+							(called "gas") for every action, and to bet on games.
+						</p>
+					</div>
+
+					<div class="p-4 bg-chess-darker rounded-lg">
+						<h3 class="font-semibold text-lg mb-2">What is Gas?</h3>
+						<p class="text-chess-light text-sm">
+							<strong>Gas</strong> is a small fee you pay to process transactions.
+							Think of it like postage for sending a letter - the network charges a fee to deliver your request.
+						</p>
+					</div>
+
+					<div class="p-4 bg-chess-darker rounded-lg">
+						<h3 class="font-semibold text-lg mb-2">What are CHESS Tokens?</h3>
+						<p class="text-chess-light text-sm">
+							<strong>CHESS</strong> is the special token for this platform. You use it to post a
+							security deposit (bond) that proves you won't cheat. You get it back after your games complete!
+						</p>
+					</div>
+
+					<div class="p-4 bg-chess-accent/10 border border-chess-accent/30 rounded-lg">
+						<h3 class="font-semibold mb-2 text-chess-accent">Quick Start Steps</h3>
+						<ol class="list-decimal list-inside text-chess-light text-sm space-y-1">
+							<li>Install <a href="https://metamask.io" target="_blank" class="text-chess-accent hover:underline">MetaMask</a> browser extension</li>
+							<li>Create a wallet and <strong>save your recovery phrase safely!</strong></li>
+							<li>Get some ETH (buy on Coinbase/Binance or use a testnet for practice)</li>
+							<li>Connect your wallet and start playing!</li>
+						</ol>
+					</div>
+				</div>
+			</section>
+
 			<!-- Getting Started -->
 			<section id="getting-started" class="card mb-8">
 				<h2 class="font-display text-2xl mb-6 flex items-center gap-3">
@@ -310,7 +368,8 @@
 				<h3 class="text-lg font-semibold mb-3">What is a Dispute?</h3>
 				<p class="text-chess-light mb-6">
 					If you suspect your opponent cheated (used an engine, exploited a bug, etc.),
-					you can challenge the game result within 48 hours.
+					you can challenge the game result within 48 hours. The entire dispute process
+					has a maximum duration of 30 days.
 				</p>
 
 				<h3 class="text-lg font-semibold mb-3">How to Challenge</h3>
@@ -410,6 +469,70 @@
 				</div>
 			</section>
 
+			<!-- Glossary -->
+			<section id="glossary" class="card mb-8">
+				<h2 class="font-display text-2xl mb-6 flex items-center gap-3">
+					<span class="text-3xl">📖</span> Glossary
+				</h2>
+
+				<p class="text-chess-light mb-4">Common terms explained in simple language:</p>
+
+				<div class="overflow-x-auto">
+					<table class="w-full text-sm">
+						<tbody class="text-chess-light">
+							<tr class="border-b border-chess-dark">
+								<td class="py-3 font-medium w-1/3">Wallet</td>
+								<td class="py-3">Your digital account for cryptocurrency. You control it with a secret phrase.</td>
+							</tr>
+							<tr class="border-b border-chess-dark">
+								<td class="py-3 font-medium">ETH (Ether)</td>
+								<td class="py-3">The main currency of Ethereum, used to pay fees and bet on games.</td>
+							</tr>
+							<tr class="border-b border-chess-dark">
+								<td class="py-3 font-medium">Gas</td>
+								<td class="py-3">A small fee for every action (like postage for sending a letter).</td>
+							</tr>
+							<tr class="border-b border-chess-dark">
+								<td class="py-3 font-medium">Transaction</td>
+								<td class="py-3">Any action on blockchain (making moves, joining games, etc.).</td>
+							</tr>
+							<tr class="border-b border-chess-dark">
+								<td class="py-3 font-medium">Smart Contract</td>
+								<td class="py-3">Code that runs on blockchain. Games are smart contracts that enforce chess rules automatically.</td>
+							</tr>
+							<tr class="border-b border-chess-dark">
+								<td class="py-3 font-medium">Bond</td>
+								<td class="py-3">A security deposit to prove you won't cheat. You get it back after games.</td>
+							</tr>
+							<tr class="border-b border-chess-dark">
+								<td class="py-3 font-medium">Stake</td>
+								<td class="py-3">The ETH you bet on a game. Winner takes both players' stakes.</td>
+							</tr>
+							<tr class="border-b border-chess-dark">
+								<td class="py-3 font-medium">CHESS Token</td>
+								<td class="py-3">The governance token used for bonding, voting, and rewards.</td>
+							</tr>
+							<tr class="border-b border-chess-dark">
+								<td class="py-3 font-medium">ELO Rating</td>
+								<td class="py-3">A number showing your skill level. Higher = better. Starts at 1200.</td>
+							</tr>
+							<tr class="border-b border-chess-dark">
+								<td class="py-3 font-medium">Testnet</td>
+								<td class="py-3">A practice network with free fake tokens. Great for learning!</td>
+							</tr>
+							<tr class="border-b border-chess-dark">
+								<td class="py-3 font-medium">Mainnet</td>
+								<td class="py-3">The real Ethereum network where real money is at stake.</td>
+							</tr>
+							<tr>
+								<td class="py-3 font-medium">Layer 2 (L2)</td>
+								<td class="py-3">Faster, cheaper networks built on Ethereum (Arbitrum, Optimism, Base).</td>
+							</tr>
+						</tbody>
+					</table>
+				</div>
+			</section>
+
 			<!-- FAQ -->
 			<section id="faq" class="card mb-8">
 				<h2 class="font-display text-2xl mb-6 flex items-center gap-3">
@@ -482,7 +605,8 @@
 						</summary>
 						<div class="px-4 pb-4 text-chess-light">
 							Chess logic validation on-chain is complex. We've optimized where possible,
-							but full move validation has computational costs. Consider playing on L2 networks when available.
+							but full move validation has computational costs. Consider playing on Layer 2 networks
+							(like Arbitrum, Optimism, or Base) when available - these are faster and much cheaper!
 						</div>
 					</details>
 				</div>
