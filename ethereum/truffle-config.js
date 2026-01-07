@@ -36,23 +36,42 @@ module.exports = {
    */
 
   networks: {
-    // Useful for testing. The `development` name is special - truffle uses it by default
-    // if it's defined here and no other network is specified at the command line.
-    // You should run a client (like ganache, geth, or parity) in a separate terminal
-    // tab if you use this network and you must also set the `host`, `port` and `network_id`
-    // options below to some value.
-    //
-     development: {
-      host: "127.0.0.1",     // Localhost (default: none)
-      port: 7545,            // Standard Ethereum port (default: none)
-      network_id: "*",       // Any network (default: none)
-     },
-    //
-     goerli: {
-       provider: () => new HDWalletProvider(mnemonic, `https://goerli.infura.io/v3/${infuraProjectId}`),
-       network_id: 5,       // Goerli's id
-       chain_id: 5
-     }
+    // Local development with Ganache
+    development: {
+      host: "127.0.0.1",
+      port: 7545,
+      network_id: "*",
+    },
+
+    // Base Sepolia Testnet
+    base_sepolia: {
+      provider: () => new HDWalletProvider(
+        mnemonic,
+        process.env.BASE_SEPOLIA_RPC || 'https://sepolia.base.org'
+      ),
+      network_id: 84532,
+      chain_id: 84532,
+      gas: 8000000,
+      gasPrice: 1000000, // 0.001 gwei
+      confirmations: 2,
+      timeoutBlocks: 200,
+      skipDryRun: true
+    },
+
+    // Base Mainnet
+    base: {
+      provider: () => new HDWalletProvider(
+        mnemonic,
+        process.env.BASE_MAINNET_RPC || 'https://mainnet.base.org'
+      ),
+      network_id: 8453,
+      chain_id: 8453,
+      gas: 8000000,
+      gasPrice: 1000000, // 0.001 gwei
+      confirmations: 2,
+      timeoutBlocks: 200,
+      skipDryRun: true
+    }
   },
 
   // Set default mocha options here, use special reporters etc.

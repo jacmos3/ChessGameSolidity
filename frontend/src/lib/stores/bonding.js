@@ -6,22 +6,20 @@ import { ethers } from 'ethers';
 import BondingManagerABI from '../contracts/BondingManager.json';
 import ChessTokenABI from '../contracts/ChessToken.json';
 
-// BondingManager contract addresses per network
+// BondingManager contract addresses per network (Base only)
 const BONDING_MANAGER_ADDRESSES = {
 	1337: import.meta.env.VITE_BONDING_MANAGER_LOCAL || '',
 	5777: import.meta.env.VITE_BONDING_MANAGER_LOCAL || '',
-	11155111: import.meta.env.VITE_BONDING_MANAGER_SEPOLIA || '',
-	17000: import.meta.env.VITE_BONDING_MANAGER_HOLESKY || '',
-	59141: import.meta.env.VITE_BONDING_MANAGER_LINEA || ''
+	84532: import.meta.env.VITE_BONDING_MANAGER_BASE_SEPOLIA || '',
+	8453: import.meta.env.VITE_BONDING_MANAGER_BASE || ''
 };
 
-// ChessToken contract addresses per network
+// ChessToken contract addresses per network (Base only)
 const CHESS_TOKEN_ADDRESSES = {
 	1337: import.meta.env.VITE_CHESS_TOKEN_LOCAL || '',
 	5777: import.meta.env.VITE_CHESS_TOKEN_LOCAL || '',
-	11155111: import.meta.env.VITE_CHESS_TOKEN_SEPOLIA || '',
-	17000: import.meta.env.VITE_CHESS_TOKEN_HOLESKY || '',
-	59141: import.meta.env.VITE_CHESS_TOKEN_LINEA || ''
+	84532: import.meta.env.VITE_CHESS_TOKEN_BASE_SEPOLIA || '',
+	8453: import.meta.env.VITE_CHESS_TOKEN_BASE || ''
 };
 
 // Bonding state store

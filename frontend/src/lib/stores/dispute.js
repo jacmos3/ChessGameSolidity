@@ -7,29 +7,26 @@ import DisputeDAOABI from '../contracts/DisputeDAO.json';
 import ArbitratorRegistryABI from '../contracts/ArbitratorRegistry.json';
 import ChessTokenABI from '../contracts/ChessToken.json';
 
-// Contract addresses per network
+// Contract addresses per network (Base only)
 const DISPUTE_DAO_ADDRESSES = {
 	1337: import.meta.env.VITE_DISPUTE_DAO_LOCAL || '',
 	5777: import.meta.env.VITE_DISPUTE_DAO_LOCAL || '',
-	11155111: import.meta.env.VITE_DISPUTE_DAO_SEPOLIA || '',
-	17000: import.meta.env.VITE_DISPUTE_DAO_HOLESKY || '',
-	59141: import.meta.env.VITE_DISPUTE_DAO_LINEA || ''
+	84532: import.meta.env.VITE_DISPUTE_DAO_BASE_SEPOLIA || '',
+	8453: import.meta.env.VITE_DISPUTE_DAO_BASE || ''
 };
 
 const ARBITRATOR_REGISTRY_ADDRESSES = {
 	1337: import.meta.env.VITE_ARBITRATOR_REGISTRY_LOCAL || '',
 	5777: import.meta.env.VITE_ARBITRATOR_REGISTRY_LOCAL || '',
-	11155111: import.meta.env.VITE_ARBITRATOR_REGISTRY_SEPOLIA || '',
-	17000: import.meta.env.VITE_ARBITRATOR_REGISTRY_HOLESKY || '',
-	59141: import.meta.env.VITE_ARBITRATOR_REGISTRY_LINEA || ''
+	84532: import.meta.env.VITE_ARBITRATOR_REGISTRY_BASE_SEPOLIA || '',
+	8453: import.meta.env.VITE_ARBITRATOR_REGISTRY_BASE || ''
 };
 
 const CHESS_TOKEN_ADDRESSES = {
 	1337: import.meta.env.VITE_CHESS_TOKEN_LOCAL || '',
 	5777: import.meta.env.VITE_CHESS_TOKEN_LOCAL || '',
-	11155111: import.meta.env.VITE_CHESS_TOKEN_SEPOLIA || '',
-	17000: import.meta.env.VITE_CHESS_TOKEN_HOLESKY || '',
-	59141: import.meta.env.VITE_CHESS_TOKEN_LINEA || ''
+	84532: import.meta.env.VITE_CHESS_TOKEN_BASE_SEPOLIA || '',
+	8453: import.meta.env.VITE_CHESS_TOKEN_BASE || ''
 };
 
 // Dispute states enum (matches contract)
