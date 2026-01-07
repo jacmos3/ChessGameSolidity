@@ -44,6 +44,9 @@ contract RewardPool is Ownable, ReentrancyGuard {
     uint256 public rewardPool;
     uint256 public rewardPoolCapacity;  // Used for decay calculation
 
+    // Valid game contracts (prevents DOS from iterating all games)
+    mapping(address => bool) public validGameContracts;
+
     // Faucet tracking
     mapping(address => bool) public hasClaimed;
 
@@ -250,20 +253,17 @@ contract RewardPool is Ownable, ReentrancyGuard {
     // ========== INTERNAL FUNCTIONS ==========
 
     /// @notice Check if caller is a valid game contract
+    /// @dev Uses mapping for O(1) lookup instead of O(n) iteration
     function _isValidGameContract(address caller) internal view returns (bool) {
-        if (chessFactory == address(0)) return false;
+        return validGameContracts[caller];
+    }
 
-        (bool success, bytes memory data) = chessFactory.staticcall(
-            abi.encodeWithSignature("getDeployedChessGames()")
-        );
-
-        if (!success) return false;
-
-        address[] memory games = abi.decode(data, (address[]));
-        for (uint256 i = 0; i < games.length; i++) {
-            if (games[i] == caller) return true;
-        }
-        return false;
+    /// @notice Register a game contract as valid (called by ChessFactory)
+    /// @param gameContract Address of the deployed game contract
+    function registerGameContract(address gameContract) external {
+        require(msg.sender == chessFactory, "Only factory");
+        require(gameContract != address(0), "Invalid address");
+        validGameContracts[gameContract] = true;
     }
 
     /// @notice Check if player can receive reward

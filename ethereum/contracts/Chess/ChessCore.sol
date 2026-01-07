@@ -97,6 +97,9 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     // Slot 8: Draw offer tracking
     address public drawOfferedBy;
 
+    // Prize claim tracking for pull pattern (prevents locked funds)
+    mapping(address => uint256) public pendingPrize;
+
     // NOTE: initialized is in the packed slot 6 above
 
     /// @notice Modifier to prevent re-initialization
@@ -198,10 +201,8 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         // Start white's clock (white moves first)
         whiteLastMoveBlock = uint48(block.number);
 
-        // Record initial position for threefold repetition
-        bytes32 posHash = _computePositionHash(true); // White to move
-        positionHistory.push(posHash);
-        positionCount[posHash] = 1;
+        // NOTE: Initial position already recorded in initialize()
+        // No need to record again here - was causing duplicate entries
 
         emit GameStarted(whitePlayer, blackPlayer, betting);
         emit GameStateChanged(GameState.InProgress);
@@ -308,8 +309,10 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
                state == DisputeDAO.DisputeState.Pending;
     }
 
-    function claimPrize() external nonReentrant {
-        require(!prizeClaimed, "Already claimed");
+    /// @notice Finalize game and allocate prizes (must be called before withdrawPrize)
+    /// @dev Uses pull pattern to prevent locked funds if one player's address reverts
+    function finalizePrizes() external nonReentrant {
+        require(!prizeClaimed, "Already finalized");
         require(
             gameState == GameState.WhiteWins ||
             gameState == GameState.BlackWins ||
@@ -340,30 +343,81 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         prizeClaimed = true;
         uint256 totalPrize = address(this).balance;
 
+        // Allocate prizes using pull pattern (each player withdraws separately)
         if (gameState == GameState.WhiteWins) {
-            require(msg.sender == whitePlayer, "Not winner");
-            (bool success, ) = payable(whitePlayer).call{value: totalPrize}("");
-            require(success, "Transfer failed");
-            emit PrizeClaimed(whitePlayer, totalPrize);
+            pendingPrize[whitePlayer] = totalPrize;
         }
         else if (gameState == GameState.BlackWins) {
-            require(msg.sender == blackPlayer, "Not winner");
-            (bool success, ) = payable(blackPlayer).call{value: totalPrize}("");
-            require(success, "Transfer failed");
-            emit PrizeClaimed(blackPlayer, totalPrize);
+            pendingPrize[blackPlayer] = totalPrize;
         }
         else if (gameState == GameState.Draw) {
             uint256 halfPrize = totalPrize / 2;
             uint256 remainingPrize = totalPrize - halfPrize;
-
-            (bool successWhite, ) = payable(whitePlayer).call{value: halfPrize}("");
-            require(successWhite, "Transfer failed");
-            emit PrizeClaimed(whitePlayer, halfPrize);
-
-            (bool successBlack, ) = payable(blackPlayer).call{value: remainingPrize}("");
-            require(successBlack, "Transfer failed");
-            emit PrizeClaimed(blackPlayer, remainingPrize);
+            pendingPrize[whitePlayer] = halfPrize;
+            pendingPrize[blackPlayer] = remainingPrize;
         }
+    }
+
+    /// @notice Withdraw allocated prize (pull pattern)
+    /// @dev Each player calls this to withdraw their prize after finalizePrizes()
+    function withdrawPrize() external nonReentrant {
+        uint256 amount = pendingPrize[msg.sender];
+        require(amount > 0, "No prize to claim");
+
+        pendingPrize[msg.sender] = 0;
+
+        (bool success, ) = payable(msg.sender).call{value: amount}("");
+        require(success, "Transfer failed");
+
+        emit PrizeClaimed(msg.sender, amount);
+    }
+
+    /// @notice Legacy function for backward compatibility - finalizes and withdraws in one call
+    /// @dev Only works for winner in win scenarios, not for draws
+    function claimPrize() external nonReentrant {
+        require(!prizeClaimed, "Already claimed");
+        require(
+            gameState == GameState.WhiteWins ||
+            gameState == GameState.BlackWins ||
+            gameState == GameState.Draw,
+            "Not finished"
+        );
+
+        // For draws, must use finalizePrizes() + withdrawPrize() pattern
+        require(gameState != GameState.Draw, "Use finalizePrizes() for draws");
+
+        // Verify caller is the winner
+        if (gameState == GameState.WhiteWins) {
+            require(msg.sender == whitePlayer, "Not winner");
+        } else {
+            require(msg.sender == blackPlayer, "Not winner");
+        }
+
+        // Register game for dispute if not already done
+        _registerGameForDispute();
+
+        // If dispute system is active, check that we can claim
+        if (address(disputeDAO) != address(0)) {
+            require(canClaimPrize(), "Dispute in progress or challenge window open");
+
+            uint256 disputeId = disputeDAO.gameToDispute(gameId);
+            if (disputeId != 0) {
+                try disputeDAO.closeChallengeWindow(gameId) {} catch {}
+            }
+        }
+
+        // Release bonds if bonding was used
+        _releaseBonds();
+
+        // Report game result to rating system
+        _reportRating();
+
+        prizeClaimed = true;
+        uint256 totalPrize = address(this).balance;
+
+        (bool success, ) = payable(msg.sender).call{value: totalPrize}("");
+        require(success, "Transfer failed");
+        emit PrizeClaimed(msg.sender, totalPrize);
     }
 
     function resign() external {

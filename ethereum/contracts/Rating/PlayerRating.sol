@@ -12,6 +12,9 @@ contract PlayerRating is AccessControl {
     // ChessFactory address for validating game contracts
     address public chessFactory;
 
+    // Valid game contracts mapping (prevents DOS from iterating all games)
+    mapping(address => bool) public validGameContracts;
+
     // Default starting rating (1200 is standard for new players)
     uint256 public constant DEFAULT_RATING = 1200;
 
@@ -72,21 +75,17 @@ contract PlayerRating is AccessControl {
     }
 
     /// @notice Check if caller is a valid game contract
+    /// @dev Uses mapping for O(1) lookup instead of O(n) iteration
     function _isValidGameContract(address caller) internal view returns (bool) {
-        if (chessFactory == address(0)) return false;
+        return validGameContracts[caller];
+    }
 
-        // Check if caller is in the deployedChessGames array
-        (bool success, bytes memory data) = chessFactory.staticcall(
-            abi.encodeWithSignature("getDeployedChessGames()")
-        );
-
-        if (!success) return false;
-
-        address[] memory games = abi.decode(data, (address[]));
-        for (uint256 i = 0; i < games.length; i++) {
-            if (games[i] == caller) return true;
-        }
-        return false;
+    /// @notice Register a game contract as valid (called by ChessFactory)
+    /// @param gameContract Address of the deployed game contract
+    function registerGameContract(address gameContract) external {
+        require(msg.sender == chessFactory, "Only factory");
+        require(gameContract != address(0), "Invalid address");
+        validGameContracts[gameContract] = true;
     }
 
     /// @notice Register a new player with default rating
