@@ -9,6 +9,7 @@
 	import GameReplay from '$lib/components/GameReplay.svelte';
 	import { playMoveSound, playSound, preloadAllSounds, audioSettings, toggleSound } from '$lib/stores/audio.js';
 	import { notificationSettings, toggleNotifications, notifyYourTurn, notifyGameEnd, notifyOpponentJoined } from '$lib/stores/notifications.js';
+	import DisputePanel from '$lib/components/DisputePanel.svelte';
 
 	$: address = $page.params.address;
 
@@ -885,6 +886,16 @@
 							</p>
 						</div>
 					</div>
+
+					<!-- Dispute Panel (for finished games) -->
+					{#if isGameFinished}
+						<DisputePanel
+							gameId={0}
+							whitePlayer={data.whitePlayer}
+							blackPlayer={data.blackPlayer}
+							gameState={data.state}
+						/>
+					{/if}
 				</div>
 			</div>
 		{/if}
