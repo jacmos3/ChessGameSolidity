@@ -3,12 +3,21 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/utils/Strings.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./ChessBoard.sol";
+import "../Token/BondingManager.sol";
+import "../DAO/DisputeDAO.sol";
 
 /// @title ChessCore - Main chess game logic
 /// @notice Inherits from ChessBoard and implements move validation and game state
 contract ChessCore is ChessBoard, ReentrancyGuard {
     uint public betting;
     bool private prizeClaimed;
+
+    // Anti-cheating system integration
+    BondingManager public bondingManager;
+    DisputeDAO public disputeDAO;
+    uint256 public gameId;
+    bool public bondsLocked;
+    bool public gameRegisteredForDispute;
 
     // Per-player timeout tracking
     uint256 public whiteLastMoveBlock;
@@ -64,13 +73,30 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     // Draw offer tracking
     address public drawOfferedBy;
 
-    constructor(address _whitePlayer, uint _value, TimeoutPreset _preset, GameMode _mode) payable {
+    constructor(
+        address _whitePlayer,
+        uint _value,
+        TimeoutPreset _preset,
+        GameMode _mode,
+        uint256 _gameId,
+        address _bondingManager,
+        address _disputeDAO
+    ) payable {
         // Chiamare initializeBoard nel costruttore
         initializeBoard();
         whitePlayer = _whitePlayer;
         currentPlayer = _whitePlayer;
         betting = _value;
         gameMode = _mode;
+        gameId = _gameId;
+
+        // Set anti-cheating contracts (can be address(0) if not using bonding)
+        if (_bondingManager != address(0)) {
+            bondingManager = BondingManager(payable(_bondingManager));
+        }
+        if (_disputeDAO != address(0)) {
+            disputeDAO = DisputeDAO(_disputeDAO);
+        }
 
         // Set timeout based on preset
         if (_preset == TimeoutPreset.Blitz) {
@@ -105,6 +131,16 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         require(msg.sender != whitePlayer, "Already white");
         require(msg.value == betting, "Wrong bet");
         require(blackPlayer == address(0), "Black taken");
+
+        // If bonding is enabled, lock bonds for both players
+        if (address(bondingManager) != address(0)) {
+            // Lock white's bond (should have been checked in factory, but verify)
+            bondingManager.lockBondForGame(gameId, whitePlayer, betting);
+            // Lock black's bond
+            bondingManager.lockBondForGame(gameId, msg.sender, betting);
+            bondsLocked = true;
+        }
+
         blackPlayer = msg.sender;
         gameState = GameState.InProgress;
 
@@ -115,6 +151,50 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         emit GameStateChanged(GameState.InProgress);
     }
 
+    /// @notice Register game completion in DisputeDAO for challenge window
+    /// @dev Called automatically when game ends, starts the 48h challenge window
+    function _registerGameForDispute() internal {
+        if (address(disputeDAO) != address(0) && !gameRegisteredForDispute && blackPlayer != address(0)) {
+            disputeDAO.registerGame(gameId, whitePlayer, blackPlayer, betting);
+            gameRegisteredForDispute = true;
+        }
+    }
+
+    /// @notice Release bonds after challenge window (no dispute)
+    function _releaseBonds() internal {
+        if (address(bondingManager) != address(0) && bondsLocked) {
+            bondingManager.releaseBond(gameId, whitePlayer);
+            bondingManager.releaseBond(gameId, blackPlayer);
+        }
+    }
+
+    /// @notice Check if the challenge window has passed and no dispute is active
+    function canClaimPrize() public view returns (bool) {
+        if (address(disputeDAO) == address(0)) {
+            return true; // No dispute system, can claim immediately
+        }
+
+        uint256 disputeId = disputeDAO.gameToDispute(gameId);
+        if (disputeId == 0) {
+            return true; // Game not registered yet, allow (will register on claim)
+        }
+
+        (
+            ,  // gameId
+            ,  // challenger
+            ,  // accusedPlayer
+            DisputeDAO.DisputeState state,
+            ,  // legitVotes
+            ,  // cheatVotes
+            ,  // finalDecision
+               // escalationLevel
+        ) = disputeDAO.getDispute(disputeId);
+
+        // Can claim if dispute is resolved or still pending (no challenge made)
+        return state == DisputeDAO.DisputeState.Resolved ||
+               state == DisputeDAO.DisputeState.Pending;
+    }
+
     function claimPrize() external nonReentrant {
         require(!prizeClaimed, "Already claimed");
         require(
@@ -123,6 +203,23 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
             gameState == GameState.Draw,
             "Not finished"
         );
+
+        // Register game for dispute if not already done
+        _registerGameForDispute();
+
+        // If dispute system is active, check that we can claim
+        if (address(disputeDAO) != address(0)) {
+            require(canClaimPrize(), "Dispute in progress or challenge window open");
+
+            // Close the challenge window in DisputeDAO
+            uint256 disputeId = disputeDAO.gameToDispute(gameId);
+            if (disputeId != 0) {
+                try disputeDAO.closeChallengeWindow(gameId) {} catch {}
+            }
+        }
+
+        // Release bonds if bonding was used
+        _releaseBonds();
 
         prizeClaimed = true;
         uint256 totalPrize = address(this).balance;
@@ -172,7 +269,11 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
             winner = whitePlayer;
         }
 
+        // Register for dispute system
+        _registerGameForDispute();
+
         emit PlayerResigned(msg.sender, winner);
+        emit GameStateChanged(gameState);
     }
 
     /// @notice Offer a draw to the opponent
@@ -189,6 +290,10 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         require(drawOfferedBy != address(0) && drawOfferedBy != msg.sender, "Bad offer");
         gameState = GameState.Draw;
         drawOfferedBy = address(0);
+
+        // Register for dispute system
+        _registerGameForDispute();
+
         emit DrawAccepted();
         emit GameStateChanged(GameState.Draw);
     }
@@ -238,6 +343,9 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         } else {
             gameState = GameState.BlackWins;
         }
+
+        // Register for dispute system
+        _registerGameForDispute();
 
         emit GameTimeout(winner, loser);
         emit GameStateChanged(gameState);
@@ -780,62 +888,12 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
             }
         }
 
-        // Detect special moves for event emission
-        bool isCastling = (abs(movingPiece) == uint8(KING)) && (abs(int8(endY) - int8(startY)) == 2);
-        bool isEnPassant = (abs(movingPiece) == uint8(PAWN)) &&
-                           (abs(int8(endY) - int8(startY)) == 1) &&
-                           (targetPiece == EMPTY);
-
-        // For en passant, the captured piece is a pawn (not recorded in targetPiece)
-        int8 actualCaptured = isEnPassant ? (movingPiece > 0 ? -PAWN : PAWN) : targetPiece;
-
-        // Check if the move resulted in a check or checkmate
-        bool isCheck = false;
-        bool isMate = false;
-        GameState previousState = gameState;
-
-        // In Tournament mode, if the player left their own king in check, they lose (penalty)
-        if (gameMode == GameMode.Tournament && leavesKingInCheck) {
-            // The current player made an illegal move - opponent wins (tournament penalty)
-            isMate = true;
-            gameState = (currentPlayer == whitePlayer) ? GameState.BlackWins : GameState.WhiteWins;
-        } else if (isKingInCheck(PLAYER_BLACK)) {
-            isMate = isCheckmate(PLAYER_BLACK, endX, endY);
-            isCheck = !isMate;
-            gameState = isMate ? GameState.WhiteWins : GameState.InProgress;
-        } else if (isKingInCheck(PLAYER_WHITE)) {
-            isMate = isCheckmate(PLAYER_WHITE, endX, endY);
-            isCheck = !isMate;
-            gameState = isMate ? GameState.BlackWins : GameState.InProgress;
-        } else {
-            gameState = isStalemate() ? GameState.Draw : GameState.InProgress;
-        }
-
-        // Build move comment for legacy event
-        string memory comment = _buildMoveComment(movingPiece, targetPiece, startY, endY, isCheck, isMate);
-
-        // Emit legacy event (for backward compatibility)
-        int8 playerSign = (currentPlayer == whitePlayer) ? int8(1) : int8(-1);
-        emit Debug(playerSign, startX, startY, endX, endY, comment);
-
-        // Emit structured event
-        emit MoveMade(
-            currentPlayer,
-            startX, startY,
-            endX, endY,
-            movingPiece,
-            actualCaptured,
-            promotionPiece,
-            isCheck,
-            isMate,
-            isCastling,
-            isEnPassant
+        // Handle game state updates and emit events
+        _handleMoveResult(
+            startX, startY, endX, endY,
+            movingPiece, targetPiece, promotionPiece,
+            leavesKingInCheck
         );
-
-        // Emit game state change if state changed
-        if (gameState != previousState) {
-            emit GameStateChanged(gameState);
-        }
 
         // Update opponent's clock (they now need to move)
         // currentPlayer is still the player who just moved
@@ -851,6 +909,59 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     /// @notice Build a comment string for the move event (simplified for size)
     function _buildMoveComment(int8, int8, uint8, uint8, bool, bool) internal pure returns (string memory) {
         return "";
+    }
+
+    /// @notice Handle move result: check/mate detection, events, and dispute registration
+    function _handleMoveResult(
+        uint8 startX, uint8 startY, uint8 endX, uint8 endY,
+        int8 movingPiece, int8 targetPiece, int8 promotionPiece,
+        bool leavesKingInCheck
+    ) internal {
+        // Detect special moves
+        bool isCastling = (abs(movingPiece) == uint8(KING)) && (abs(int8(endY) - int8(startY)) == 2);
+        bool isEnPassant = (abs(movingPiece) == uint8(PAWN)) &&
+                           (abs(int8(endY) - int8(startY)) == 1) &&
+                           (targetPiece == EMPTY);
+        int8 actualCaptured = isEnPassant ? (movingPiece > 0 ? -PAWN : PAWN) : targetPiece;
+
+        // Check/checkmate detection
+        (bool isCheck, bool isMate, GameState newState) = _detectCheckMate(endX, endY, leavesKingInCheck);
+        GameState previousState = gameState;
+        gameState = newState;
+
+        // Emit legacy event
+        emit Debug((currentPlayer == whitePlayer) ? int8(1) : int8(-1), startX, startY, endX, endY, "");
+
+        // Emit structured event
+        emit MoveMade(currentPlayer, startX, startY, endX, endY, movingPiece, actualCaptured,
+                      promotionPiece, isCheck, isMate, isCastling, isEnPassant);
+
+        // Emit game state change and register dispute if game ended
+        if (gameState != previousState) {
+            emit GameStateChanged(gameState);
+            if (gameState == GameState.WhiteWins || gameState == GameState.BlackWins || gameState == GameState.Draw) {
+                _registerGameForDispute();
+            }
+        }
+    }
+
+    /// @notice Detect check/checkmate state after a move
+    function _detectCheckMate(uint8 endX, uint8 endY, bool leavesKingInCheck) internal view returns (bool isCheck, bool isMate, GameState newState) {
+        // In Tournament mode, illegal move = loss
+        if (gameMode == GameMode.Tournament && leavesKingInCheck) {
+            return (false, true, (currentPlayer == whitePlayer) ? GameState.BlackWins : GameState.WhiteWins);
+        }
+
+        if (isKingInCheck(PLAYER_BLACK)) {
+            isMate = isCheckmate(PLAYER_BLACK, endX, endY);
+            return (!isMate, isMate, isMate ? GameState.WhiteWins : GameState.InProgress);
+        }
+        if (isKingInCheck(PLAYER_WHITE)) {
+            isMate = isCheckmate(PLAYER_WHITE, endX, endY);
+            return (!isMate, isMate, isMate ? GameState.BlackWins : GameState.InProgress);
+        }
+
+        return (false, false, isStalemate() ? GameState.Draw : GameState.InProgress);
     }
 
     // Check if the given player's king can move out of check
