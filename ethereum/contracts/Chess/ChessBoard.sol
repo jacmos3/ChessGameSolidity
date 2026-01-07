@@ -68,6 +68,10 @@ contract ChessBoard {
     // 50-move rule tracking (half-moves since last pawn move or capture)
     uint16 internal halfMoveClock;
 
+    // FIDE 75-move rule: automatic draw after 75 full moves (150 half-moves) without progress
+    // This also caps game length to prevent unbounded positionHistory growth
+    uint16 internal constant MAX_HALF_MOVES_WITHOUT_PROGRESS = 150;
+
     /// @notice Initialize the board with starting positions
     function initializeBoard() internal {
         // Set up black pieces (row 0)

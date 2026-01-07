@@ -11,6 +11,21 @@ import "../Rating/PlayerRating.sol";
 /// @title ChessCore - Main chess game logic
 /// @notice Inherits from ChessBoard and implements move validation and game state
 contract ChessCore is ChessBoard, ReentrancyGuard {
+    // ========== CUSTOM ERRORS ==========
+    error GameNotInProgress();
+    error NotYourTurn();
+    error InvalidMove();
+    error GameAlreadyStarted();
+    error GameNotStarted();
+    error AlreadyInitialized();
+    error CannotClaimYet();
+    error PrizeAlreadyClaimed();
+    error NoPrizeToDistribute();
+    error NotAPlayer();
+    error NoDrawOffer();
+    error CannotResign();
+    error NotTimedOut();
+
     // ========== ENUMS (must be declared before state variables) ==========
     enum TimeoutPreset { Finney, Buterin, Nakamoto }
     enum GameMode { Tournament, Friendly }
@@ -88,6 +103,7 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     event DrawAccepted();
     event DrawByRepetition(address indexed claimant);
     event DrawByFiftyMoveRule(address indexed claimant);
+    event RatingReportFailed(address white, address black, uint8 result);
 
     // Slot 7: Player addresses
     address whitePlayer;
@@ -279,7 +295,9 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
                 return; // Game not finished
             }
 
-            try playerRating.reportGame(whitePlayer, blackPlayer, result) {} catch {}
+            try playerRating.reportGame(whitePlayer, blackPlayer, result) {} catch {
+                emit RatingReportFailed(whitePlayer, blackPlayer, result);
+            }
         }
     }
 
@@ -462,16 +480,16 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
 
     /// @notice Offer a draw to the opponent
     function offerDraw() external {
-        require(msg.sender == whitePlayer || msg.sender == blackPlayer, "Not player");
-        require(gameState == GameState.InProgress && drawOfferedBy == address(0), "Bad state");
+        if (msg.sender != whitePlayer && msg.sender != blackPlayer) revert NotAPlayer();
+        if (gameState != GameState.InProgress || drawOfferedBy != address(0)) revert GameNotInProgress();
         drawOfferedBy = msg.sender;
         emit DrawOffered(msg.sender);
     }
 
     /// @notice Accept a draw offer from the opponent
     function acceptDraw() external {
-        require(msg.sender == whitePlayer || msg.sender == blackPlayer, "Not player");
-        require(drawOfferedBy != address(0) && drawOfferedBy != msg.sender, "Bad offer");
+        if (msg.sender != whitePlayer && msg.sender != blackPlayer) revert NotAPlayer();
+        if (drawOfferedBy == address(0) || drawOfferedBy == msg.sender) revert NoDrawOffer();
         gameState = GameState.Draw;
         drawOfferedBy = address(0);
 
@@ -485,8 +503,8 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
 
     /// @notice Decline a draw offer
     function declineDraw() external {
-        require(msg.sender == whitePlayer || msg.sender == blackPlayer, "Not player");
-        require(drawOfferedBy != address(0) && drawOfferedBy != msg.sender, "Bad offer");
+        if (msg.sender != whitePlayer && msg.sender != blackPlayer) revert NotAPlayer();
+        if (drawOfferedBy == address(0) || drawOfferedBy == msg.sender) revert NoDrawOffer();
         address offerer = drawOfferedBy;
         drawOfferedBy = address(0);
         emit DrawOfferDeclined(offerer);
@@ -494,7 +512,7 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
 
     /// @notice Cancel your own draw offer
     function cancelDrawOffer() external {
-        require(drawOfferedBy == msg.sender, "Not yours");
+        if (drawOfferedBy != msg.sender) revert NoDrawOffer();
         drawOfferedBy = address(0);
         emit DrawOfferDeclined(msg.sender);
     }
@@ -507,8 +525,8 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     /// @notice Claim draw by threefold repetition
     /// @dev Can be called by either player when position has occurred 3+ times
     function claimDrawByRepetition() external {
-        require(msg.sender == whitePlayer || msg.sender == blackPlayer, "Not player");
-        require(gameState == GameState.InProgress, "Not in progress");
+        if (msg.sender != whitePlayer && msg.sender != blackPlayer) revert NotAPlayer();
+        if (gameState != GameState.InProgress) revert GameNotInProgress();
 
         // Check current position count
         bool isWhiteTurn = (currentPlayer == whitePlayer);
@@ -526,8 +544,8 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     /// @notice Claim draw by 50-move rule
     /// @dev Can be called by either player when 50 moves have passed without pawn move or capture
     function claimDrawByFiftyMoveRule() external {
-        require(msg.sender == whitePlayer || msg.sender == blackPlayer, "Not player");
-        require(gameState == GameState.InProgress, "Not in progress");
+        if (msg.sender != whitePlayer && msg.sender != blackPlayer) revert NotAPlayer();
+        if (gameState != GameState.InProgress) revert GameNotInProgress();
         require(halfMoveClock >= 100, "50 moves not reached"); // 100 half-moves = 50 full moves
 
         gameState = GameState.Draw;
@@ -540,19 +558,16 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
 
     /// @notice Claim victory when opponent has not moved within timeout period
     function claimVictoryByTimeout() external {
-        require(
-            msg.sender == whitePlayer || msg.sender == blackPlayer,
-            "Not a player"
-        );
-        require(gameState == GameState.InProgress, "Not in progress");
-        require(msg.sender != currentPlayer, "Your turn");
+        if (msg.sender != whitePlayer && msg.sender != blackPlayer) revert NotAPlayer();
+        if (gameState != GameState.InProgress) revert GameNotInProgress();
+        if (msg.sender == currentPlayer) revert NotYourTurn();
 
         // Check if current player (opponent) has exceeded their time
         uint256 opponentLastMove = (currentPlayer == whitePlayer)
             ? whiteLastMoveBlock
             : blackLastMoveBlock;
 
-        require(block.number >= opponentLastMove + timeoutBlocks, "Not timed out");
+        if (block.number < opponentLastMove + timeoutBlocks) revert NotTimedOut();
 
         wasTimeout = true;  // Track for reward penalty (loser timed out)
 
@@ -582,7 +597,7 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
                 }
             } 
             else { // white pawn
-                if (endX == startX - 1 || (startX == ROW_WHITE_PAWNS && endX == COL_KING)) {
+                if (endX == startX - 1 || (startX == ROW_WHITE_PAWNS && endX == ROW_WHITE_PAWNS_LONG_OPENING)) {
                     return true;
                 }
             }
@@ -701,14 +716,16 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         uint8 kingY = (player == PLAYER_WHITE) ? whiteKingCol : blackKingCol;
 
         // Check if any of the opponent's pieces can attack the king
-        for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
-            for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
+        for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE;) {
+            for (uint8 colPiece = 0; colPiece < BOARD_SIZE;) {
                 if (player * board[rowPiece][colPiece] < 0) { // Check if piece belongs to opponent
                     if (isValidMoveView(rowPiece, colPiece, kingX, kingY)) {
                         return true;
                     }
                 }
+                unchecked { ++colPiece; }
             }
+            unchecked { ++rowPiece; }
         }
 
         return false;
@@ -721,13 +738,15 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         uint8 kX = (abs(p) == uint8(KING)) ? eX : ((pl == PLAYER_WHITE) ? whiteKingRow : blackKingRow);
         uint8 kY = (abs(p) == uint8(KING)) ? eY : ((pl == PLAYER_WHITE) ? whiteKingCol : blackKingCol);
 
-        for (uint8 r = 0; r < BOARD_SIZE; r++) {
-            for (uint8 c = 0; c < BOARD_SIZE; c++) {
-                if (r == eX && c == eY) continue;
+        for (uint8 r = 0; r < BOARD_SIZE;) {
+            for (uint8 c = 0; c < BOARD_SIZE;) {
+                if (r == eX && c == eY) { unchecked { ++c; } continue; }
                 int8 pc = board[r][c];
-                if (pc * pl >= 0) continue;
+                if (pc * pl >= 0) { unchecked { ++c; } continue; }
                 if (_canAttack(r, c, pc, kX, kY, sX, sY, eX, eY)) return true;
+                unchecked { ++c; }
             }
+            unchecked { ++r; }
         }
         return false;
     }
@@ -767,14 +786,16 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     }
 
     function isSquareUnderAttack(int8 player, uint8 x, uint8 y) internal view returns (bool) {
-        for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
-            for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
+        for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE;) {
+            for (uint8 colPiece = 0; colPiece < BOARD_SIZE;) {
                 //check if the opponent pieces can do a valid move to that square
                 if (currentPlayer == whitePlayer && board[rowPiece][colPiece] * player < 0 && isValidMoveView(rowPiece, colPiece, x, y)
                 || currentPlayer == blackPlayer && board[rowPiece][colPiece] * player > 0 && isValidMoveView(rowPiece,colPiece, x, y)) {
                     return true;
                 }
+                unchecked { ++colPiece; }
             }
+            unchecked { ++rowPiece; }
         }
         return false;
     }
@@ -1137,6 +1158,17 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
             halfMoveClock++;
         }
 
+        // FIDE 75-move rule: automatic draw after 75 full moves without progress
+        // This prevents unbounded game length and positionHistory growth
+        if (halfMoveClock >= MAX_HALF_MOVES_WITHOUT_PROGRESS) {
+            gameState = GameState.Draw;
+            _registerGameForDispute();
+            _distributeRewards();
+            _reportRating(); // Reports draw based on gameState
+            emit GameStateChanged(gameState);
+            return; // Exit early - game over
+        }
+
         switchTurn();
 
         // Track position for threefold repetition (after turn switch)
@@ -1264,10 +1296,13 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
 
     // Check if a square would be under attack after king moves there
     function isSquareUnderAttackAfterKingMove(int8 player, uint8 targetX, uint8 targetY, uint8 fromX, uint8 fromY) internal view returns (bool) {
-        for (uint8 row = 0; row < BOARD_SIZE; row++) {
-            for (uint8 col = 0; col < BOARD_SIZE; col++) {
+        for (uint8 row = 0; row < BOARD_SIZE;) {
+            for (uint8 col = 0; col < BOARD_SIZE;) {
                 // Skip the square king is moving from and the target square
-                if ((row == fromX && col == fromY) || (row == targetX && col == targetY)) continue;
+                if ((row == fromX && col == fromY) || (row == targetX && col == targetY)) {
+                    unchecked { ++col; }
+                    continue;
+                }
 
                 int8 piece = board[row][col];
                 if (piece * player < 0) { // Opponent piece
@@ -1275,7 +1310,9 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
                         return true;
                     }
                 }
+                unchecked { ++col; }
             }
+            unchecked { ++row; }
         }
         return false;
     }
@@ -1340,20 +1377,24 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         int8 player = (currentPlayer == whitePlayer) ? int8(PLAYER_WHITE) : int8(PLAYER_BLACK);
 
         // Check if there are any valid moves for current player pieces
-        for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
-            for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
+        for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE;) {
+            for (uint8 colPiece = 0; colPiece < BOARD_SIZE;) {
                 // If we find a piece belonging to the current player, then check if it can perform a move
                 if (board[rowPiece][colPiece] * player > 0 ) {
-                    for (uint8 row_target = 0; row_target < BOARD_SIZE; row_target++) {
-                        for (uint8 col_target = 0; col_target < BOARD_SIZE; col_target++) {
+                    for (uint8 row_target = 0; row_target < BOARD_SIZE;) {
+                        for (uint8 col_target = 0; col_target < BOARD_SIZE;) {
                             if (board[row_target][col_target] != board[rowPiece][colPiece]
                                 && isValidMoveView(rowPiece, colPiece, row_target, col_target)) {
                                 return false;
                             }
+                            unchecked { ++col_target; }
                         }
+                        unchecked { ++row_target; }
                     }
                 }
+                unchecked { ++colPiece; }
             }
+            unchecked { ++rowPiece; }
         }
 
         // No any valid move for the current player
@@ -1384,10 +1425,11 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     // Check if the player pieces can capture the attacking piece
     function canCaptureAttacker(int8 player, uint8 rowAttacker, uint8 colAttacker) internal view returns (bool) {
         // Iterate over all pieces on the board
-        for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
-            for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
+        for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE;) {
+            for (uint8 colPiece = 0; colPiece < BOARD_SIZE;) {
                 // Skip empty squares and pieces belonging to the attacker
                 if (board[rowPiece][colPiece] == EMPTY || board[rowPiece][colPiece] * player < 0 || (rowPiece == rowAttacker && colPiece == colAttacker)) {
+                    unchecked { ++colPiece; }
                     continue;
                 }
 
@@ -1396,7 +1438,9 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
                     // A piece can capture the attacking piece
                     return true;
                 }
+                unchecked { ++colPiece; }
             }
+            unchecked { ++rowPiece; }
         }
 
         // No piece can capture the attacking piece
@@ -1431,12 +1475,13 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
 
         while (blockRow != kingRow || blockCol != kingCol) {
             // Check if any defending piece can move to this blocking square
-            for (uint8 pieceRow = 0; pieceRow < BOARD_SIZE; pieceRow++) {
-                for (uint8 pieceCol = 0; pieceCol < BOARD_SIZE; pieceCol++) {
+            for (uint8 pieceRow = 0; pieceRow < BOARD_SIZE;) {
+                for (uint8 pieceCol = 0; pieceCol < BOARD_SIZE;) {
                     int8 piece = board[pieceRow][pieceCol];
 
                     // Skip empty squares, opponent pieces, and the king (can't block with king)
                     if (piece == EMPTY || piece * defendingPlayer <= 0 || abs(piece) == uint8(KING)) {
+                        unchecked { ++pieceCol; }
                         continue;
                     }
 
@@ -1444,7 +1489,9 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
                     if (isValidMoveView(pieceRow, pieceCol, blockRow, blockCol)) {
                         return true;
                     }
+                    unchecked { ++pieceCol; }
                 }
+                unchecked { ++pieceRow; }
             }
 
             blockRow = uint8(int8(blockRow) + stepRow);
