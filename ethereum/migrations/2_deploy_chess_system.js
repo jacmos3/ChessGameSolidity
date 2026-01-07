@@ -1,5 +1,6 @@
 const ChessToken = artifacts.require("ChessToken");
 const BondingManager = artifacts.require("BondingManager");
+const RewardPool = artifacts.require("RewardPool");
 const ArbitratorRegistry = artifacts.require("ArbitratorRegistry");
 const DisputeDAO = artifacts.require("DisputeDAO");
 const ChessMediaLibrary = artifacts.require("ChessMediaLibrary");
@@ -155,6 +156,20 @@ module.exports = async function (deployer, network, accounts) {
   console.log(`  PlayerRating deployed at: ${playerRating.address}`);
 
   // =========================================
+  // PHASE 6.6: Deploy RewardPool
+  // =========================================
+  console.log("\nPHASE 6.6: Deploying RewardPool...");
+
+  await deployer.deploy(
+    RewardPool,
+    chessToken.address,
+    playerRating.address,
+    { from: admin }
+  );
+  const rewardPool = await RewardPool.deployed();
+  console.log(`  RewardPool deployed at: ${rewardPool.address}`);
+
+  // =========================================
   // PHASE 7: Configure Roles & Permissions
   // =========================================
   console.log("\nPHASE 7: Configuring roles and permissions...");
@@ -169,8 +184,14 @@ module.exports = async function (deployer, network, accounts) {
   console.log("  Setting PlayerRating on ChessFactory...");
   await chessFactory.setPlayerRating(playerRating.address, { from: admin });
 
+  console.log("  Setting RewardPool on ChessFactory...");
+  await chessFactory.setRewardPool(rewardPool.address, { from: admin });
+
   console.log("  Setting ChessFactory on PlayerRating...");
   await playerRating.setChessFactory(chessFactory.address, { from: admin });
+
+  console.log("  Setting ChessFactory on RewardPool...");
+  await rewardPool.setChessFactory(chessFactory.address, { from: admin });
 
   // 7.2 Grant GAME_MANAGER_ROLE to ChessFactory on BondingManager
   const GAME_MANAGER_ROLE_BM = await bondingManager.GAME_MANAGER_ROLE();
@@ -230,6 +251,7 @@ module.exports = async function (deployer, network, accounts) {
   console.log(`ChessTimelock:      ${chessTimelock.address}`);
   console.log(`ChessGovernor:      ${chessGovernor.address}`);
   console.log(`PlayerRating:       ${playerRating.address}`);
+  console.log(`RewardPool:         ${rewardPool.address}`);
   console.log("===========================================\n");
 
   // Save deployment addresses to file (for frontend/scripts)
@@ -247,7 +269,8 @@ module.exports = async function (deployer, network, accounts) {
       ChessNFT: chessNFTAddress,
       ChessTimelock: chessTimelock.address,
       ChessGovernor: chessGovernor.address,
-      PlayerRating: playerRating.address
+      PlayerRating: playerRating.address,
+      RewardPool: rewardPool.address
     },
     config: config
   };

@@ -4,6 +4,7 @@ import "@openzeppelin/contracts/utils/Strings.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./ChessBoard.sol";
 import "../Token/BondingManager.sol";
+import "../Token/RewardPool.sol";
 import "../DAO/DisputeDAO.sol";
 import "../Rating/PlayerRating.sol";
 
@@ -37,7 +38,10 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     // Slot 5
     PlayerRating public playerRating;      // 20 bytes
 
-    // Slot 6: PACKED - timeout tracking + state flags (32 bytes total)
+    // Slot 6
+    RewardPool public rewardPool;          // 20 bytes
+
+    // Slot 7: PACKED - timeout tracking + state flags (32 bytes total)
     // uint48 max = 281 trillion blocks, far exceeds any realistic blockchain lifetime
     uint48 public whiteLastMoveBlock;      // 6 bytes
     uint48 public blackLastMoveBlock;      // 6 bytes
@@ -49,7 +53,12 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     bool public ratingReported;            // 1 byte
     bool private prizeClaimed;             // 1 byte
     bool private initialized;              // 1 byte
-    // Total: 6+6+6+1+1+1+1+1+1+1 = 25 bytes (fits in 1 slot with 7 bytes spare)
+    bool private rewardsDistributed;       // 1 byte
+    // Game end tracking for rewards
+    bool private wasCheckmate;             // 1 byte
+    bool private wasResign;                // 1 byte
+    bool private wasTimeout;               // 1 byte
+    // Total: 6+6+6+1+1+1+1+1+1+1+1+1+1+1 = 29 bytes (fits in 1 slot with 3 bytes spare)
 
     // Legacy event (kept for backward compatibility)
     event Debug(int8 player, uint8 startX, uint8 startY, uint8 endX, uint8 endY, string comment);
@@ -113,6 +122,7 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     /// @param _bondingManager BondingManager contract address
     /// @param _disputeDAO DisputeDAO contract address
     /// @param _playerRating PlayerRating contract address
+    /// @param _rewardPool RewardPool contract address
     function initialize(
         address _whitePlayer,
         uint _value,
@@ -121,7 +131,8 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         uint256 _gameId,
         address _bondingManager,
         address _disputeDAO,
-        address _playerRating
+        address _playerRating,
+        address _rewardPool
     ) external payable initializer {
         // Initialize the board
         initializeBoard();
@@ -141,6 +152,9 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         }
         if (_playerRating != address(0)) {
             playerRating = PlayerRating(_playerRating);
+        }
+        if (_rewardPool != address(0)) {
+            rewardPool = RewardPool(_rewardPool);
         }
 
         // Set timeout based on preset
@@ -200,6 +214,42 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
             disputeDAO.registerGame(gameId, whitePlayer, blackPlayer, betting);
             gameRegisteredForDispute = true;
         }
+    }
+
+    /// @notice Distribute rewards to both players after game ends
+    function _distributeRewards() internal {
+        if (address(rewardPool) == address(0) || rewardsDistributed || blackPlayer == address(0)) {
+            return;
+        }
+        rewardsDistributed = true;
+
+        uint256 moveCount = positionHistory.length;  // Approximation of total moves
+        bool isDraw = (gameState == GameState.Draw);
+        bool whiteWins = (gameState == GameState.WhiteWins);
+
+        // Distribute to white player
+        rewardPool.distributeReward(
+            whitePlayer,
+            blackPlayer,
+            whiteWins,                    // isWinner
+            isDraw,                       // isDraw
+            wasCheckmate && whiteWins,    // isCheckmate (only for winner)
+            moveCount,
+            wasResign && !whiteWins && !isDraw,  // wasResign (only if this player resigned)
+            wasTimeout && !whiteWins && !isDraw  // wasTimeout (only if this player timed out)
+        );
+
+        // Distribute to black player
+        rewardPool.distributeReward(
+            blackPlayer,
+            whitePlayer,
+            !whiteWins && !isDraw,        // isWinner
+            isDraw,                       // isDraw
+            wasCheckmate && !whiteWins && !isDraw,  // isCheckmate (only for winner)
+            moveCount,
+            wasResign && whiteWins,       // wasResign (only if this player resigned)
+            wasTimeout && whiteWins       // wasTimeout (only if this player timed out)
+        );
     }
 
     /// @notice Release bonds after challenge window (no dispute)
@@ -326,6 +376,8 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
             "Game finished"
         );
 
+        wasResign = true;  // Track for reward penalty
+
         address winner;
         if (msg.sender == whitePlayer) {
             gameState = GameState.BlackWins;
@@ -335,8 +387,9 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
             winner = whitePlayer;
         }
 
-        // Register for dispute system
+        // Register for dispute system and distribute rewards
         _registerGameForDispute();
+        _distributeRewards();
 
         emit PlayerResigned(msg.sender, winner);
         emit GameStateChanged(gameState);
@@ -357,8 +410,9 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         gameState = GameState.Draw;
         drawOfferedBy = address(0);
 
-        // Register for dispute system
+        // Register for dispute system and distribute rewards
         _registerGameForDispute();
+        _distributeRewards();
 
         emit DrawAccepted();
         emit GameStateChanged(GameState.Draw);
@@ -398,6 +452,7 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
 
         gameState = GameState.Draw;
         _registerGameForDispute();
+        _distributeRewards();
 
         emit DrawByRepetition(msg.sender);
         emit GameStateChanged(GameState.Draw);
@@ -412,6 +467,7 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
 
         gameState = GameState.Draw;
         _registerGameForDispute();
+        _distributeRewards();
 
         emit DrawByFiftyMoveRule(msg.sender);
         emit GameStateChanged(GameState.Draw);
@@ -433,6 +489,8 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
 
         require(block.number >= opponentLastMove + timeoutBlocks, "Not timed out");
 
+        wasTimeout = true;  // Track for reward penalty (loser timed out)
+
         address winner = msg.sender;
         address loser = currentPlayer;
 
@@ -442,8 +500,9 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
             gameState = GameState.BlackWins;
         }
 
-        // Register for dispute system
+        // Register for dispute system and distribute rewards
         _registerGameForDispute();
+        _distributeRewards();
 
         emit GameTimeout(winner, loser);
         emit GameStateChanged(gameState);
@@ -1051,6 +1110,11 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         GameState previousState = gameState;
         gameState = newState;
 
+        // Track checkmate for reward bonus
+        if (isMate) {
+            wasCheckmate = true;
+        }
+
         // Emit legacy event
         emit Debug((currentPlayer == whitePlayer) ? int8(1) : int8(-1), startX, startY, endX, endY, "");
 
@@ -1063,6 +1127,7 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
             emit GameStateChanged(gameState);
             if (gameState == GameState.WhiteWins || gameState == GameState.BlackWins || gameState == GameState.Draw) {
                 _registerGameForDispute();
+                _distributeRewards();
             }
         }
     }
