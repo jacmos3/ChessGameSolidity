@@ -57,6 +57,12 @@
 					</a>
 				{/if}
 				<a
+					href="/help"
+					class="transition-colors {currentPath === '/help' ? 'text-chess-accent' : 'text-chess-gray hover:text-chess-light'}"
+				>
+					Help
+				</a>
+				<a
 					href="https://github.com/jacmos3/ChessGameSolidity"
 					target="_blank"
 					rel="noopener noreferrer"
@@ -128,6 +134,13 @@
 						Profile
 					</a>
 				{/if}
+				<a
+					href="/help"
+					class="block py-2 px-3 rounded-lg {currentPath === '/help' ? 'bg-chess-accent/10 text-chess-accent' : 'text-chess-gray'}"
+					on:click={() => mobileMenuOpen = false}
+				>
+					Help
+				</a>
 				<a
 					href="https://github.com/jacmos3/ChessGameSolidity"
 					target="_blank"
