@@ -4,7 +4,7 @@ A fully on-chain chess game with integrated anti-cheating mechanisms, tokenomics
 
 ![Solidity](https://img.shields.io/badge/Solidity-0.8.24-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Tests](https://img.shields.io/badge/Tests-272%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-312%20passing-brightgreen)
 
 ## Overview
 
@@ -41,12 +41,13 @@ Solidity Chess is a complete decentralized chess platform where:
 ## Features
 
 ### Core Game
-- Complete chess rules implementation (1,386 lines of Solidity)
+- Complete chess rules implementation (1,570 lines of Solidity)
 - All special moves: castling, en passant, pawn promotion
 - Check, checkmate, and stalemate detection
-- Threefold repetition and 50-move rule
+- Threefold repetition, 50-move rule, and FIDE 75-move automatic draw
 - Three time controls: Finney (~1h), Buterin (~7h), Nakamoto (~7d)
 - Tournament and Friendly game modes
+- Play-to-Earn rewards via RewardPool
 
 ### Anti-Cheating System
 - **Hybrid Bonding**: Players must stake both CHESS tokens and ETH
@@ -85,6 +86,7 @@ Solidity Chess is a complete decentralized chess platform where:
 | ChessFactory | Creates game instances (EIP-1167) | 1.87M |
 | ChessToken | ERC20 with governance | 2.77M |
 | BondingManager | Hybrid bond management | 1.45M |
+| RewardPool | Play-to-Earn rewards | 1.89M |
 | DisputeDAO | Decentralized dispute resolution | 2.14M |
 | ArbitratorRegistry | Arbitrator staking & selection | 1.75M |
 | PlayerRating | ELO rating system | 1.12M |
@@ -102,8 +104,8 @@ Solidity Chess is a complete decentralized chess platform where:
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/solidity-chess.git
-cd solidity-chess
+git clone https://github.com/jacmos3/ChessGameSolidity.git
+cd ChessGameSolidity
 
 # Install dependencies
 cd ethereum && npm install
@@ -154,7 +156,8 @@ solidity-chess/
 │   │   │   └── ChessMediaLibrary.sol
 │   │   ├── Token/
 │   │   │   ├── ChessToken.sol     # ERC20 governance token
-│   │   │   └── BondingManager.sol # Hybrid bond management
+│   │   │   ├── BondingManager.sol # Hybrid bond management
+│   │   │   └── RewardPool.sol     # Play-to-Earn rewards
 │   │   ├── DAO/
 │   │   │   ├── DisputeDAO.sol     # Dispute resolution
 │   │   │   └── ArbitratorRegistry.sol
@@ -163,7 +166,7 @@ solidity-chess/
 │   │   │   └── ChessTimelock.sol
 │   │   └── Rating/
 │   │       └── PlayerRating.sol   # ELO system
-│   ├── test/                      # 272 test cases
+│   ├── test/                      # 312 test cases
 │   ├── migrations/
 │   ├── scripts/
 │   └── deployments/
@@ -204,11 +207,15 @@ The project uses several gas optimization techniques:
 - 7-day timelock before arbitrator voting power activates
 - Circuit breaker for extreme price movements
 - Commit-reveal to prevent front-running
+- Custom errors for gas-efficient reverts
+- MAX_DISPUTE_DURATION (30 days) to prevent indefinite escalation
+- FIDE 75-move rule to cap game length and prevent DoS
+- SafeERC20 for all token transfers
 
 ### Known Limitations
 - Arbitrator selection uses keccak256 (recommend Chainlink VRF for production)
 - TWAP oracle is simplified (recommend Uniswap/Chainlink integration)
-- Not formally audited yet
+- Not formally audited yet (internal security review completed)
 
 ## API Reference
 
