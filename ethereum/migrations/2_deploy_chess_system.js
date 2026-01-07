@@ -4,6 +4,8 @@ const ArbitratorRegistry = artifacts.require("ArbitratorRegistry");
 const DisputeDAO = artifacts.require("DisputeDAO");
 const ChessFactory = artifacts.require("ChessFactory");
 const ChessNFT = artifacts.require("ChessNFT");
+const ChessTimelock = artifacts.require("ChessTimelock");
+const ChessGovernor = artifacts.require("ChessGovernor");
 
 module.exports = async function (deployer, network, accounts) {
   const admin = accounts[0];
@@ -90,42 +92,78 @@ module.exports = async function (deployer, network, accounts) {
   console.log(`  ChessNFT deployed at: ${chessNFTAddress}`);
 
   // =========================================
-  // PHASE 6: Configure Roles & Permissions
+  // PHASE 6: Deploy Governance (Timelock + Governor)
   // =========================================
-  console.log("\nPHASE 6: Configuring roles and permissions...");
+  console.log("\nPHASE 6: Deploying Governance contracts...");
 
-  // 6.1 Configure ChessFactory with anti-cheating contracts
+  // 6.1 Deploy Timelock with 2-day delay
+  const timelockDelay = config.timelockDelay || 2 * 24 * 60 * 60; // 2 days in seconds
+  const proposers = []; // Will be set to Governor after deployment
+  const executors = ["0x0000000000000000000000000000000000000000"]; // Anyone can execute after delay
+
+  await deployer.deploy(
+    ChessTimelock,
+    timelockDelay,
+    proposers,
+    executors,
+    admin,
+    { from: admin }
+  );
+  const chessTimelock = await ChessTimelock.deployed();
+  console.log(`  ChessTimelock deployed at: ${chessTimelock.address}`);
+
+  // 6.2 Deploy Governor
+  await deployer.deploy(
+    ChessGovernor,
+    chessToken.address,
+    chessTimelock.address,
+    { from: admin }
+  );
+  const chessGovernor = await ChessGovernor.deployed();
+  console.log(`  ChessGovernor deployed at: ${chessGovernor.address}`);
+
+  // 6.3 Configure Timelock - grant Governor the proposer role
+  const PROPOSER_ROLE = await chessTimelock.PROPOSER_ROLE();
+  const CANCELLER_ROLE = await chessTimelock.CANCELLER_ROLE();
+  console.log("  Granting PROPOSER_ROLE to ChessGovernor on Timelock...");
+  await chessTimelock.grantRole(PROPOSER_ROLE, chessGovernor.address, { from: admin });
+  console.log("  Granting CANCELLER_ROLE to ChessGovernor on Timelock...");
+  await chessTimelock.grantRole(CANCELLER_ROLE, chessGovernor.address, { from: admin });
+
+  // =========================================
+  // PHASE 7: Configure Roles & Permissions
+  // =========================================
+  console.log("\nPHASE 7: Configuring roles and permissions...");
+
+  // 7.1 Configure ChessFactory with anti-cheating contracts
   console.log("  Setting BondingManager on ChessFactory...");
   await chessFactory.setBondingManager(bondingManager.address, { from: admin });
 
   console.log("  Setting DisputeDAO on ChessFactory...");
   await chessFactory.setDisputeDAO(disputeDAO.address, { from: admin });
 
-  // 6.2 Grant GAME_MANAGER_ROLE to ChessFactory on BondingManager
-  // This allows the factory to lock bonds when games are created
+  // 7.2 Grant GAME_MANAGER_ROLE to ChessFactory on BondingManager
   const GAME_MANAGER_ROLE_BM = await bondingManager.GAME_MANAGER_ROLE();
   console.log("  Granting GAME_MANAGER_ROLE to ChessFactory on BondingManager...");
   await bondingManager.grantRole(GAME_MANAGER_ROLE_BM, chessFactory.address, { from: admin });
 
-  // 6.3 Grant DISPUTE_MANAGER_ROLE to DisputeDAO on BondingManager
-  // This allows DisputeDAO to slash bonds
+  // 7.3 Grant DISPUTE_MANAGER_ROLE to DisputeDAO on BondingManager
   const DISPUTE_MANAGER_ROLE_BM = await bondingManager.DISPUTE_MANAGER_ROLE();
   console.log("  Granting DISPUTE_MANAGER_ROLE to DisputeDAO on BondingManager...");
   await bondingManager.grantRole(DISPUTE_MANAGER_ROLE_BM, disputeDAO.address, { from: admin });
 
-  // 6.4 Grant DISPUTE_MANAGER_ROLE to DisputeDAO on ArbitratorRegistry
-  // This allows DisputeDAO to update reputation and record votes
+  // 7.4 Grant DISPUTE_MANAGER_ROLE to DisputeDAO on ArbitratorRegistry
   const DISPUTE_MANAGER_ROLE_AR = await arbitratorRegistry.DISPUTE_MANAGER_ROLE();
   console.log("  Granting DISPUTE_MANAGER_ROLE to DisputeDAO on ArbitratorRegistry...");
   await arbitratorRegistry.grantRole(DISPUTE_MANAGER_ROLE_AR, disputeDAO.address, { from: admin });
 
-  // 6.5 Grant MINTER_ROLE to BondingManager for play-to-earn rewards
-  // (Optional - enable if BondingManager should mint rewards)
-  // const MINTER_ROLE = await chessToken.MINTER_ROLE();
-  // await chessToken.grantRole(MINTER_ROLE, bondingManager.address, { from: admin });
+  // 7.5 Transfer admin roles to Timelock for decentralization (optional - can be done later)
+  // This makes governance control the protocol parameters
+  // await bondingManager.grantRole(await bondingManager.DEFAULT_ADMIN_ROLE(), chessTimelock.address, { from: admin });
+  // await disputeDAO.grantRole(await disputeDAO.DEFAULT_ADMIN_ROLE(), chessTimelock.address, { from: admin });
 
   // =========================================
-  // PHASE 7: Verification & Summary
+  // PHASE 8: Verification & Summary
   // =========================================
   console.log("\n===========================================");
   console.log("  Deployment Complete - Verification");
@@ -152,12 +190,14 @@ module.exports = async function (deployer, network, accounts) {
   console.log("\n===========================================");
   console.log("  Deployed Contract Addresses");
   console.log("===========================================");
-  console.log(`ChessToken:        ${chessToken.address}`);
-  console.log(`BondingManager:    ${bondingManager.address}`);
+  console.log(`ChessToken:         ${chessToken.address}`);
+  console.log(`BondingManager:     ${bondingManager.address}`);
   console.log(`ArbitratorRegistry: ${arbitratorRegistry.address}`);
-  console.log(`DisputeDAO:        ${disputeDAO.address}`);
-  console.log(`ChessFactory:      ${chessFactory.address}`);
-  console.log(`ChessNFT:          ${chessNFTAddress}`);
+  console.log(`DisputeDAO:         ${disputeDAO.address}`);
+  console.log(`ChessFactory:       ${chessFactory.address}`);
+  console.log(`ChessNFT:           ${chessNFTAddress}`);
+  console.log(`ChessTimelock:      ${chessTimelock.address}`);
+  console.log(`ChessGovernor:      ${chessGovernor.address}`);
   console.log("===========================================\n");
 
   // Save deployment addresses to file (for frontend/scripts)
@@ -171,7 +211,9 @@ module.exports = async function (deployer, network, accounts) {
       ArbitratorRegistry: arbitratorRegistry.address,
       DisputeDAO: disputeDAO.address,
       ChessFactory: chessFactory.address,
-      ChessNFT: chessNFTAddress
+      ChessNFT: chessNFTAddress,
+      ChessTimelock: chessTimelock.address,
+      ChessGovernor: chessGovernor.address
     },
     config: config
   };
