@@ -31,6 +31,9 @@ contract PlayerRating is AccessControl {
     // Number of games before player is considered "established"
     uint256 public constant PROVISIONAL_GAMES = 30;
 
+    // Maximum players in leaderboard (prevents unbounded array growth)
+    uint256 public constant MAX_RANKED_PLAYERS = 100000;
+
     // Player stats
     struct PlayerStats {
         uint256 rating;
@@ -102,7 +105,8 @@ contract PlayerRating is AccessControl {
                 lastGameTimestamp: 0
             });
 
-            if (!isRanked[player]) {
+            // Only add to leaderboard if under cap (prevents unbounded array growth)
+            if (!isRanked[player] && rankedPlayers.length < MAX_RANKED_PLAYERS) {
                 rankedPlayers.push(player);
                 isRanked[player] = true;
             }
@@ -124,7 +128,8 @@ contract PlayerRating is AccessControl {
                 lastGameTimestamp: 0
             });
 
-            if (!isRanked[player]) {
+            // Only add to leaderboard if under cap (prevents unbounded array growth)
+            if (!isRanked[player] && rankedPlayers.length < MAX_RANKED_PLAYERS) {
                 rankedPlayers.push(player);
                 isRanked[player] = true;
             }

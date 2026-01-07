@@ -173,6 +173,7 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         bytes32 initialPosition = _computePositionHash(true);
         positionCount[initialPosition] = 1;
         positionHistory.push(initialPosition);
+        maxPositionRepetitions = 1;
     }
    
    receive() external payable {
@@ -304,9 +305,19 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
                // escalationLevel
         ) = disputeDAO.getDispute(disputeId);
 
-        // Can claim if dispute is resolved or still pending (no challenge made)
-        return state == DisputeDAO.DisputeState.Resolved ||
-               state == DisputeDAO.DisputeState.Pending;
+        // Can claim if dispute is resolved
+        if (state == DisputeDAO.DisputeState.Resolved) {
+            return true;
+        }
+
+        // If still pending, only allow if challenge window has definitively expired
+        // This prevents frontrunning attacks where someone submits a challenge
+        // right before the claim transaction is mined
+        if (state == DisputeDAO.DisputeState.Pending) {
+            return !disputeDAO.isChallengeWindowOpen(gameId);
+        }
+
+        return false;
     }
 
     /// @notice Finalize game and allocate prizes (must be called before withdrawPrize)
@@ -1138,6 +1149,11 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
                 positionHistory.push(posHash);
             }
             positionCount[posHash]++;
+
+            // Update cached max repetitions (avoids O(n) loop in getDrawRuleStatus)
+            if (positionCount[posHash] > maxPositionRepetitions) {
+                maxPositionRepetitions = positionCount[posHash];
+            }
         }
     }
 

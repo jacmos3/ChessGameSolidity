@@ -63,6 +63,7 @@ contract ChessBoard {
     // Threefold repetition tracking
     mapping(bytes32 => uint8) internal positionCount;
     bytes32[] internal positionHistory;
+    uint8 internal maxPositionRepetitions; // Cached max repetitions (avoids O(n) loop)
 
     // 50-move rule tracking (half-moves since last pawn move or capture)
     uint16 internal halfMoveClock;
@@ -154,14 +155,6 @@ contract ChessBoard {
     /// @return maxRepetitions Maximum times any position has occurred
     function getDrawRuleStatus() external view returns (uint16 halfMoves, uint8 maxRepetitions) {
         halfMoves = halfMoveClock;
-
-        // Find max repetition count from history
-        maxRepetitions = 0;
-        for (uint256 i = 0; i < positionHistory.length; i++) {
-            uint8 count = positionCount[positionHistory[i]];
-            if (count > maxRepetitions) {
-                maxRepetitions = count;
-            }
-        }
+        maxRepetitions = maxPositionRepetitions;
     }
 }

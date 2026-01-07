@@ -43,10 +43,11 @@ contract ChessToken is ERC20, ERC20Burnable, ERC20Votes, ERC20Permit, AccessCont
     uint256 public teamVestingClaimed;
     address public teamWallet;
 
-    // Team wallet change timelock (2-step process with 48h delay)
+    // Team wallet change timelock (2-step process with 48h delay, 7 day expiry)
     address public pendingTeamWallet;
     uint256 public teamWalletChangeInitiated;
     uint256 public constant TEAM_WALLET_TIMELOCK = 48 hours;
+    uint256 public constant TEAM_WALLET_EXPIRY = 7 days;
 
     event PlayToEarnMinted(address indexed to, uint256 amount);
     event TreasuryMinted(address indexed to, uint256 amount);
@@ -164,6 +165,10 @@ contract ChessToken is ERC20, ERC20Burnable, ERC20Votes, ERC20Permit, AccessCont
         require(
             block.timestamp >= teamWalletChangeInitiated + TEAM_WALLET_TIMELOCK,
             "Timelock not expired"
+        );
+        require(
+            block.timestamp <= teamWalletChangeInitiated + TEAM_WALLET_EXPIRY,
+            "Proposal expired"
         );
 
         address oldWallet = teamWallet;

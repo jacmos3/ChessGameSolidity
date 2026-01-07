@@ -5,6 +5,31 @@ const DisputeDAO = artifacts.require("DisputeDAO");
 const ChessFactory = artifacts.require("ChessFactory");
 const ChessCore = artifacts.require("ChessCore");
 
+// Time manipulation helper using promise
+const advanceTime = (seconds) => {
+  return new Promise((resolve, reject) => {
+    web3.currentProvider.send({
+      jsonrpc: "2.0",
+      method: "evm_increaseTime",
+      params: [seconds],
+      id: Date.now()
+    }, (err) => {
+      if (err) reject(err);
+      web3.currentProvider.send({
+        jsonrpc: "2.0",
+        method: "evm_mine",
+        params: [],
+        id: Date.now() + 1
+      }, (err2) => {
+        if (err2) reject(err2);
+        resolve();
+      });
+    });
+  });
+};
+
+const CHALLENGE_WINDOW = 48 * 60 * 60; // 48 hours in seconds
+
 contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
   const admin = accounts[0];
   const teamWallet = accounts[1];
@@ -214,7 +239,7 @@ contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
       });
 
       const games = await chessFactory.getDeployedChessGames();
-      chessCore = await ChessCore.at(games[0]);
+      chessCore = await ChessCore.at(games[games.length - 1]); // Get latest game
       gameId = await chessCore.gameId();
 
       // Grant roles to ChessCore contract
@@ -245,9 +270,28 @@ contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
       // White resigns - black wins
       await chessCore.resign({ from: whitePlayer });
 
-      // Check canClaimPrize
+      // Verify game is registered
+      const disputeId = await disputeDAO.gameToDispute(gameId);
+      assert.isTrue(web3.utils.toBN(disputeId).gt(web3.utils.toBN("0")), "Game should be registered");
+
+      // Check initial window status
+      const windowOpenBefore = await disputeDAO.isChallengeWindowOpen(gameId);
+      assert.isTrue(windowOpenBefore, "Challenge window should be open initially");
+
+      // Cannot claim immediately - challenge window must expire first (security fix)
+      const canClaimBefore = await chessCore.canClaimPrize();
+      assert.isFalse(canClaimBefore, "Should NOT be able to claim prize during challenge window");
+
+      // Advance time past challenge window (48 hours + 1 second)
+      await advanceTime(CHALLENGE_WINDOW + 1);
+
+      // Verify window is now closed
+      const windowOpenAfter = await disputeDAO.isChallengeWindowOpen(gameId);
+      assert.isFalse(windowOpenAfter, "Challenge window should be closed after time advance");
+
+      // Now should be able to claim
       const canClaim = await chessCore.canClaimPrize();
-      assert.isTrue(canClaim, "Should be able to claim prize immediately if no challenge");
+      assert.isTrue(canClaim, "Should be able to claim prize after challenge window expires");
 
       // Black claims prize
       const balanceBefore = BigInt(await web3.eth.getBalance(blackPlayer));
@@ -321,6 +365,9 @@ contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
       // Verify dispute registered
       const disputeId = await disputeDAO.gameToDispute(gameId);
       assert.isTrue(web3.utils.toBN(disputeId).gt(web3.utils.toBN("0")));
+
+      // Advance time past challenge window (security fix - prevents frontrunning)
+      await advanceTime(CHALLENGE_WINDOW + 1);
 
       // Black claims prize
       const contractBalanceBefore = await web3.eth.getBalance(chessCore.address);
