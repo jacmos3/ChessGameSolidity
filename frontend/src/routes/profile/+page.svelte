@@ -2,6 +2,7 @@
 	import { wallet, truncateAddress, isSupported, contractAddress } from '$lib/stores/wallet.js';
 	import { games } from '$lib/stores/game.js';
 	import BondingPanel from '$lib/components/BondingPanel.svelte';
+	import ArbitratorPanel from '$lib/components/ArbitratorPanel.svelte';
 
 	// Fetch games
 	$: if ($wallet.connected && $isSupported && $contractAddress) {
@@ -158,6 +159,11 @@
 			<!-- Bond Management -->
 			<div class="mb-8">
 				<BondingPanel />
+			</div>
+
+			<!-- Arbitrator Program -->
+			<div class="mb-8">
+				<ArbitratorPanel />
 			</div>
 
 			<!-- Game History -->
