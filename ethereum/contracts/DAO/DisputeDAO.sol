@@ -524,6 +524,13 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         uint256 _supermajority,
         uint256 _challengeDeposit
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_challengeWindow >= 1 hours && _challengeWindow <= 7 days, "Invalid challenge window");
+        require(_commitPeriod >= 1 hours && _commitPeriod <= 7 days, "Invalid commit period");
+        require(_revealPeriod >= 1 hours && _revealPeriod <= 7 days, "Invalid reveal period");
+        require(_quorum >= 3 && _quorum <= 100, "Invalid quorum");
+        require(_supermajority >= 51 && _supermajority <= 100, "Invalid supermajority");
+        require(_challengeDeposit >= 1 * 10**18, "Challenge deposit too low");
+
         challengeWindow = _challengeWindow;
         commitPeriod = _commitPeriod;
         revealPeriod = _revealPeriod;

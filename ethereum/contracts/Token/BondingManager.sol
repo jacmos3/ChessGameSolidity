@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./ChessToken.sol";
 
 /**
@@ -18,6 +19,8 @@ import "./ChessToken.sol";
  * - Slashing for cheaters (burned, not redistributed)
  */
 contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
+    using SafeERC20 for ChessToken;
+
     bytes32 public constant GAME_MANAGER_ROLE = keccak256("GAME_MANAGER_ROLE");
     bytes32 public constant DISPUTE_MANAGER_ROLE = keccak256("DISPUTE_MANAGER_ROLE");
 
@@ -34,6 +37,7 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
 
     // Circuit breaker
     uint256 public constant MAX_PRICE_CHANGE_PERCENT = 50;
+    uint256 public constant MIN_PRICE = 1e12; // Minimum price floor (0.000001 ETH per CHESS)
     uint256 public lastKnownPrice;
 
     // Minimum bond floor in ETH terms
@@ -95,7 +99,7 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
         require(chessAmount > 0 || msg.value > 0, "Must deposit something");
 
         if (chessAmount > 0) {
-            require(chessToken.transferFrom(msg.sender, address(this), chessAmount), "CHESS transfer failed");
+            chessToken.safeTransferFrom(msg.sender, address(this), chessAmount);
             bonds[msg.sender].chessAmount += chessAmount;
             totalChessBonded += chessAmount;
         }
@@ -125,7 +129,7 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
         if (chessAmount > 0) {
             bond.chessAmount -= chessAmount;
             totalChessBonded -= chessAmount;
-            require(chessToken.transfer(msg.sender, chessAmount), "CHESS transfer failed");
+            chessToken.safeTransfer(msg.sender, chessAmount);
         }
 
         if (ethAmount > 0) {
@@ -145,6 +149,9 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
      * @return ethRequired Amount of ETH required
      */
     function calculateRequiredBond(uint256 stake) public view returns (uint256 chessRequired, uint256 ethRequired) {
+        // Ensure price is above minimum floor to prevent manipulation
+        require(chessEthPrice >= MIN_PRICE, "Price below minimum floor");
+
         ethRequired = stake * ethMultiplier;
 
         // Calculate CHESS required based on TWAP price
@@ -282,7 +289,7 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
      * @param newPrice New CHESS/ETH price
      */
     function updatePrice(uint256 newPrice) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(newPrice > 0, "Invalid price");
+        require(newPrice >= MIN_PRICE, "Price below minimum floor");
 
         // Circuit breaker check
         if (lastKnownPrice > 0) {
