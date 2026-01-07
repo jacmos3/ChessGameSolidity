@@ -4,15 +4,75 @@ Welcome to Solidity Chess, a decentralized chess platform where you can play, ea
 
 ## Table of Contents
 
-1. [Getting Started](#getting-started)
-2. [Connecting Your Wallet](#connecting-your-wallet)
-3. [Understanding the Bond System](#understanding-the-bond-system)
-4. [Playing Chess](#playing-chess)
-5. [ELO Rating System](#elo-rating-system)
-6. [Dispute Resolution](#dispute-resolution)
-7. [Becoming an Arbitrator](#becoming-an-arbitrator)
-8. [Governance](#governance)
-9. [FAQ](#faq)
+1. [New to Crypto? Start Here](#new-to-crypto-start-here)
+2. [Getting Started](#getting-started)
+3. [Connecting Your Wallet](#connecting-your-wallet)
+4. [Understanding the Bond System](#understanding-the-bond-system)
+5. [Playing Chess](#playing-chess)
+6. [ELO Rating System](#elo-rating-system)
+7. [Dispute Resolution](#dispute-resolution)
+8. [Becoming an Arbitrator](#becoming-an-arbitrator)
+9. [Governance](#governance)
+10. [Glossary](#glossary)
+11. [FAQ](#faq)
+
+---
+
+## New to Crypto? Start Here
+
+If you've never used cryptocurrency or blockchain before, don't worry! Here's everything you need to know.
+
+### What is Blockchain?
+
+Think of blockchain as a shared digital ledger that nobody owns but everyone can verify. When you play chess on Solidity Chess, every move is recorded on this ledger, making it impossible to cheat or dispute what happened.
+
+### What is a Wallet?
+
+A **wallet** is like a digital bank account for cryptocurrency. It stores your digital money and lets you interact with blockchain applications. Unlike a regular bank, YOU control your wallet - no company can freeze or access your funds.
+
+**Popular wallets:**
+- **MetaMask** (recommended) - Browser extension, easy to use
+- **Coinbase Wallet** - Good for beginners
+- **Rainbow** - Mobile-friendly
+
+### What is ETH?
+
+**ETH (Ether)** is the currency of the Ethereum blockchain. You need it to:
+- Pay for "gas" (small fees for every action)
+- Stake on games (your bet amount)
+
+### What is Gas?
+
+Every action on blockchain costs a small fee called **gas**. Think of it like postage for sending a letter - the network charges a fee to process your request. Gas fees vary based on network congestion.
+
+### What are CHESS Tokens?
+
+**CHESS** is the special token for Solidity Chess. You use it to:
+- Post a "bond" (security deposit) to prove you won't cheat
+- Vote on platform decisions
+- Become an arbitrator and earn rewards
+
+### How to Get Started (Step by Step)
+
+#### Step 1: Install MetaMask
+1. Go to [metamask.io](https://metamask.io)
+2. Click "Download" and install the browser extension
+3. Follow the setup wizard to create a wallet
+4. **IMPORTANT**: Write down your Secret Recovery Phrase on paper and store it safely. If you lose this, you lose access to your funds forever!
+
+#### Step 2: Get Some ETH
+You need ETH to play. Options:
+- **Buy on an exchange**: Coinbase, Binance, Kraken
+- **Use a testnet**: For practice, use free test ETH (see "Supported Networks")
+- **Get from a friend**: They can send ETH to your wallet address
+
+#### Step 3: Get CHESS Tokens
+- Buy CHESS on a decentralized exchange (coming soon)
+- Earn CHESS by playing games
+- For testnet: Use the faucet (free test tokens)
+
+#### Step 4: Connect and Play!
+Once you have ETH and CHESS, you're ready to connect your wallet and play chess!
 
 ---
 
@@ -366,12 +426,13 @@ A: Yes! Draws can happen by:
 - Mutual agreement
 - Threefold repetition (same position 3 times)
 - 50-move rule (50 moves without capture or pawn move)
+- 75-move rule (automatic draw after 75 moves without capture or pawn move - FIDE rule)
 - Stalemate
 
 ### Disputes
 
 **Q: How long do I have to challenge?**
-A: 48 hours after the game ends.
+A: 48 hours after the game ends. The entire dispute process has a maximum duration of 30 days - after that, the dispute automatically closes and deposits are returned.
 
 **Q: What if arbitrators are corrupt?**
 A: Multiple safeguards exist:
@@ -386,13 +447,39 @@ A: Votes are revealed after the reveal phase, but arbitrator identities are pseu
 ### Technical
 
 **Q: Why are gas fees high?**
-A: Chess logic is complex. We've optimized where possible, but on-chain validation has costs. Consider playing on L2 solutions when available.
+A: Chess logic is complex. We've optimized where possible, but on-chain validation has costs. Consider playing on Layer 2 networks (like Arbitrum, Optimism, or Base) when available - these are faster and cheaper alternatives to Ethereum mainnet.
 
 **Q: What if the transaction fails?**
 A: Check your gas limit and try again. If a move fails, the game state remains unchanged.
 
 **Q: Can I use a hardware wallet?**
-A: Yes! Any Web3-compatible wallet works with Solidity Chess.
+A: Yes! Any Web3-compatible wallet works with Solidity Chess (Ledger, Trezor, etc.).
+
+---
+
+## Glossary
+
+Here are common terms you'll encounter:
+
+| Term | Definition |
+|------|------------|
+| **Wallet** | A digital account that holds your cryptocurrency. You control it with a private key or seed phrase. |
+| **ETH (Ether)** | The main cryptocurrency of Ethereum, used to pay for transactions and game stakes. |
+| **Gas** | The fee you pay to the network to process your transaction. Higher gas = faster processing. |
+| **Transaction** | Any action on the blockchain (making a move, joining a game, etc.). Each requires gas. |
+| **Smart Contract** | Code that runs on the blockchain. Solidity Chess games are smart contracts that enforce chess rules automatically. |
+| **Bond** | A security deposit you lock up to prove you won't cheat. You get it back after games complete. |
+| **Stake** | The ETH you bet on a game. Winner takes both players' stakes. |
+| **CHESS Token** | The governance token of Solidity Chess, used for bonding, voting, and rewards. |
+| **ELO Rating** | A number representing your skill level. Higher = better. Everyone starts at 1200. |
+| **Arbitrator** | A community member who votes on disputes in exchange for rewards. |
+| **Dispute** | A formal challenge to a game result, claiming the opponent cheated. |
+| **Testnet** | A practice version of Ethereum with free fake tokens. Great for learning! |
+| **Mainnet** | The real Ethereum network where real money is at stake. |
+| **Layer 2 (L2)** | Faster, cheaper networks built on top of Ethereum (Arbitrum, Optimism, Base). |
+| **MetaMask** | The most popular browser wallet for Ethereum. |
+| **Seed Phrase** | 12-24 words that recover your wallet. NEVER share these with anyone! |
+| **TWAP** | Time-Weighted Average Price - used to calculate fair token prices and prevent manipulation. |
 
 ---
 
