@@ -21,7 +21,7 @@ contract("ChessFactory", (accounts) => {
 
   it("should create chess game", async () => {
     const initialChessGames = await chessFactory.totalChessGames();
-    // TimeoutPreset: 0=Blitz, 1=Rapid, 2=Classical
+    // TimeoutPreset: 0=Finney, 1=Buterin, 2=Nakamoto
     await chessFactory.createChessGame(2, 0, { from: accounts[0], value: web3.utils.toWei("1", "ether") });
     const newChessGames = await chessFactory.totalChessGames();
 

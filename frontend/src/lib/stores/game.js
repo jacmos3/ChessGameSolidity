@@ -97,7 +97,7 @@ function createGamesStore() {
 				$wallet.signer
 			);
 
-			// TimeoutPreset: 0=Blitz (~1h), 1=Rapid (~7h), 2=Classical (~7d)
+			// TimeoutPreset: 0=Finney (~1h), 1=Buterin (~7h), 2=Nakamoto (~7d)
 			// GameMode: 0=Tournament (strict), 1=Friendly (relaxed)
 			const tx = await factory.createChessGame(timeoutPreset, gameMode, {
 				value: ethers.utils.parseEther(betAmount)

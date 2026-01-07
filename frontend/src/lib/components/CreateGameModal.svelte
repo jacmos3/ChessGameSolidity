@@ -5,16 +5,16 @@
 	const dispatch = createEventDispatcher();
 
 	let betAmount = '0.01';
-	let timeoutPreset = 2; // Default to Classical
+	let timeoutPreset = 2; // Default to Nakamoto
 	let gameMode = 1; // Default to Friendly (safer for casual players)
 	let creating = false;
 	let error = null;
 
-	// Timeout presets matching contract constants
+	// Timeout presets matching contract constants (named after crypto pioneers)
 	const timeoutOptions = [
-		{ value: 0, name: 'Blitz', blocks: 300, time: '~1 ora', description: 'Partite veloci' },
-		{ value: 1, name: 'Rapid', blocks: 2100, time: '~7 ore', description: 'Ritmo moderato' },
-		{ value: 2, name: 'Classical', blocks: 50400, time: '~7 giorni', description: 'Partite rilassate' }
+		{ value: 0, name: 'Finney', blocks: 300, time: '~1 ora', description: 'Partite veloci' },
+		{ value: 1, name: 'Buterin', blocks: 2100, time: '~7 ore', description: 'Ritmo moderato' },
+		{ value: 2, name: 'Nakamoto', blocks: 50400, time: '~7 giorni', description: 'Partite rilassate' }
 	];
 
 	// Game mode options

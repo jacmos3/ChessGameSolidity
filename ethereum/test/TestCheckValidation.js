@@ -22,7 +22,7 @@ contract("ChessCore - Check Validation", (accounts) => {
     const chessCoreImpl = await ChessCore.new();
     chessFactory = await ChessFactory.new(chessCoreImpl.address);
 
-    // TimeoutPreset: 0=Blitz, 1=Rapid, 2=Classical
+    // TimeoutPreset: 0=Finney, 1=Buterin, 2=Nakamoto
     // GameMode: 0=Tournament, 1=Friendly (tests need Friendly to test rejection)
     await chessFactory.createChessGame(2, 1, {
       from: whitePlayer,

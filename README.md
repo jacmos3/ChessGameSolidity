@@ -45,7 +45,7 @@ Solidity Chess is a complete decentralized chess platform where:
 - All special moves: castling, en passant, pawn promotion
 - Check, checkmate, and stalemate detection
 - Threefold repetition and 50-move rule
-- Three time controls: Blitz (~1h), Rapid (~7h), Classical (~7d)
+- Three time controls: Finney (~1h), Buterin (~7h), Nakamoto (~7d)
 - Tournament and Friendly game modes
 
 ### Anti-Cheating System
@@ -217,7 +217,7 @@ The project uses several gas optimization techniques:
 ```solidity
 // Create a new game
 function createChessGame(
-    uint8 _timeoutPreset,  // 0=Blitz, 1=Rapid, 2=Classical
+    uint8 _timeoutPreset,  // 0=Finney, 1=Buterin, 2=Nakamoto
     uint8 _gameMode        // 0=Tournament, 1=Friendly
 ) external payable returns (address);
 

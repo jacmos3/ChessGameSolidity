@@ -16,7 +16,7 @@ contract("ChessCore - Resign and ClaimPrize", (accounts) => {
     chessFactory = await ChessFactory.new(chessCoreImpl.address);
 
     // Create a new game with white player
-    // TimeoutPreset: 0=Blitz, 1=Rapid, 2=Classical
+    // TimeoutPreset: 0=Finney, 1=Buterin, 2=Nakamoto
     const tx = await chessFactory.createChessGame(2, 0, {
       from: whitePlayer,
       value: betAmount
