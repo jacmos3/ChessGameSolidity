@@ -351,6 +351,23 @@ contract("BondingManager", (accounts) => {
       const isPaused = await bondingManager.paused();
       assert.isFalse(isPaused);
     });
+
+    it("should reject price below MIN_PRICE floor", async () => {
+      // MIN_PRICE is 1e12 (0.000001 ETH)
+      const belowMinPrice = "999999999999"; // Just below 1e12
+
+      try {
+        await bondingManager.updatePrice(belowMinPrice, { from: admin });
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+    });
+
+    it("should have MIN_PRICE constant set correctly", async () => {
+      const minPrice = await bondingManager.MIN_PRICE();
+      assert.equal(minPrice.toString(), "1000000000000"); // 1e12
+    });
   });
 
   describe("View Functions", () => {

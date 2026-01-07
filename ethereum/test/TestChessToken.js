@@ -150,6 +150,54 @@ contract("ChessToken", (accounts) => {
         assert.include(error.message, "revert");
       }
     });
+
+    it("should reject acceptance after proposal expires (7 days)", async () => {
+      // Propose new team wallet
+      await chessToken.proposeTeamWallet(user1, { from: teamWallet });
+
+      // Fast forward past expiry (7 days + 1 second)
+      const SEVEN_DAYS = 7 * 24 * 60 * 60;
+      await new Promise((resolve, reject) => {
+        web3.currentProvider.send({ jsonrpc: "2.0", method: "evm_increaseTime", params: [SEVEN_DAYS + 1], id: Date.now() }, (err) => {
+          if (err) reject(err);
+          web3.currentProvider.send({ jsonrpc: "2.0", method: "evm_mine", params: [], id: Date.now() + 1 }, (err2) => {
+            if (err2) reject(err2);
+            resolve();
+          });
+        });
+      });
+
+      // Try to accept - should fail due to expiry
+      try {
+        await chessToken.acceptTeamWalletChange({ from: teamWallet });
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+    });
+
+    it("should accept proposal just before expiry", async () => {
+      // Propose new team wallet
+      await chessToken.proposeTeamWallet(user1, { from: teamWallet });
+
+      // Fast forward to just after timelock but before expiry (48h + 1 day = 3 days, well under 7 days)
+      const THREE_DAYS = 3 * 24 * 60 * 60;
+      await new Promise((resolve, reject) => {
+        web3.currentProvider.send({ jsonrpc: "2.0", method: "evm_increaseTime", params: [THREE_DAYS], id: Date.now() }, (err) => {
+          if (err) reject(err);
+          web3.currentProvider.send({ jsonrpc: "2.0", method: "evm_mine", params: [], id: Date.now() + 1 }, (err2) => {
+            if (err2) reject(err2);
+            resolve();
+          });
+        });
+      });
+
+      // Should succeed - within expiry window
+      await chessToken.acceptTeamWalletChange({ from: teamWallet });
+
+      const newWallet = await chessToken.teamWallet();
+      assert.equal(newWallet, user1);
+    });
   });
 
   describe("Minter Role Management", () => {

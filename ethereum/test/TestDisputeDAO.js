@@ -467,8 +467,102 @@ contract("DisputeDAO", (accounts) => {
     });
 
     it("should reject parameter change from non-admin", async () => {
+      // Use valid parameters to ensure we're testing access control, not validation
       try {
-        await disputeDAO.setParameters(1, 1, 1, 1, 1, 1, { from: challenger });
+        await disputeDAO.setParameters(
+          2 * 3600, // 2 hours - valid
+          2 * 3600, // 2 hours - valid
+          2 * 3600, // 2 hours - valid
+          5,        // quorum - valid
+          60,       // supermajority - valid
+          web3.utils.toWei("10", "ether"), // deposit - valid
+          { from: challenger }
+        );
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+    });
+
+    it("should reject invalid challenge window (too short)", async () => {
+      try {
+        await disputeDAO.setParameters(
+          30 * 60,  // 30 minutes - too short (min 1 hour)
+          2 * 3600,
+          2 * 3600,
+          5,
+          60,
+          web3.utils.toWei("10", "ether"),
+          { from: admin }
+        );
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+    });
+
+    it("should reject invalid challenge window (too long)", async () => {
+      try {
+        await disputeDAO.setParameters(
+          8 * 24 * 3600,  // 8 days - too long (max 7 days)
+          2 * 3600,
+          2 * 3600,
+          5,
+          60,
+          web3.utils.toWei("10", "ether"),
+          { from: admin }
+        );
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+    });
+
+    it("should reject invalid quorum (too low)", async () => {
+      try {
+        await disputeDAO.setParameters(
+          2 * 3600,
+          2 * 3600,
+          2 * 3600,
+          2,        // quorum - too low (min 3)
+          60,
+          web3.utils.toWei("10", "ether"),
+          { from: admin }
+        );
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+    });
+
+    it("should reject invalid supermajority (too low)", async () => {
+      try {
+        await disputeDAO.setParameters(
+          2 * 3600,
+          2 * 3600,
+          2 * 3600,
+          5,
+          50,       // supermajority - too low (min 51)
+          web3.utils.toWei("10", "ether"),
+          { from: admin }
+        );
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+    });
+
+    it("should reject invalid challenge deposit (too low)", async () => {
+      try {
+        await disputeDAO.setParameters(
+          2 * 3600,
+          2 * 3600,
+          2 * 3600,
+          5,
+          60,
+          web3.utils.toWei("0.5", "ether"), // too low (min 1 token)
+          { from: admin }
+        );
         assert.fail("Should have reverted");
       } catch (error) {
         assert.include(error.message, "revert");

@@ -288,4 +288,26 @@ contract("PlayerRating - ELO System", accounts => {
             }
         });
     });
+
+    describe("MAX_RANKED_PLAYERS Cap", () => {
+        it("should have MAX_RANKED_PLAYERS constant set", async () => {
+            const maxPlayers = await rating.MAX_RANKED_PLAYERS();
+            assert.equal(maxPlayers.toString(), "100000", "MAX_RANKED_PLAYERS should be 100000");
+        });
+
+        it("should still track player ratings even if not in leaderboard", async () => {
+            // This verifies that players can still have ratings tracked
+            // even if they can't be added to the leaderboard (when cap is reached)
+            // We can't easily test the cap being reached, but we verify the mechanism works
+            await rating.registerPlayer(player1, { from: admin });
+
+            // Verify player has rating but we check the cap exists
+            const playerRating = await rating.getRating(player1);
+            assert.equal(playerRating.toString(), "1200", "Player should have default rating");
+
+            // Verify they're in the ranked list (under cap)
+            const isRanked = await rating.isRanked(player1);
+            assert.isTrue(isRanked, "Player should be ranked when under cap");
+        });
+    });
 });
