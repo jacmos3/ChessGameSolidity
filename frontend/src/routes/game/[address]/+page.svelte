@@ -497,8 +497,21 @@
 						</div>
 					{/if}
 
+					<!-- Spectator banner -->
+					{#if data.playerRole === 'spectator' && data.stateInfo.isActive}
+						<div class="mb-4 py-3 px-4 rounded-lg bg-chess-purple/10 border border-chess-purple/30 flex items-center justify-center gap-3">
+							<span class="text-xl">👁</span>
+							<div class="text-center">
+								<span class="text-chess-purple font-medium">Spectator Mode</span>
+								<span class="text-chess-gray text-sm ml-2">
+									{currentPlayerIsWhite ? "White's turn" : "Black's turn"}
+								</span>
+							</div>
+						</div>
+					{/if}
+
 					<!-- Turn indicator -->
-					{#if data.stateInfo.isActive}
+					{#if data.stateInfo.isActive && data.playerRole !== 'spectator'}
 						<div class="mb-4 py-3 px-4 rounded-lg text-center font-medium {data.isMyTurn ? 'bg-chess-success text-white' : 'bg-chess-gray/20 text-chess-gray'}">
 							{#if data.isMyTurn}
 								Your Turn - Make your move!
@@ -612,6 +625,11 @@
 						<div class="flex items-center justify-between mb-4">
 							<span class="text-chess-gray text-sm">Game #{truncateAddress(address)}</span>
 							<div class="flex items-center gap-2">
+								{#if data.playerRole === 'spectator' && data.stateInfo.isActive}
+									<span class="px-2 py-1 rounded text-xs font-medium bg-chess-purple/20 text-chess-purple">
+										👁 Watching
+									</span>
+								{/if}
 								<span class="px-2 py-1 rounded text-xs font-medium {data.gameMode === 0 ? 'bg-amber-600 text-white' : 'bg-cyan-600 text-white'}">
 									{data.gameMode === 0 ? '🏆 Tournament' : '🤝 Friendly'}
 								</span>
@@ -729,13 +747,23 @@
 							{/if}
 
 							{#if !canJoin && !canResign && !canClaim && !isGameFinished}
-								<p class="text-chess-gray text-sm text-center py-2">
-									{#if data.playerRole === 'spectator'}
-										You are spectating this game
-									{:else}
+								{#if data.playerRole === 'spectator'}
+									<div class="bg-chess-purple/10 border border-chess-purple/30 rounded-lg p-4 text-center">
+										<div class="text-2xl mb-2">👁</div>
+										<p class="text-chess-purple font-medium mb-1">Spectating</p>
+										<p class="text-chess-gray text-xs mb-3">Watch the game unfold in real-time</p>
+										<button
+											class="btn btn-secondary w-full text-sm"
+											on:click={copyGameLink}
+										>
+											Share Game Link
+										</button>
+									</div>
+								{:else}
+									<p class="text-chess-gray text-sm text-center py-2">
 										No actions available
-									{/if}
-								</p>
+									</p>
+								{/if}
 							{/if}
 
 							{#if isGameFinished && moveHistory.length > 0}
