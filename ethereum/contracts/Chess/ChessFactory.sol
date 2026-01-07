@@ -5,6 +5,7 @@ import "@openzeppelin/contracts/proxy/Clones.sol";
 import "./ChessCore.sol";
 import "./ChessNFT.sol";
 import "../Token/BondingManager.sol";
+import "../Token/RewardPool.sol";
 import "../Rating/PlayerRating.sol";
 
 contract ChessFactory {
@@ -21,6 +22,7 @@ contract ChessFactory {
     address public bondingManager;
     address public disputeDAO;
     address public playerRating;
+    address public rewardPool;
     address public owner;
 
     // Bet limits (can be adjusted for different networks)
@@ -38,6 +40,7 @@ contract ChessFactory {
     event BondingManagerUpdated(address indexed oldAddress, address indexed newAddress);
     event DisputeDAOUpdated(address indexed oldAddress, address indexed newAddress);
     event PlayerRatingUpdated(address indexed oldAddress, address indexed newAddress);
+    event RewardPoolUpdated(address indexed oldAddress, address indexed newAddress);
     event ImplementationUpdated(address indexed oldImplementation, address indexed newImplementation);
 
     modifier onlyOwner() {
@@ -82,6 +85,13 @@ contract ChessFactory {
         playerRating = _playerRating;
     }
 
+    /// @notice Set the RewardPool contract address
+    /// @param _rewardPool Address of RewardPool (address(0) to disable)
+    function setRewardPool(address _rewardPool) external onlyOwner {
+        emit RewardPoolUpdated(rewardPool, _rewardPool);
+        rewardPool = _rewardPool;
+    }
+
     /// @notice Transfer ownership
     function transferOwnership(address newOwner) external onlyOwner {
         require(newOwner != address(0), "Invalid owner");
@@ -114,7 +124,8 @@ contract ChessFactory {
             gameId,
             bondingManager,
             disputeDAO,
-            playerRating
+            playerRating,
+            rewardPool
         );
 
         deployedChessGames.push(clone);
