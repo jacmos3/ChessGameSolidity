@@ -9,6 +9,11 @@
 
 	$: canJoin = game.stateInfo.canJoin && game.whitePlayer.toLowerCase() !== currentAccount?.toLowerCase();
 
+	// Can watch if game is in progress and user is not a player
+	$: isPlayer = game.whitePlayer?.toLowerCase() === currentAccount?.toLowerCase() ||
+		game.blackPlayer?.toLowerCase() === currentAccount?.toLowerCase();
+	$: canWatch = game.stateInfo.isActive && !isPlayer;
+
 	const colorMap = {
 		blue: 'text-chess-blue',
 		success: 'text-chess-success',
@@ -54,6 +59,12 @@
 			<div class="pt-1">
 				<span class="text-xs bg-chess-blue/20 text-chess-blue px-2 py-1 rounded">
 					Join Game
+				</span>
+			</div>
+		{:else if canWatch}
+			<div class="pt-1">
+				<span class="text-xs bg-chess-purple/20 text-chess-purple px-2 py-1 rounded">
+					Watch Live
 				</span>
 			</div>
 		{/if}
