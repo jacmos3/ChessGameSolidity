@@ -1,10 +1,15 @@
+const ChessCore = artifacts.require("ChessCore");
 const ChessFactory = artifacts.require("ChessFactory");
 
 contract("ChessFactory", (accounts) => {
   let chessFactory;
+  let chessCoreImpl;
 
   before(async () => {
-    chessFactory = await ChessFactory.new();
+    // Deploy ChessCore implementation first
+    chessCoreImpl = await ChessCore.new();
+    // Pass implementation address to factory
+    chessFactory = await ChessFactory.new(chessCoreImpl.address);
   });
 
   //it("should deploy NFT", async () => {

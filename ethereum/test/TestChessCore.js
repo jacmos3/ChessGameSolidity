@@ -12,7 +12,8 @@ contract("ChessCore - Resign and ClaimPrize", (accounts) => {
 
   beforeEach(async () => {
     // Deploy fresh contracts for each test
-    chessFactory = await ChessFactory.new();
+    const chessCoreImpl = await ChessCore.new();
+    chessFactory = await ChessFactory.new(chessCoreImpl.address);
 
     // Create a new game with white player
     // TimeoutPreset: 0=Blitz, 1=Rapid, 2=Classical

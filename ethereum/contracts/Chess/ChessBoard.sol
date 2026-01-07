@@ -12,13 +12,13 @@ contract ChessBoard {
     int8[BOARD_SIZE][BOARD_SIZE] public board;
 
     // Piece constants from ChessMediaLibrary
-    int8 internal immutable EMPTY = ChessMediaLibrary.EMPTY;
-    int8 internal immutable PAWN = ChessMediaLibrary.PAWN;
-    int8 internal immutable KNIGHT = ChessMediaLibrary.KNIGHT;
-    int8 internal immutable BISHOP = ChessMediaLibrary.BISHOP;
-    int8 internal immutable ROOK = ChessMediaLibrary.ROOK;
-    int8 internal immutable QUEEN = ChessMediaLibrary.QUEEN;
-    int8 internal immutable KING = ChessMediaLibrary.KING;
+    int8 internal constant EMPTY = ChessMediaLibrary.EMPTY;
+    int8 internal constant PAWN = ChessMediaLibrary.PAWN;
+    int8 internal constant KNIGHT = ChessMediaLibrary.KNIGHT;
+    int8 internal constant BISHOP = ChessMediaLibrary.BISHOP;
+    int8 internal constant ROOK = ChessMediaLibrary.ROOK;
+    int8 internal constant QUEEN = ChessMediaLibrary.QUEEN;
+    int8 internal constant KING = ChessMediaLibrary.KING;
 
     // Row constants
     uint8 internal constant ROW_BLACK_PIECES = 0;

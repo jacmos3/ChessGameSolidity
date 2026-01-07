@@ -2,6 +2,8 @@ const ChessToken = artifacts.require("ChessToken");
 const BondingManager = artifacts.require("BondingManager");
 const ArbitratorRegistry = artifacts.require("ArbitratorRegistry");
 const DisputeDAO = artifacts.require("DisputeDAO");
+const ChessMediaLibrary = artifacts.require("ChessMediaLibrary");
+const ChessCore = artifacts.require("ChessCore");
 const ChessFactory = artifacts.require("ChessFactory");
 const ChessNFT = artifacts.require("ChessNFT");
 const ChessTimelock = artifacts.require("ChessTimelock");
@@ -80,11 +82,23 @@ module.exports = async function (deployer, network, accounts) {
   console.log(`  DisputeDAO deployed at: ${disputeDAO.address}`);
 
   // =========================================
-  // PHASE 5: Deploy ChessFactory
+  // PHASE 5: Deploy ChessCore Implementation & ChessFactory
   // =========================================
-  console.log("\nPHASE 5: Deploying ChessFactory...");
+  console.log("\nPHASE 5: Deploying ChessCore implementation and ChessFactory...");
 
-  await deployer.deploy(ChessFactory, { from: admin });
+  // 5.1 Deploy ChessMediaLibrary (required by ChessCore)
+  await deployer.deploy(ChessMediaLibrary, { from: admin });
+  const chessMediaLibrary = await ChessMediaLibrary.deployed();
+  console.log(`  ChessMediaLibrary deployed at: ${chessMediaLibrary.address}`);
+
+  // 5.2 Link library to ChessCore and deploy implementation
+  await deployer.link(ChessMediaLibrary, ChessCore);
+  await deployer.deploy(ChessCore, { from: admin });
+  const chessCoreImpl = await ChessCore.deployed();
+  console.log(`  ChessCore implementation deployed at: ${chessCoreImpl.address}`);
+
+  // 5.2 Deploy ChessFactory with implementation address
+  await deployer.deploy(ChessFactory, chessCoreImpl.address, { from: admin });
   const chessFactory = await ChessFactory.deployed();
   console.log(`  ChessFactory deployed at: ${chessFactory.address}`);
 
@@ -210,6 +224,7 @@ module.exports = async function (deployer, network, accounts) {
   console.log(`BondingManager:     ${bondingManager.address}`);
   console.log(`ArbitratorRegistry: ${arbitratorRegistry.address}`);
   console.log(`DisputeDAO:         ${disputeDAO.address}`);
+  console.log(`ChessCoreImpl:      ${chessCoreImpl.address}`);
   console.log(`ChessFactory:       ${chessFactory.address}`);
   console.log(`ChessNFT:           ${chessNFTAddress}`);
   console.log(`ChessTimelock:      ${chessTimelock.address}`);
@@ -227,6 +242,7 @@ module.exports = async function (deployer, network, accounts) {
       BondingManager: bondingManager.address,
       ArbitratorRegistry: arbitratorRegistry.address,
       DisputeDAO: disputeDAO.address,
+      ChessCoreImplementation: chessCoreImpl.address,
       ChessFactory: chessFactory.address,
       ChessNFT: chessNFTAddress,
       ChessTimelock: chessTimelock.address,

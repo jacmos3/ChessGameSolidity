@@ -7,7 +7,8 @@ contract("ChessCore - Draw Rules", accounts => {
     let game;
 
     beforeEach(async () => {
-        factory = await ChessFactory.new({ from: white });
+        const chessCoreImpl = await ChessCore.new({ from: white });
+        factory = await ChessFactory.new(chessCoreImpl.address, { from: white });
         const tx = await factory.createChessGame(0, 0, { from: white, value: web3.utils.toWei("0.01", "ether") });
         const gameAddress = tx.logs[0].args.gameAddress;
         game = await ChessCore.at(gameAddress);

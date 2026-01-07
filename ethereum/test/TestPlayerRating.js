@@ -1,4 +1,5 @@
 const PlayerRating = artifacts.require("PlayerRating");
+const ChessCore = artifacts.require("ChessCore");
 const ChessFactory = artifacts.require("ChessFactory");
 
 contract("PlayerRating - ELO System", accounts => {
@@ -8,7 +9,8 @@ contract("PlayerRating - ELO System", accounts => {
 
     beforeEach(async () => {
         rating = await PlayerRating.new({ from: admin });
-        factory = await ChessFactory.new({ from: admin });
+        const chessCoreImpl = await ChessCore.new({ from: admin });
+        factory = await ChessFactory.new(chessCoreImpl.address, { from: admin });
 
         // Setup: connect factory and rating
         await rating.setChessFactory(factory.address, { from: admin });

@@ -19,6 +19,7 @@
         "dotenv": "^17.2.3"
     },
     "devDependencies": {
+        "eth-gas-reporter": "^0.2.27",
         "ganache": "^7.9.2",
         "truffle": "^5.11.5"
     }

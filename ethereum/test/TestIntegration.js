@@ -39,7 +39,9 @@ contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
       arbitratorRegistry.address,
       { from: admin }
     );
-    chessFactory = await ChessFactory.new({ from: admin });
+    // Deploy ChessCore implementation first, then pass to factory
+    const chessCoreImpl = await ChessCore.new({ from: admin });
+    chessFactory = await ChessFactory.new(chessCoreImpl.address, { from: admin });
 
     // Configure ChessFactory with anti-cheating contracts
     await chessFactory.setBondingManager(bondingManager.address, { from: admin });
@@ -350,7 +352,8 @@ contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
 
     beforeEach(async () => {
       // Deploy a factory without anti-cheating configuration
-      chessFactoryNoAC = await ChessFactory.new({ from: admin });
+      const chessCoreImplNoAC = await ChessCore.new({ from: admin });
+      chessFactoryNoAC = await ChessFactory.new(chessCoreImplNoAC.address, { from: admin });
       // Don't set bondingManager or disputeDAO
     });
 

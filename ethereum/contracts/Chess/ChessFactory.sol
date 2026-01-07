@@ -1,15 +1,21 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import "@openzeppelin/contracts/proxy/Clones.sol";
 import "./ChessCore.sol";
 import "./ChessNFT.sol";
 import "../Token/BondingManager.sol";
 import "../Rating/PlayerRating.sol";
 
 contract ChessFactory {
+    using Clones for address;
+
     address[] public deployedChessGames;
     address public addressNFT;
     uint256 public totalChessGames;
+
+    // ChessCore implementation contract (used for cloning)
+    address public chessCoreImplementation;
 
     // Anti-cheating system contracts
     address public bondingManager;
@@ -32,16 +38,27 @@ contract ChessFactory {
     event BondingManagerUpdated(address indexed oldAddress, address indexed newAddress);
     event DisputeDAOUpdated(address indexed oldAddress, address indexed newAddress);
     event PlayerRatingUpdated(address indexed oldAddress, address indexed newAddress);
+    event ImplementationUpdated(address indexed oldImplementation, address indexed newImplementation);
 
     modifier onlyOwner() {
         require(msg.sender == owner, "Not owner");
         _;
     }
 
-    constructor() {
+    constructor(address _chessCoreImplementation) {
+        require(_chessCoreImplementation != address(0), "Invalid implementation");
         owner = msg.sender;
+        chessCoreImplementation = _chessCoreImplementation;
         ChessNFT newChessNFT = new ChessNFT(msg.sender);
         addressNFT = address(newChessNFT);
+    }
+
+    /// @notice Update ChessCore implementation (for upgrades)
+    /// @param _newImplementation New implementation address
+    function setImplementation(address _newImplementation) external onlyOwner {
+        require(_newImplementation != address(0), "Invalid implementation");
+        emit ImplementationUpdated(chessCoreImplementation, _newImplementation);
+        chessCoreImplementation = _newImplementation;
     }
 
     /// @notice Set the BondingManager contract address
@@ -85,7 +102,11 @@ contract ChessFactory {
 
         uint256 gameId = totalChessGames;
 
-        ChessCore newChessGame = new ChessCore{value: msg.value}(
+        // Create a minimal proxy clone of ChessCore implementation
+        address clone = chessCoreImplementation.clone();
+
+        // Initialize the clone with game parameters
+        ChessCore(payable(clone)).initialize{value: msg.value}(
             msg.sender,
             msg.value,
             _timeoutPreset,
@@ -95,15 +116,14 @@ contract ChessFactory {
             disputeDAO,
             playerRating
         );
-        address toRet = address(newChessGame);
-        deployedChessGames.push(toRet);
 
+        deployedChessGames.push(clone);
         totalChessGames++;
 
-        ChessNFT(addressNFT).createGameNFT(gameId, toRet, msg.sender);
+        ChessNFT(addressNFT).createGameNFT(gameId, clone, msg.sender);
 
-        emit GameCreated(gameId, toRet, msg.sender, msg.value, _timeoutPreset, _gameMode);
-        return toRet;
+        emit GameCreated(gameId, clone, msg.sender, msg.value, _timeoutPreset, _gameMode);
+        return clone;
     }
 
     /// @notice Check if a player has sufficient bond for a given bet amount
