@@ -25,7 +25,8 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
 
   // Helper to create a fresh game
   async function createGame() {
-    chessFactory = await ChessFactory.new();
+    const chessCoreImpl = await ChessCore.new();
+    chessFactory = await ChessFactory.new(chessCoreImpl.address);
 
     // TimeoutPreset: 0=Blitz, 1=Rapid, 2=Classical
     await chessFactory.createChessGame(2, 0, {

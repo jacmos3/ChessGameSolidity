@@ -78,7 +78,33 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     // Draw offer tracking
     address public drawOfferedBy;
 
-    constructor(
+    // Clone pattern support
+    bool private initialized;
+
+    /// @notice Modifier to prevent re-initialization
+    modifier initializer() {
+        require(!initialized, "Already initialized");
+        initialized = true;
+        _;
+    }
+
+    /// @notice Empty constructor for implementation contract
+    constructor() {
+        // Implementation contract should not be used directly
+        // Mark as initialized to prevent usage
+        initialized = true;
+    }
+
+    /// @notice Initialize the game (called by factory on clones)
+    /// @param _whitePlayer Address of white player
+    /// @param _value Bet amount in wei
+    /// @param _preset Timeout preset (Blitz/Rapid/Classical)
+    /// @param _mode Game mode (Tournament/Friendly)
+    /// @param _gameId Unique game identifier
+    /// @param _bondingManager BondingManager contract address
+    /// @param _disputeDAO DisputeDAO contract address
+    /// @param _playerRating PlayerRating contract address
+    function initialize(
         address _whitePlayer,
         uint _value,
         TimeoutPreset _preset,
@@ -87,9 +113,10 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         address _bondingManager,
         address _disputeDAO,
         address _playerRating
-    ) payable {
-        // Chiamare initializeBoard nel costruttore
+    ) external payable initializer {
+        // Initialize the board
         initializeBoard();
+
         whitePlayer = _whitePlayer;
         currentPlayer = _whitePlayer;
         betting = _value;
@@ -115,17 +142,12 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         } else {
             timeoutBlocks = CLASSICAL_BLOCKS;
         }
+
+        // Record initial position for threefold repetition
+        bytes32 initialPosition = _computePositionHash(true);
+        positionCount[initialPosition] = 1;
+        positionHistory.push(initialPosition);
     }
-    /*
-    //for debugging
-    constructor(){
-        initializeBoard();
-        whitePlayer = 0x5B38Da6a701c568545dCfcB03FcB875f56beddC4;
-        currentPlayer = 0x5B38Da6a701c568545dCfcB03FcB875f56beddC4;
-        blackPlayer = 0xAb8483F64d9C6d1EcF9b849Ae677dD3315835cb2;
-        betting = address(this).balance;
-    }
-    */
    
    receive() external payable {
         require(gameState == GameState.NotStarted, "Game started");

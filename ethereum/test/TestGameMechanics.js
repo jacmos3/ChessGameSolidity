@@ -30,7 +30,8 @@ contract("ChessCore - Game Mechanics", (accounts) => {
 
   // Helper to create a fresh game (without joining as black)
   async function createGame() {
-    chessFactory = await ChessFactory.new();
+    const chessCoreImpl = await ChessCore.new();
+    chessFactory = await ChessFactory.new(chessCoreImpl.address);
     // TimeoutPreset: 0=Blitz, 1=Rapid, 2=Classical
     await chessFactory.createChessGame(2, 0, {
       from: whitePlayer,

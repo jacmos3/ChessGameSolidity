@@ -56,8 +56,18 @@ module.exports = {
   },
 
   // Set default mocha options here, use special reporters etc.
+  // To enable gas reporting, set REPORT_GAS=true environment variable
   mocha: {
-    // timeout: 100000
+    timeout: 120000,
+    ...(process.env.REPORT_GAS && {
+      reporter: 'eth-gas-reporter',
+      reporterOptions: {
+        currency: 'USD',
+        gasPrice: 20,
+        showTimeSpent: true,
+        excludeContracts: ['Migrations']
+      }
+    })
   },
 
   // Configure your compilers

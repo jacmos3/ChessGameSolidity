@@ -19,7 +19,8 @@ contract("ChessCore - Check Validation", (accounts) => {
   let chessCore;
 
   beforeEach(async () => {
-    chessFactory = await ChessFactory.new();
+    const chessCoreImpl = await ChessCore.new();
+    chessFactory = await ChessFactory.new(chessCoreImpl.address);
 
     // TimeoutPreset: 0=Blitz, 1=Rapid, 2=Classical
     // GameMode: 0=Tournament, 1=Friendly (tests need Friendly to test rejection)

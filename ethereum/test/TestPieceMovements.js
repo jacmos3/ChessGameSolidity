@@ -35,7 +35,8 @@ contract("ChessCore - Piece Movements", (accounts) => {
   let chessCore;
 
   beforeEach(async () => {
-    chessFactory = await ChessFactory.new();
+    const chessCoreImpl = await ChessCore.new();
+    chessFactory = await ChessFactory.new(chessCoreImpl.address);
 
     // TimeoutPreset: 0=Blitz, 1=Rapid, 2=Classical
     await chessFactory.createChessGame(2, 0, {
