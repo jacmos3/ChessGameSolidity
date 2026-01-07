@@ -1443,9 +1443,11 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         return (whitePlayer, blackPlayer);
     }
 
-    /// @notice Setup function for testing - place a piece on the board
-    /// @dev Only callable by white player before game starts (before black joins)
+    /// @notice Setup function for custom board positions (Friendly mode only)
+    /// @dev Only callable in Friendly mode, by white player, before game starts
+    /// @dev This allows creative chess variants but is disabled in Tournament mode
     function debugCreative(uint8 x, uint8 y, int8 piece) external returns (string memory) {
+        require(gameMode == GameMode.Friendly, "Only allowed in Friendly mode");
         require(msg.sender == whitePlayer, "Only white player can setup board");
         require(gameState == GameState.NotStarted, "Can only setup before game starts");
         require(x < BOARD_SIZE && y < BOARD_SIZE, "Invalid coordinates");

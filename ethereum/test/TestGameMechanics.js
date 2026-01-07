@@ -29,11 +29,12 @@ contract("ChessCore - Game Mechanics", (accounts) => {
   let chessCore;
 
   // Helper to create a fresh game (without joining as black)
-  async function createGame() {
+  // gameMode: 0=Tournament, 1=Friendly (debugCreative only works in Friendly mode)
+  async function createGame(gameMode = 0) {
     const chessCoreImpl = await ChessCore.new();
     chessFactory = await ChessFactory.new(chessCoreImpl.address);
     // TimeoutPreset: 0=Finney, 1=Buterin, 2=Nakamoto
-    await chessFactory.createChessGame(2, 0, {
+    await chessFactory.createChessGame(2, gameMode, {
       from: whitePlayer,
       value: betAmount
     });
@@ -43,8 +44,8 @@ contract("ChessCore - Game Mechanics", (accounts) => {
   }
 
   // Helper to create a game and join as black
-  async function createAndJoinGame() {
-    await createGame();
+  async function createAndJoinGame(gameMode = 0) {
+    await createGame(gameMode);
     await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
   }
 
@@ -138,7 +139,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
   // ============================================
   describe("Check Detection with Custom Setup", () => {
     beforeEach(async () => {
-      await createGame();
+      await createGame(1); // Friendly mode for debugCreative
       // Don't join yet - tests will set up board first
     });
 
@@ -256,7 +257,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
   // ============================================
   describe("Checkmate Detection with Custom Setup", () => {
     beforeEach(async () => {
-      await createGame();
+      await createGame(1); // Friendly mode for debugCreative
       // Don't join yet - tests will set up board first
     });
 
@@ -457,7 +458,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
   // ============================================
   describe("Draw Handling", () => {
     beforeEach(async () => {
-      await createGame();
+      await createGame(1); // Friendly mode for debugCreative
       // Don't join yet - tests will set up board first
     });
 

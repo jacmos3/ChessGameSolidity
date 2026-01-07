@@ -42,6 +42,7 @@ contract ChessFactory {
     event PlayerRatingUpdated(address indexed oldAddress, address indexed newAddress);
     event RewardPoolUpdated(address indexed oldAddress, address indexed newAddress);
     event ImplementationUpdated(address indexed oldImplementation, address indexed newImplementation);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
     modifier onlyOwner() {
         require(msg.sender == owner, "Not owner");
@@ -95,6 +96,7 @@ contract ChessFactory {
     /// @notice Transfer ownership
     function transferOwnership(address newOwner) external onlyOwner {
         require(newOwner != address(0), "Invalid owner");
+        emit OwnershipTransferred(owner, newOwner);
         owner = newOwner;
     }
 
