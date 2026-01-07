@@ -4,6 +4,7 @@
 	import BondingPanel from '$lib/components/BondingPanel.svelte';
 	import ArbitratorPanel from '$lib/components/ArbitratorPanel.svelte';
 	import GovernancePanel from '$lib/components/GovernancePanel.svelte';
+	import RatingPanel from '$lib/components/RatingPanel.svelte';
 
 	// Fetch games
 	$: if ($wallet.connected && $isSupported && $contractAddress) {
@@ -155,6 +156,11 @@
 				<div class="text-4xl font-display {netProfit >= 0 ? 'text-chess-success' : 'text-chess-danger'}">
 					{netProfit >= 0 ? '+' : ''}{netProfit.toFixed(4)} ETH
 				</div>
+			</div>
+
+			<!-- ELO Rating -->
+			<div class="mb-8">
+				<RatingPanel />
 			</div>
 
 			<!-- Bond Management -->

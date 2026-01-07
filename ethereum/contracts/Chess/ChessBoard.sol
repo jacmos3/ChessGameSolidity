@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.24;
 
 import "./ChessMediaLibrary.sol";
 
@@ -59,6 +59,13 @@ contract ChessBoard {
     uint8 internal whiteKingCol;
     uint8 internal blackKingRow;
     uint8 internal blackKingCol;
+
+    // Threefold repetition tracking
+    mapping(bytes32 => uint8) internal positionCount;
+    bytes32[] internal positionHistory;
+
+    // 50-move rule tracking (half-moves since last pawn move or capture)
+    uint16 internal halfMoveClock;
 
     /// @notice Initialize the board with starting positions
     function initializeBoard() internal {
@@ -124,5 +131,37 @@ contract ChessBoard {
     /// @return The complete 8x8 board array
     function getBoardState() external view returns (int8[8][8] memory) {
         return board;
+    }
+
+    /// @notice Compute a hash of the current position for repetition detection
+    /// @dev Includes board state, castling rights, en passant, and turn
+    function _computePositionHash(bool isWhiteTurn) internal view returns (bytes32) {
+        return keccak256(abi.encodePacked(
+            board,
+            isWhiteTurn,
+            whiteKingMoved,
+            whiteShortRookMoved,
+            whiteLongRookMoved,
+            blackKingMoved,
+            blackShortRookMoved,
+            blackLongRookMoved,
+            enPassantCol
+        ));
+    }
+
+    /// @notice Get draw rule status
+    /// @return halfMoves Current half-move clock (50-move rule)
+    /// @return maxRepetitions Maximum times any position has occurred
+    function getDrawRuleStatus() external view returns (uint16 halfMoves, uint8 maxRepetitions) {
+        halfMoves = halfMoveClock;
+
+        // Find max repetition count from history
+        maxRepetitions = 0;
+        for (uint256 i = 0; i < positionHistory.length; i++) {
+            uint8 count = positionCount[positionHistory[i]];
+            if (count > maxRepetitions) {
+                maxRepetitions = count;
+            }
+        }
     }
 }
