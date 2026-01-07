@@ -157,7 +157,7 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /**
-     * @notice Lock bond for a game
+     * @notice Lock bond for a game (single player)
      * @param gameId Game identifier
      * @param player Player address
      * @param stake Game stake
@@ -167,6 +167,32 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
         onlyRole(GAME_MANAGER_ROLE)
         whenNotPaused
     {
+        _lockBondForPlayer(gameId, player, stake);
+    }
+
+    /**
+     * @notice Lock bonds for both players in a game (gas optimized - single external call)
+     * @param gameId Game identifier
+     * @param player1 First player address
+     * @param player2 Second player address
+     * @param stake Game stake (same for both players)
+     */
+    function lockBondsForGame(uint256 gameId, address player1, address player2, uint256 stake)
+        external
+        onlyRole(GAME_MANAGER_ROLE)
+        whenNotPaused
+    {
+        _lockBondForPlayer(gameId, player1, stake);
+        _lockBondForPlayer(gameId, player2, stake);
+    }
+
+    /**
+     * @notice Internal function to lock bond for a single player
+     * @param gameId Game identifier
+     * @param player Player address
+     * @param stake Game stake
+     */
+    function _lockBondForPlayer(uint256 gameId, address player, uint256 stake) internal {
         (uint256 chessRequired, uint256 ethRequired) = calculateRequiredBond(stake);
 
         UserBond storage bond = bonds[player];
