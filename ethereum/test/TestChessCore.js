@@ -73,10 +73,12 @@ contract("ChessCore - Resign and ClaimPrize", (accounts) => {
     it("should emit PlayerResigned event", async () => {
       const tx = await chessCore.resign({ from: whitePlayer });
 
-      assert.equal(tx.logs.length, 1, "Should emit one event");
-      assert.equal(tx.logs[0].event, "PlayerResigned", "Should be PlayerResigned event");
-      assert.equal(tx.logs[0].args.player, whitePlayer, "Player should be white");
-      assert.equal(tx.logs[0].args.winner, blackPlayer, "Winner should be black");
+      // resign emits PlayerResigned and GameStateChanged events
+      assert.equal(tx.logs.length, 2, "Should emit two events");
+      const resignEvent = tx.logs.find(log => log.event === "PlayerResigned");
+      assert.ok(resignEvent, "Should have PlayerResigned event");
+      assert.equal(resignEvent.args.player, whitePlayer, "Player should be white");
+      assert.equal(resignEvent.args.winner, blackPlayer, "Winner should be black");
     });
   });
 
