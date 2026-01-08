@@ -256,6 +256,41 @@
             padding: 15px;
             margin-top: 20px;
         }
+
+        .config-progress {
+            margin-top: 10px;
+            padding: 10px;
+            background: rgba(79, 195, 247, 0.1);
+            border-radius: 6px;
+            border: 1px solid rgba(79, 195, 247, 0.3);
+        }
+
+        .config-status {
+            font-size: 0.9em;
+            color: #4fc3f7;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .config-detail {
+            font-size: 0.8em;
+            color: #aaa;
+            margin-bottom: 8px;
+            min-height: 16px;
+        }
+
+        .config-bar {
+            height: 6px;
+            background: rgba(0,0,0,0.3);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .config-bar-fill {
+            height: 100%;
+            background: #4fc3f7;
+            transition: width 0.3s ease;
+        }
     </style>
 </head>
 <body>
@@ -386,6 +421,15 @@
                     <div class="step-content">
                         <div class="step-title">Configure Roles & Permissions</div>
                         <div class="step-address"></div>
+                        <div class="config-progress hidden" id="configProgress">
+                            <div class="config-status">
+                                <span id="configStep">0</span> / <span id="configTotal">11</span> transactions
+                            </div>
+                            <div class="config-detail" id="configDetail"></div>
+                            <div class="config-bar">
+                                <div class="config-bar-fill" id="configBar" style="width: 0%"></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
