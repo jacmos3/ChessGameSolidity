@@ -109,10 +109,10 @@ function createBondingStore() {
 					error: null,
 					chessDeposited: ethers.utils.formatEther(bond.chessAmount),
 					ethDeposited: ethers.utils.formatEther(bond.ethAmount),
-					chessLocked: ethers.utils.formatEther(bond.chessLocked),
-					ethLocked: ethers.utils.formatEther(bond.ethLocked),
-					chessAvailable: ethers.utils.formatEther(available.chessAvailable),
-					ethAvailable: ethers.utils.formatEther(available.ethAvailable),
+					chessLocked: ethers.utils.formatEther(bond.lockedChess || bond.chessLocked || 0),
+					ethLocked: ethers.utils.formatEther(bond.lockedEth || bond.ethLocked || 0),
+					chessAvailable: ethers.utils.formatEther(available.chess || available[0] || 0),
+					ethAvailable: ethers.utils.formatEther(available.eth || available[1] || 0),
 					chessBalance: ethers.utils.formatEther(chessBalance),
 					chessAllowance: ethers.utils.formatEther(chessAllowance),
 					chessPrice: ethers.utils.formatEther(chessPrice),
@@ -184,7 +184,7 @@ function createBondingStore() {
 		},
 
 		/**
-		 * Approve CHESS token spending
+		 * Approve CHESS token spending (approves max for convenience)
 		 */
 		async approveChess(amount) {
 			const $wallet = get(wallet);
@@ -199,15 +199,38 @@ function createBondingStore() {
 				throw new Error('Bonding not available on this network');
 			}
 
+			console.log('Approving CHESS tokens...');
+			console.log('ChessToken address:', tokenAddress);
+			console.log('BondingManager address (spender):', bondingAddress);
+			console.log('User address:', $wallet.account);
+
 			const chessToken = new ethers.Contract(
 				tokenAddress,
 				ChessTokenABI.abi,
 				$wallet.signer
 			);
 
-			const amountWei = ethers.utils.parseEther(amount.toString());
-			const tx = await chessToken.approve(bondingAddress, amountWei);
-			await tx.wait();
+			// Check current allowance before approval
+			const currentAllowance = await chessToken.allowance($wallet.account, bondingAddress);
+			console.log('Current allowance before approval:', ethers.utils.formatEther(currentAllowance));
+
+			// Approve max amount for convenience (no need to re-approve each time)
+			const maxAmount = ethers.constants.MaxUint256;
+			console.log('Sending approval transaction for MaxUint256...');
+
+			const tx = await chessToken.approve(bondingAddress, maxAmount);
+			console.log('Transaction submitted:', tx.hash);
+
+			const receipt = await tx.wait();
+			console.log('Transaction confirmed in block:', receipt.blockNumber);
+
+			// Verify the approval actually worked
+			const newAllowance = await chessToken.allowance($wallet.account, bondingAddress);
+			console.log('New allowance after approval:', ethers.utils.formatEther(newAllowance));
+
+			if (newAllowance.isZero()) {
+				throw new Error('Approval transaction confirmed but allowance is still 0. This should not happen - please check the console logs and report this issue.');
+			}
 
 			// Refresh data
 			await this.fetchBondData();
@@ -223,8 +246,42 @@ function createBondingStore() {
 			}
 
 			const bondingAddress = BONDING_MANAGER_ADDRESSES[$wallet.chainId];
+			const tokenAddress = CHESS_TOKEN_ADDRESSES[$wallet.chainId];
 			if (!bondingAddress) {
 				throw new Error('Bonding not available on this network');
+			}
+
+			console.log('Depositing bond...');
+			console.log('BondingManager address:', bondingAddress);
+			console.log('ChessToken address:', tokenAddress);
+
+			const chessWei = ethers.utils.parseEther(chessAmount.toString());
+			const ethWei = ethers.utils.parseEther(ethAmount.toString());
+
+			console.log('CHESS to deposit:', chessAmount, '(', chessWei.toString(), 'wei)');
+			console.log('ETH to deposit:', ethAmount, '(', ethWei.toString(), 'wei)');
+
+			// Pre-check allowance if depositing CHESS
+			if (chessWei.gt(0)) {
+				const chessToken = new ethers.Contract(
+					tokenAddress,
+					ChessTokenABI.abi,
+					$wallet.signer
+				);
+
+				const allowance = await chessToken.allowance($wallet.account, bondingAddress);
+				console.log('Current CHESS allowance:', ethers.utils.formatEther(allowance));
+
+				if (allowance.lt(chessWei)) {
+					throw new Error(`Insufficient CHESS allowance. You have approved ${ethers.utils.formatEther(allowance)} CHESS but trying to deposit ${chessAmount} CHESS. Please click "Approve CHESS" first.`);
+				}
+
+				const balance = await chessToken.balanceOf($wallet.account);
+				console.log('CHESS balance:', ethers.utils.formatEther(balance));
+
+				if (balance.lt(chessWei)) {
+					throw new Error(`Insufficient CHESS balance. You have ${ethers.utils.formatEther(balance)} CHESS but trying to deposit ${chessAmount} CHESS.`);
+				}
 			}
 
 			const bondingManager = new ethers.Contract(
@@ -233,11 +290,12 @@ function createBondingStore() {
 				$wallet.signer
 			);
 
-			const chessWei = ethers.utils.parseEther(chessAmount.toString());
-			const ethWei = ethers.utils.parseEther(ethAmount.toString());
-
+			console.log('Sending deposit transaction...');
 			const tx = await bondingManager.depositBond(chessWei, { value: ethWei });
+			console.log('Transaction submitted:', tx.hash);
+
 			await tx.wait();
+			console.log('Deposit confirmed!');
 
 			// Refresh data
 			await this.fetchBondData();
@@ -293,6 +351,34 @@ function createBondingStore() {
 
 			const amountWei = ethers.utils.parseEther(amount.toString());
 			const tx = await bondingManager.withdrawEth(amountWei);
+			await tx.wait();
+
+			// Refresh data
+			await this.fetchBondData();
+		},
+
+		/**
+		 * Mint test CHESS tokens (admin only - for testnet)
+		 */
+		async mintTestTokens(amount) {
+			const $wallet = get(wallet);
+			if (!$wallet.signer || !$wallet.chainId) {
+				throw new Error('Wallet not connected');
+			}
+
+			const tokenAddress = CHESS_TOKEN_ADDRESSES[$wallet.chainId];
+			if (!tokenAddress) {
+				throw new Error('ChessToken not available on this network');
+			}
+
+			const chessToken = new ethers.Contract(
+				tokenAddress,
+				ChessTokenABI.abi,
+				$wallet.signer
+			);
+
+			const amountWei = ethers.utils.parseEther(amount.toString());
+			const tx = await chessToken.mintTreasury($wallet.account, amountWei);
 			await tx.wait();
 
 			// Refresh data
