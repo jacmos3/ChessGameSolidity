@@ -31,7 +31,7 @@
 		<div class="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
 			<a href="/" class="flex items-center gap-3 hover:opacity-80 transition-opacity">
 				<span class="text-3xl text-chess-accent">♞</span>
-				<span class="font-display text-xl font-semibold hidden sm:block">Solidity Chess</span>
+				<span class="font-display text-xl font-semibold hidden sm:block">MyChess.onchain</span>
 			</a>
 
 			<!-- Desktop Navigation -->
@@ -172,7 +172,7 @@
 		<div class="max-w-6xl mx-auto px-4 text-center">
 			<div class="flex items-center justify-center gap-2 mb-4">
 				<span class="text-chess-accent">♞</span>
-				<span class="font-display">Solidity Chess</span>
+				<span class="font-display">MyChess.onchain</span>
 			</div>
 			<p class="text-chess-gray text-sm">
 				Built by <a href="https://github.com/jacmos3" class="text-chess-accent hover:underline">jacmos3</a>
