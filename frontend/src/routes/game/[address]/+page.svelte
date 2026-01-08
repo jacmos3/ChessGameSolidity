@@ -408,7 +408,7 @@
 </script>
 
 <svelte:head>
-	<title>Game - Solidity Chess</title>
+	<title>Game - MyChess On Chain</title>
 </svelte:head>
 
 <section class="py-4 px-4 min-h-[calc(100vh-8rem)]">
