@@ -352,63 +352,93 @@ async function deployContractWithLibrary(name, args, libraryAddress) {
 async function configureRoles() {
     log('Configuring roles and permissions...');
 
+    // Show config progress UI
+    const configProgress = document.getElementById('configProgress');
+    const configStep = document.getElementById('configStep');
+    const configDetail = document.getElementById('configDetail');
+    const configBar = document.getElementById('configBar');
+    configProgress.classList.remove('hidden');
+
+    const totalConfigs = 11;
+    let currentConfig = 0;
+
+    function updateConfigProgress(description) {
+        currentConfig++;
+        configStep.textContent = currentConfig;
+        configDetail.textContent = description;
+        configBar.style.width = ((currentConfig / totalConfigs) * 100) + '%';
+        log(`  [${currentConfig}/${totalConfigs}] ${description}`);
+    }
+
     // ChessFactory configuration
     const factory = new ethers.Contract(deployedContracts.ChessFactory, CONTRACTS.ChessFactory.abi, signer);
 
-    log('  Setting BondingManager on ChessFactory...');
+    configDetail.textContent = 'Setting BondingManager on ChessFactory...';
     let tx = await factory.setBondingManager(deployedContracts.BondingManager);
     await tx.wait();
+    updateConfigProgress('BondingManager set on ChessFactory');
 
-    log('  Setting DisputeDAO on ChessFactory...');
+    configDetail.textContent = 'Setting DisputeDAO on ChessFactory...';
     tx = await factory.setDisputeDAO(deployedContracts.DisputeDAO);
     await tx.wait();
+    updateConfigProgress('DisputeDAO set on ChessFactory');
 
-    log('  Setting PlayerRating on ChessFactory...');
+    configDetail.textContent = 'Setting PlayerRating on ChessFactory...';
     tx = await factory.setPlayerRating(deployedContracts.PlayerRating);
     await tx.wait();
+    updateConfigProgress('PlayerRating set on ChessFactory');
 
-    log('  Setting RewardPool on ChessFactory...');
+    configDetail.textContent = 'Setting RewardPool on ChessFactory...';
     tx = await factory.setRewardPool(deployedContracts.RewardPool);
     await tx.wait();
+    updateConfigProgress('RewardPool set on ChessFactory');
 
     // PlayerRating configuration
     const playerRating = new ethers.Contract(deployedContracts.PlayerRating, CONTRACTS.PlayerRating.abi, signer);
-    log('  Setting ChessFactory on PlayerRating...');
+    configDetail.textContent = 'Setting ChessFactory on PlayerRating...';
     tx = await playerRating.setChessFactory(deployedContracts.ChessFactory);
     await tx.wait();
+    updateConfigProgress('ChessFactory set on PlayerRating');
 
     // RewardPool configuration
     const rewardPool = new ethers.Contract(deployedContracts.RewardPool, CONTRACTS.RewardPool.abi, signer);
-    log('  Setting ChessFactory on RewardPool...');
+    configDetail.textContent = 'Setting ChessFactory on RewardPool...';
     tx = await rewardPool.setChessFactory(deployedContracts.ChessFactory);
     await tx.wait();
+    updateConfigProgress('ChessFactory set on RewardPool');
 
     // BondingManager roles
     const bondingManager = new ethers.Contract(deployedContracts.BondingManager, CONTRACTS.BondingManager.abi, signer);
-    log('  Granting GAME_MANAGER_ROLE to ChessFactory...');
+    configDetail.textContent = 'Granting GAME_MANAGER_ROLE to ChessFactory...';
     tx = await bondingManager.grantRole(ROLES.GAME_MANAGER_ROLE, deployedContracts.ChessFactory);
     await tx.wait();
+    updateConfigProgress('GAME_MANAGER_ROLE granted to ChessFactory');
 
-    log('  Granting DISPUTE_MANAGER_ROLE to DisputeDAO...');
+    configDetail.textContent = 'Granting DISPUTE_MANAGER_ROLE to DisputeDAO...';
     tx = await bondingManager.grantRole(ROLES.DISPUTE_MANAGER_ROLE, deployedContracts.DisputeDAO);
     await tx.wait();
+    updateConfigProgress('DISPUTE_MANAGER_ROLE granted on BondingManager');
 
     // ArbitratorRegistry roles
     const arbitratorRegistry = new ethers.Contract(deployedContracts.ArbitratorRegistry, CONTRACTS.ArbitratorRegistry.abi, signer);
-    log('  Granting DISPUTE_MANAGER_ROLE to DisputeDAO...');
+    configDetail.textContent = 'Granting DISPUTE_MANAGER_ROLE on ArbitratorRegistry...';
     tx = await arbitratorRegistry.grantRole(ROLES.DISPUTE_MANAGER_ROLE, deployedContracts.DisputeDAO);
     await tx.wait();
+    updateConfigProgress('DISPUTE_MANAGER_ROLE granted on ArbitratorRegistry');
 
     // ChessTimelock roles
     const timelock = new ethers.Contract(deployedContracts.ChessTimelock, CONTRACTS.ChessTimelock.abi, signer);
-    log('  Granting PROPOSER_ROLE to ChessGovernor...');
+    configDetail.textContent = 'Granting PROPOSER_ROLE to ChessGovernor...';
     tx = await timelock.grantRole(ROLES.PROPOSER_ROLE, deployedContracts.ChessGovernor);
     await tx.wait();
+    updateConfigProgress('PROPOSER_ROLE granted to ChessGovernor');
 
-    log('  Granting CANCELLER_ROLE to ChessGovernor...');
+    configDetail.textContent = 'Granting CANCELLER_ROLE to ChessGovernor...';
     tx = await timelock.grantRole(ROLES.CANCELLER_ROLE, deployedContracts.ChessGovernor);
     await tx.wait();
+    updateConfigProgress('CANCELLER_ROLE granted to ChessGovernor');
 
+    configDetail.textContent = 'All roles configured!';
     log('All roles configured successfully!');
 }
 
