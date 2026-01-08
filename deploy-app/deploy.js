@@ -352,12 +352,10 @@ async function deployContractWithLibrary(name, args, libraryAddress) {
 async function configureRoles() {
     log('Configuring roles and permissions...');
 
-    // Show config progress UI
-    const configProgress = document.getElementById('configProgress');
+    // Config progress UI elements
     const configStep = document.getElementById('configStep');
     const configDetail = document.getElementById('configDetail');
     const configBar = document.getElementById('configBar');
-    configProgress.classList.remove('hidden');
 
     const totalConfigs = 11;
     let currentConfig = 0;
