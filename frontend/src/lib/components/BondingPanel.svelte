@@ -7,6 +7,7 @@
 	let chessAmount = '';
 	let ethAmount = '';
 	let processing = false;
+	let minting = false;
 	let error = null;
 	let success = null;
 
@@ -42,9 +43,14 @@
 
 		try {
 			await bonding.approveChess(chessAmount);
-			success = `Approved ${chessAmount} CHESS for bonding`;
+			success = 'CHESS approved for unlimited spending. You can now deposit.';
 		} catch (err) {
-			error = err.message || 'Failed to approve';
+			console.error('Approval error:', err);
+			if (err.code === 'ACTION_REJECTED' || err.code === 4001) {
+				error = 'Transaction rejected by user';
+			} else {
+				error = err.message || 'Failed to approve. Check browser console for details.';
+			}
 		}
 
 		processing = false;
@@ -69,7 +75,16 @@
 			chessAmount = '';
 			ethAmount = '';
 		} catch (err) {
-			error = err.message || 'Failed to deposit';
+			console.error('Deposit error:', err);
+			if (err.code === 'ACTION_REJECTED' || err.code === 4001) {
+				error = 'Transaction rejected by user';
+			} else if (err.message?.includes('Insufficient CHESS allowance')) {
+				error = err.message;
+			} else if (err.message?.includes('ERC20InsufficientAllowance')) {
+				error = 'CHESS not approved. Please click "Approve CHESS" first, then try depositing again.';
+			} else {
+				error = err.message || 'Failed to deposit. Check browser console for details.';
+			}
 		}
 
 		processing = false;
@@ -123,6 +138,21 @@
 		if (activeTab === 'withdraw') {
 			ethAmount = $bonding.ethAvailable;
 		}
+	}
+
+	async function handleMintTestTokens() {
+		minting = true;
+		error = null;
+		success = null;
+
+		try {
+			await bonding.mintTestTokens(1000);
+			success = 'Minted 1000 CHESS tokens!';
+		} catch (err) {
+			error = err.message || 'Failed to mint tokens. Only admin can mint.';
+		}
+
+		minting = false;
 	}
 
 	// Check if we need approval for the chess amount
@@ -194,9 +224,29 @@
 					<span>{parseFloat($bonding.chessBalance).toFixed(2)}</span>
 				</div>
 				<div class="flex justify-between text-sm mt-1">
+					<span class="text-chess-gray">CHESS Allowance:</span>
+					<span class="{parseFloat($bonding.chessAllowance) > 1000000 ? 'text-chess-success' : 'text-chess-gray'}">
+						{parseFloat($bonding.chessAllowance) > 1000000 ? 'Unlimited' : parseFloat($bonding.chessAllowance).toFixed(2)}
+					</span>
+				</div>
+				<div class="flex justify-between text-sm mt-1">
 					<span class="text-chess-gray">CHESS Price:</span>
 					<span>{parseFloat($bonding.chessPrice).toFixed(6)} ETH</span>
 				</div>
+
+				<!-- Mint Test Tokens (for testnet) -->
+				{#if parseFloat($bonding.chessBalance) < 100}
+					<div class="mt-3 pt-3 border-t border-chess-accent/10">
+						<p class="text-xs text-chess-gray mb-2">Need CHESS tokens? (Testnet only)</p>
+						<button
+							class="btn btn-secondary text-xs w-full"
+							on:click={handleMintTestTokens}
+							disabled={minting}
+						>
+							{minting ? 'Minting...' : 'Mint 1000 Test CHESS'}
+						</button>
+					</div>
+				{/if}
 			</div>
 		</div>
 
