@@ -20,7 +20,7 @@
 </script>
 
 <svelte:head>
-	<title>MyChess On Chain - On-Chain Chess Game</title>
+	<title>MyChess.onchain - On-Chain Chess Game</title>
 </svelte:head>
 
 {#if !$wallet.connected}
