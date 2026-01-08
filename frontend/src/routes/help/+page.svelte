@@ -24,7 +24,7 @@
 </script>
 
 <svelte:head>
-	<title>Help & Documentation - Solidity Chess</title>
+	<title>Help & Documentation - MyChess.onchain</title>
 </svelte:head>
 
 <div class="min-h-screen bg-chess-darker">
@@ -32,7 +32,7 @@
 	<div class="bg-chess-dark border-b border-chess-accent/20 py-8">
 		<div class="max-w-6xl mx-auto px-4">
 			<h1 class="font-display text-4xl text-center mb-2">User Guide</h1>
-			<p class="text-chess-gray text-center">Everything you need to know about Solidity Chess</p>
+			<p class="text-chess-gray text-center">Everything you need to know about MyChess.onchain</p>
 		</div>
 	</div>
 
