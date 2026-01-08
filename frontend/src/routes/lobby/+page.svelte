@@ -67,7 +67,7 @@
 </script>
 
 <svelte:head>
-	<title>Game Lobby - Solidity Chess</title>
+	<title>Game Lobby - MyChess On Chain</title>
 </svelte:head>
 
 <section class="py-8 px-4">
