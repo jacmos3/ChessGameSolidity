@@ -1,6 +1,8 @@
 <script>
-	import { createEventDispatcher } from 'svelte';
+	import { createEventDispatcher, onMount } from 'svelte';
 	import { games } from '$lib/stores/game.js';
+	import { bonding, bondingAvailable } from '$lib/stores/bonding.js';
+	import { wallet } from '$lib/stores/wallet.js';
 
 	const dispatch = createEventDispatcher();
 
@@ -9,6 +11,7 @@
 	let gameMode = 1; // Default to Friendly (safer for casual players)
 	let creating = false;
 	let error = null;
+	let bondCheck = null;
 
 	// Timeout presets matching contract constants (named after crypto pioneers)
 	const timeoutOptions = [
@@ -23,16 +26,51 @@
 		{ value: 1, name: 'Friendly', icon: '🤝', description: 'Mosse illegali rifiutate' }
 	];
 
+	// Check bond requirements when bet amount changes
+	$: if ($wallet.connected && $bondingAvailable && betAmount) {
+		checkBondRequirements();
+	}
+
+	async function checkBondRequirements() {
+		const amount = parseFloat(betAmount);
+		if (isNaN(amount) || amount <= 0) {
+			bondCheck = null;
+			return;
+		}
+
+		const hasBond = await bonding.hasSufficientBond(amount);
+		const required = await bonding.calculateRequiredBond(amount);
+
+		bondCheck = {
+			sufficient: hasBond,
+			required
+		};
+	}
+
 	async function handleCreate() {
 		creating = true;
 		error = null;
+
+		// Pre-check bond requirements
+		if ($bondingAvailable && bondCheck && !bondCheck.sufficient) {
+			error = `Insufficient bond. You need ${parseFloat(bondCheck.required?.chessRequired || 0).toFixed(0)} CHESS + ${parseFloat(bondCheck.required?.ethRequired || 0).toFixed(4)} ETH deposited. Go to Profile > Bond Management to deposit.`;
+			creating = false;
+			return;
+		}
 
 		try {
 			await games.createGame(betAmount, timeoutPreset, gameMode);
 			await games.fetchGames();
 			dispatch('close');
 		} catch (err) {
-			error = err.message || 'Failed to create game';
+			// Parse error message for user-friendly display
+			let message = err.message || 'Failed to create game';
+			if (message.includes('UNPREDICTABLE_GAS_LIMIT') || message.includes('execution reverted')) {
+				message = 'Transaction failed. This usually means insufficient bond. Go to Profile > Bond Management to deposit CHESS and ETH.';
+			} else if (message.includes('insufficient funds')) {
+				message = 'Insufficient ETH balance for bet + gas fees.';
+			}
+			error = message;
 		}
 
 		creating = false;
@@ -77,6 +115,26 @@
 					Your opponent will need to match this bet to join (min 0.001, max 100 ETH).
 				</p>
 			</div>
+
+			<!-- Bond Requirement Status -->
+			{#if $bondingAvailable && bondCheck}
+				<div class="p-3 rounded-lg {bondCheck.sufficient ? 'bg-chess-success/10 border border-chess-success/30' : 'bg-chess-danger/10 border border-chess-danger/30'}">
+					<div class="flex items-center gap-2 text-sm {bondCheck.sufficient ? 'text-chess-success' : 'text-chess-danger'}">
+						<span>{bondCheck.sufficient ? '✓' : '✗'}</span>
+						<span>{bondCheck.sufficient ? 'Bond OK' : 'Insufficient Bond'}</span>
+					</div>
+					{#if bondCheck.required}
+						<p class="text-xs mt-1 {bondCheck.sufficient ? 'text-chess-gray' : 'text-chess-danger/80'}">
+							Required: {parseFloat(bondCheck.required.chessRequired || 0).toFixed(0)} CHESS + {parseFloat(bondCheck.required.ethRequired || 0).toFixed(4)} ETH
+						</p>
+						{#if !bondCheck.sufficient}
+							<a href="/profile" class="text-xs text-chess-accent hover:underline mt-1 block">
+								→ Go to Profile to deposit bond
+							</a>
+						{/if}
+					{/if}
+				</div>
+			{/if}
 
 			<!-- Time Control -->
 			<div role="group" aria-labelledby="time-control-label">
@@ -149,7 +207,7 @@
 			<button
 				class="btn btn-primary"
 				on:click={handleCreate}
-				disabled={creating}
+				disabled={creating || ($bondingAvailable && bondCheck && !bondCheck.sufficient)}
 			>
 				{creating ? 'Creating...' : `Create (${betAmount} ETH)`}
 			</button>
