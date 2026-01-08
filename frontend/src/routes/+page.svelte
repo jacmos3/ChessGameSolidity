@@ -20,7 +20,7 @@
 </script>
 
 <svelte:head>
-	<title>Solidity Chess - On-Chain Chess Game</title>
+	<title>MyChess.onchain - On-Chain Chess Game</title>
 </svelte:head>
 
 {#if !$wallet.connected}
