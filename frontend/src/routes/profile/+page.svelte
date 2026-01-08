@@ -56,7 +56,7 @@
 </script>
 
 <svelte:head>
-	<title>Profile - MyChess On Chain</title>
+	<title>Profile - MyChess.onchain</title>
 </svelte:head>
 
 <section class="py-8 px-4">

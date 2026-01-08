@@ -7,7 +7,7 @@ const ONBOARDING_KEY = 'chess-onboarding-completed';
 export const ONBOARDING_STEPS = [
 	{
 		id: 'welcome',
-		title: 'Welcome to MyChess On Chain!',
+		title: 'Welcome to MyChess.onchain!',
 		content: 'Play chess on the blockchain. Every move is recorded on-chain, and winners can mint victory NFTs.',
 		target: null
 	},
