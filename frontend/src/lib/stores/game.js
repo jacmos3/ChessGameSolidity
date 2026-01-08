@@ -100,7 +100,7 @@ function createGamesStore() {
 			// TimeoutPreset: 0=Finney (~1h), 1=Buterin (~7h), 2=Nakamoto (~7d)
 			// GameMode: 0=Tournament (strict), 1=Friendly (relaxed)
 			const tx = await factory.createChessGame(timeoutPreset, gameMode, {
-				value: ethers.utils.parseEther(betAmount)
+				value: ethers.utils.parseEther(betAmount.toString())
 			});
 
 			await tx.wait();
@@ -600,7 +600,7 @@ function createActiveGameStore() {
 
 			const game = new ethers.Contract($state.address, ChessCoreABI.abi, $wallet.signer);
 			const tx = await game.joinGameAsBlack({
-				value: ethers.utils.parseEther($state.data.betting)
+				value: ethers.utils.parseEther($state.data.betting.toString())
 			});
 			await tx.wait();
 		},
