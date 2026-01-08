@@ -9,9 +9,8 @@ import PlayerRatingABI from '../contracts/PlayerRating.json';
 const RATING_ADDRESSES = {
 	1337: import.meta.env.VITE_PLAYER_RATING_LOCAL || '',
 	5777: import.meta.env.VITE_PLAYER_RATING_LOCAL || '',
-	11155111: import.meta.env.VITE_PLAYER_RATING_SEPOLIA || '',
-	17000: import.meta.env.VITE_PLAYER_RATING_HOLESKY || '',
-	59141: import.meta.env.VITE_PLAYER_RATING_LINEA || ''
+	84532: import.meta.env.VITE_PLAYER_RATING_BASE_SEPOLIA || '',
+	8453: import.meta.env.VITE_PLAYER_RATING_BASE || ''
 };
 
 // Rating store

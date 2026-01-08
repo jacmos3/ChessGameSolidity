@@ -9,27 +9,24 @@ import ChessTokenABI from '../contracts/ChessToken.json';
 
 // Contract addresses per network
 const GOVERNOR_ADDRESSES = {
-	1337: import.meta.env.VITE_GOVERNOR_LOCAL || '',
-	5777: import.meta.env.VITE_GOVERNOR_LOCAL || '',
-	11155111: import.meta.env.VITE_GOVERNOR_SEPOLIA || '',
-	17000: import.meta.env.VITE_GOVERNOR_HOLESKY || '',
-	59141: import.meta.env.VITE_GOVERNOR_LINEA || ''
+	1337: import.meta.env.VITE_CHESS_GOVERNOR_LOCAL || '',
+	5777: import.meta.env.VITE_CHESS_GOVERNOR_LOCAL || '',
+	84532: import.meta.env.VITE_CHESS_GOVERNOR_BASE_SEPOLIA || '',
+	8453: import.meta.env.VITE_CHESS_GOVERNOR_BASE || ''
 };
 
 const TIMELOCK_ADDRESSES = {
-	1337: import.meta.env.VITE_TIMELOCK_LOCAL || '',
-	5777: import.meta.env.VITE_TIMELOCK_LOCAL || '',
-	11155111: import.meta.env.VITE_TIMELOCK_SEPOLIA || '',
-	17000: import.meta.env.VITE_TIMELOCK_HOLESKY || '',
-	59141: import.meta.env.VITE_TIMELOCK_LINEA || ''
+	1337: import.meta.env.VITE_CHESS_TIMELOCK_LOCAL || '',
+	5777: import.meta.env.VITE_CHESS_TIMELOCK_LOCAL || '',
+	84532: import.meta.env.VITE_CHESS_TIMELOCK_BASE_SEPOLIA || '',
+	8453: import.meta.env.VITE_CHESS_TIMELOCK_BASE || ''
 };
 
 const CHESS_TOKEN_ADDRESSES = {
 	1337: import.meta.env.VITE_CHESS_TOKEN_LOCAL || '',
 	5777: import.meta.env.VITE_CHESS_TOKEN_LOCAL || '',
-	11155111: import.meta.env.VITE_CHESS_TOKEN_SEPOLIA || '',
-	17000: import.meta.env.VITE_CHESS_TOKEN_HOLESKY || '',
-	59141: import.meta.env.VITE_CHESS_TOKEN_LINEA || ''
+	84532: import.meta.env.VITE_CHESS_TOKEN_BASE_SEPOLIA || '',
+	8453: import.meta.env.VITE_CHESS_TOKEN_BASE || ''
 };
 
 // Proposal states (from Governor contract)
