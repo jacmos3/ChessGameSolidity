@@ -1,322 +1,360 @@
-# Solidity Chess - Decentralized Chess on Ethereum
+# Solidity Chess
 
-A fully on-chain chess game with integrated anti-cheating mechanisms, tokenomics, and decentralized governance.
+A decentralized chess platform with fully on-chain move validation, hybrid ETH + CHESS bonding, dispute resolution, on-chain ratings, and token-governed protocol controls.
 
 ![Solidity](https://img.shields.io/badge/Solidity-0.8.24-blue)
-![License](https://img.shields.io/badge/License-MIT-green)
-![Tests](https://img.shields.io/badge/Tests-312%20passing-brightgreen)
+![Frontend](https://img.shields.io/badge/Frontend-SvelteKit-orange)
+![Contract Suite](https://img.shields.io/badge/Contract%20Suite-passing-brightgreen)
 
 ## Overview
 
-Solidity Chess is a complete decentralized chess platform where:
-- Every move is validated and stored on-chain
-- Players stake ETH + CHESS tokens as collateral
-- Disputes are resolved by decentralized arbitrators
-- Governance is handled by token holders
+This repo contains:
+
+- `ethereum/`: Solidity contracts, Truffle migrations, deployment artifacts, and contract tests
+- `frontend/`: SvelteKit client, built as a static app for IPFS-style deployment
+- `docs/`: protocol, UX, and mitigation notes
+- `deploy-app/`: static deployment artifacts/scripts
+
+At a high level, the system does four things:
+
+1. validates chess moves and endgame conditions on-chain
+2. locks player collateral through a hybrid bond model
+3. allows post-game cheating disputes through a commit-reveal DAO flow
+4. tracks token rewards, ELO ratings, and governance on-chain
+
+## Current Status
+
+- The contract suite currently passes locally with `330` passing tests.
+- `ChessCore` was split to keep runtime size deployable by moving heavy rules logic into `ChessRulesEngine`.
+- The frontend is configured for static/IPFS deployment and now lazy-loads ABI-only artifacts.
+- The system is still not formally audited.
+
+Two limitations should be stated plainly:
+
+- arbitrator selection is still pseudo-random on-chain, not VRF-backed
+- `PlayerRating.getTopPlayers()` is a pagination helper, not a fully sorted on-chain leaderboard
 
 ## Architecture
 
+```text
+Frontend (SvelteKit static app / IPFS-compatible)
+        |
+        v
+ChessFactory (EIP-1167 clones)
+        |
+        +--> ChessCore + ChessRulesEngine
+        |        |
+        |        +--> BondingManager
+        |        +--> DisputeDAO
+        |        +--> PlayerRating
+        |        +--> RewardPool
+        |
+        +--> ChessNFT
+
+Token / Governance Layer
+  - ChessToken
+  - ChessGovernor
+  - ChessTimelock
+
+Dispute Layer
+  - DisputeDAO
+  - ArbitratorRegistry
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    GOVERNANCE LAYER                          │
-│         ChessGovernor + ChessTimelock (2-day delay)         │
-└─────────────────────────────────────────────────────────────┘
-                              │
-┌─────────────────────────────────────────────────────────────┐
-│                 ECONOMIC LAYER                               │
-│  ChessToken (ERC20) │ BondingManager │ ArbitratorRegistry   │
-└─────────────────────────────────────────────────────────────┘
-                              │
-┌─────────────────────────────────────────────────────────────┐
-│               DISPUTE RESOLUTION                             │
-│     DisputeDAO (Commit-Reveal Voting, 3-Level Escalation)   │
-└─────────────────────────────────────────────────────────────┘
-                              │
-┌─────────────────────────────────────────────────────────────┐
-│                      GAME LAYER                              │
-│  ChessFactory (EIP-1167) → ChessCore → PlayerRating (ELO)   │
-└─────────────────────────────────────────────────────────────┘
-```
 
-## Features
+## Feature Set
 
-### Core Game
-- Complete chess rules implementation (1,570 lines of Solidity)
-- All special moves: castling, en passant, pawn promotion
-- Check, checkmate, and stalemate detection
-- Threefold repetition, 50-move rule, and FIDE 75-move automatic draw
-- Three time controls: Finney (~1h), Buterin (~7h), Nakamoto (~7d)
-- Tournament and Friendly game modes
-- Play-to-Earn rewards via RewardPool
+### Game Layer
 
-### Anti-Cheating System
-- **Hybrid Bonding**: Players must stake both CHESS tokens and ETH
-- **Commit-Reveal Voting**: Prevents arbitrator collusion
-- **3-Level Escalation**: Disputes can escalate with more arbitrators
-- **Reputation System**: Arbitrators build reputation through honest voting
-- **Slashing**: Cheaters lose their staked collateral
+- full on-chain move validation through `ChessCore` + `ChessRulesEngine`
+- special moves: castling, en passant, promotion
+- check, checkmate, stalemate, threefold repetition, 50-move rule, 75-move automatic draw
+- three timeout presets: `Finney`, `Buterin`, `Nakamoto`
+- `Tournament` and `Friendly` modes
+- unjoined game cancellation after timeout
+- dispute-aware settlement for prizes, rewards, and ratings
 
-### Tokenomics ($CHESS)
-- **Total Supply**: 100,000,000 CHESS
-- **Distribution**:
-  - Play-to-Earn: 40% (40M)
-  - Treasury: 25% (25M)
-  - Team: 15% (15M) - 2-year vesting
-  - Liquidity: 10% (10M)
-  - Community: 10% (10M)
+### Anti-Cheating Layer
 
-### Governance
-- Token-weighted voting via ChessGovernor
-- 2-day timelock for execution
-- 4% quorum requirement
-- Governable parameters: fees, bond requirements, dispute rules
+- hybrid bonding in ETH + CHESS
+- commit-reveal arbitrator voting
+- dynamic effective quorum based on the selected panel
+- up to 3 escalation levels
+- slashing and challenger compensation on `Cheat` verdicts
+- arbitrator reputation tracking
 
-### ELO Rating System
-- Standard ELO algorithm with adaptive K-factor
-- K=40 for new players (< 30 games)
-- K=20 for established players
-- K=10 for high-rated players (2400+)
-- On-chain leaderboard
+### Token / Governance Layer
+
+- `CHESS` ERC20 with vesting and governance hooks
+- governor + timelock governance flow
+- configurable dispute and bonding parameters
+
+### Ratings / Rewards
+
+- on-chain ELO updates
+- player stats and provisional status
+- reward pool for play-to-earn payouts
+- frontend leaderboard view built from on-chain data, with client-side ordering
 
 ## Smart Contracts
 
-| Contract | Description | Gas (Deploy) |
-|----------|-------------|--------------|
-| ChessCore | Game logic, move validation | 4.9M (impl) |
-| ChessFactory | Creates game instances (EIP-1167) | 1.87M |
-| ChessToken | ERC20 with governance | 2.77M |
-| BondingManager | Hybrid bond management | 1.45M |
-| RewardPool | Play-to-Earn rewards | 1.89M |
-| DisputeDAO | Decentralized dispute resolution | 2.14M |
-| ArbitratorRegistry | Arbitrator staking & selection | 1.75M |
-| PlayerRating | ELO rating system | 1.12M |
-| ChessGovernor | On-chain governance | 3.46M |
+| Contract | Responsibility |
+|----------|----------------|
+| `ChessCore` | Match lifecycle, moves, settlement, draw flows |
+| `ChessRulesEngine` | Move legality, check/checkmate/stalemate evaluation |
+| `ChessFactory` | Game creation through clone deployment |
+| `ChessNFT` | NFT representation of created matches |
+| `ChessToken` | ERC20 governance / ecosystem token |
+| `BondingManager` | ETH + CHESS bond accounting and locking |
+| `RewardPool` | Reward distribution |
+| `ArbitratorRegistry` | Arbitrator staking, tiering, reputation, selection |
+| `DisputeDAO` | Challenge window, commit-reveal voting, escalation, final decisions |
+| `PlayerRating` | ELO ratings and player stats |
+| `ChessGovernor` | Governance proposals and voting |
+| `ChessTimelock` | Delayed governance execution |
+
+## Supported Networks
+
+The current frontend wiring targets these chain IDs:
+
+- `1337` / `5777`: local Ganache
+- `84532`: Base Sepolia
+- `8453`: Base mainnet
+
+Older docs and examples still mention Sepolia, Holesky, or Linea in a few places. The frontend stores now use `LOCAL`, `BASE_SEPOLIA`, and `BASE` env names.
 
 ## Getting Started
 
 ### Prerequisites
-- Node.js 16+
-- Truffle or Hardhat
-- Ganache (for local development)
-- MetaMask
 
-### Installation
+- Node.js LTS
+- npm
+- Ganache or another local EVM RPC for local development
+- MetaMask or another injected EVM wallet for frontend testing
+
+### Install
 
 ```bash
-# Clone repository
 git clone https://github.com/jacmos3/ChessGameSolidity.git
 cd ChessGameSolidity
 
-# Install dependencies
-cd ethereum && npm install
-cd ../frontend && npm install
+cd ethereum
+npm install
+
+cd ../frontend
+npm install
 ```
 
-### Local Development
+## Local Development
+
+### 1. Start a local RPC
+
+By default Truffle expects `127.0.0.1:7545`.
 
 ```bash
-# Start Ganache (in separate terminal)
-ganache --port 7545
+npx ganache --server.host 127.0.0.1 --server.port 7545 --wallet.totalAccounts 20
+```
 
-# Deploy contracts
+If you use another port, pass it through `LOCAL_RPC_PORT`.
+
+### 2. Deploy contracts
+
+```bash
 cd ethereum
 npx truffle migrate --reset
+```
 
-# Setup test accounts with CHESS tokens and bonds (optional)
-npx truffle exec scripts/setup-test-accounts.js
+The migration writes the latest addresses to:
 
-# Start frontend
-cd ../frontend
+- [latest-development.json](/Users/jacopo/Documents/development/chessgame/ethereum/deployments/latest-development.json)
+
+### 3. Configure frontend addresses
+
+Copy `frontend/.env.example` to `frontend/.env`, then fill the local addresses from the latest deployment file.
+
+These are the variables the frontend actually reads today:
+
+```dotenv
+VITE_CONTRACT_ADDRESS_LOCAL=
+VITE_BONDING_MANAGER_LOCAL=
+VITE_CHESS_TOKEN_LOCAL=
+VITE_DISPUTE_DAO_LOCAL=
+VITE_ARBITRATOR_REGISTRY_LOCAL=
+VITE_CHESS_GOVERNOR_LOCAL=
+VITE_CHESS_TIMELOCK_LOCAL=
+VITE_PLAYER_RATING_LOCAL=
+```
+
+For Base Sepolia / Base, use the corresponding `..._BASE_SEPOLIA` and `..._BASE` variables.
+
+### 4. Start the frontend
+
+```bash
+cd frontend
 npm run dev
 ```
 
-Open http://localhost:3000 in your browser.
+`npm run dev` automatically runs `npm run sync:abis`, so the frontend ABI-only artifacts stay aligned with the latest Solidity build output.
 
-### Running Tests
+Open the URL shown by Vite, typically `http://127.0.0.1:3000/`.
+
+## Running Tests
+
+### Contract Suite
 
 ```bash
 cd ethereum
 npx truffle test
+```
 
-# With gas reporting
+If your RPC runs on a non-default port:
+
+```bash
+LOCAL_RPC_PORT=8545 npx truffle test
+```
+
+With gas reporting:
+
+```bash
 REPORT_GAS=true npx truffle test
 ```
 
 ## Project Structure
 
-```
-solidity-chess/
+```text
+.
+├── README.md
+├── deploy-app/
+├── docs/
+│   ├── ANTI_CHEATING_TOKENOMICS.md
+│   ├── USER_GUIDE.md
+│   ├── UX_UI_AUDIT_REPORT.md
+│   └── VULNERABILITIES_MITIGATIONS.md
 ├── ethereum/
 │   ├── contracts/
 │   │   ├── Chess/
-│   │   │   ├── ChessCore.sol      # Main game logic
-│   │   │   ├── ChessBoard.sol     # Board state
-│   │   │   ├── ChessFactory.sol   # Game factory (EIP-1167)
-│   │   │   ├── ChessNFT.sol       # Game NFTs
-│   │   │   └── ChessMediaLibrary.sol
-│   │   ├── Token/
-│   │   │   ├── ChessToken.sol     # ERC20 governance token
-│   │   │   ├── BondingManager.sol # Hybrid bond management
-│   │   │   └── RewardPool.sol     # Play-to-Earn rewards
+│   │   │   ├── ChessBoard.sol
+│   │   │   ├── ChessCore.sol
+│   │   │   ├── ChessFactory.sol
+│   │   │   ├── ChessMediaLibrary.sol
+│   │   │   ├── ChessNFT.sol
+│   │   │   └── ChessRulesEngine.sol
 │   │   ├── DAO/
-│   │   │   ├── DisputeDAO.sol     # Dispute resolution
-│   │   │   └── ArbitratorRegistry.sol
 │   │   ├── Governance/
-│   │   │   ├── ChessGovernor.sol
-│   │   │   └── ChessTimelock.sol
-│   │   └── Rating/
-│   │       └── PlayerRating.sol   # ELO system
-│   ├── test/                      # 312 test cases
+│   │   ├── Rating/
+│   │   └── Token/
+│   ├── deployments/
+│   ├── flattened/
 │   ├── migrations/
 │   ├── scripts/
-│   └── deployments/
-├── frontend/
-│   ├── src/
-│   │   ├── lib/
-│   │   │   ├── components/        # Svelte components
-│   │   │   ├── stores/            # State management
-│   │   │   └── contracts/         # ABIs
-│   │   └── routes/                # SvelteKit pages
-│   └── static/
-└── docs/
-    ├── ANTI_CHEATING_TOKENOMICS.md
-    ├── VULNERABILITIES_MITIGATIONS.md
-    └── USER_GUIDE.md
+│   └── test/
+└── frontend/
+    ├── scripts/
+    │   └── extract-abis.mjs
+    ├── src/
+    │   ├── lib/
+    │   │   ├── components/
+    │   │   ├── contracts/
+    │   │   │   ├── abi/
+    │   │   │   └── loadAbi.js
+    │   │   └── stores/
+    │   └── routes/
+    └── static/
 ```
 
-## Gas Optimization
-
-The project uses several gas optimization techniques:
-
-1. **EIP-1167 Minimal Proxy**: Game instances are clones, reducing deployment from ~5.3M to ~626K gas
-2. **Storage Packing**: Multiple variables packed into single 32-byte slots
-3. **Batch Operations**: `lockBondsForGame()` locks both players in one call
-4. **Optimized Compiler**: Solidity 0.8.24 with viaIR and optimizer (runs=1)
-
-| Operation | Gas Cost |
-|-----------|----------|
-| Create Game | ~626K |
-| Join Game | ~135K-395K |
-| Make Move | ~200K-500K |
-
-## Security Considerations
-
-### Implemented Protections
-- ReentrancyGuard on all fund-moving functions
-- Role-based access control (OpenZeppelin)
-- 7-day timelock before arbitrator voting power activates
-- Circuit breaker for extreme price movements
-- Commit-reveal to prevent front-running
-- Custom errors for gas-efficient reverts
-- MAX_DISPUTE_DURATION (30 days) to prevent indefinite escalation
-- FIDE 75-move rule to cap game length and prevent DoS
-- SafeERC20 for all token transfers
-
-### Known Limitations
-- Arbitrator selection uses keccak256 (recommend Chainlink VRF for production)
-- TWAP oracle is simplified (recommend Uniswap/Chainlink integration)
-- Not formally audited yet (internal security review completed)
-
-## API Reference
+## Core Contract Flows
 
 ### ChessFactory
 
 ```solidity
-// Create a new game
 function createChessGame(
-    uint8 _timeoutPreset,  // 0=Finney, 1=Buterin, 2=Nakamoto
-    uint8 _gameMode        // 0=Tournament, 1=Friendly
+    uint8 _timeoutPreset,
+    uint8 _gameMode
 ) external payable returns (address);
 
-// Get all deployed games
 function getDeployedChessGames() external view returns (address[] memory);
 ```
 
 ### ChessCore
 
 ```solidity
-// Join as black player
 function joinGameAsBlack() external payable;
-
-// Make a move (coordinates 0-7)
 function makeMove(uint8 startX, uint8 startY, uint8 endX, uint8 endY) external;
-
-// With pawn promotion
 function makeMoveWithPromotion(
-    uint8 startX, uint8 startY,
-    uint8 endX, uint8 endY,
-    int8 promotionPiece  // 5=Queen, 4=Rook, 3=Bishop, 2=Knight
+    uint8 startX,
+    uint8 startY,
+    uint8 endX,
+    uint8 endY,
+    int8 promotionPiece
 ) external;
 
-// Resign the game
 function resign() external;
-
-// Claim prize after winning
+function canClaimPrize() external view returns (bool);
 function claimPrize() external;
+function finalizePrizes() external;
+function withdrawPrize() external;
+function cancelUnjoinedGame() external;
 
-// Draw operations
 function offerDraw() external;
 function acceptDraw() external;
 function claimDrawByRepetition() external;
 function claimDrawByFiftyMoveRule() external;
 ```
 
-### BondingManager
+Important settlement note:
+
+- decisive, claimable results can use `claimPrize()`
+- draws and dispute-aware settlement use `finalizePrizes()` + `withdrawPrize()`
+
+### DisputeDAO
 
 ```solidity
-// Deposit bond (CHESS + ETH)
-function depositBond(uint256 chessAmount) external payable;
-
-// Withdraw available bond
-function withdrawBond(uint256 chessAmount, uint256 ethAmount) external;
-
-// Check bond sufficiency
-function hasSufficientBond(address user, uint256 stake) external view returns (bool);
-```
-
-## Events
-
-```solidity
-// Game events
-event GameStarted(address indexed whitePlayer, address indexed blackPlayer, uint256 betAmount);
-event MoveMade(address indexed player, uint8 fromRow, uint8 fromCol, uint8 toRow, uint8 toCol, ...);
-event GameStateChanged(GameState newState);
-event PlayerResigned(address player, address winner);
-event PrizeClaimed(address winner, uint256 amount);
-
-// Draw events
-event DrawOffered(address indexed player);
-event DrawAccepted();
-event DrawByRepetition(address indexed claimant);
-event DrawByFiftyMoveRule(address indexed claimant);
+function challenge(uint256 gameId, address accusedPlayer) external;
+function getChallengeWindowRemaining(uint256 gameId) external view returns (uint256);
+function getEffectiveQuorum(uint256 disputeId) external view returns (uint256);
+function getSelectedArbitrators(uint256 disputeId) external view returns (address[] memory);
 ```
 
 ## Frontend Stack
 
-- **Framework**: SvelteKit 1.30.4
-- **Styling**: Tailwind CSS 3.4.0
-- **Web3**: ethers.js 5.7.2
-- **Chess Logic**: chess.js 1.0.0
+- SvelteKit `1.30.4`
+- Svelte `4.2.8`
+- Vite `4.5.2`
+- Tailwind CSS `3.4.0`
+- ethers.js `5.7.2`
+- chess.js `1.0.0-beta.8`
+- `@sveltejs/adapter-static` for IPFS-compatible static builds
+
+## Security Notes
+
+Implemented protections include:
+
+- reentrancy protection on fund-moving flows
+- role-based access control
+- challenge windows and commit / reveal deadlines
+- dispute max duration cap
+- bond locking and slashing
+- custom errors for lower revert overhead
+
+Known limitations:
+
+- no formal external audit yet
+- arbitrator selection is not VRF-backed
+- local frontend config still depends on manual env address wiring
+- some older docs mention outdated network names and should be cleaned up separately
 
 ## Contributing
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Run tests (`npx truffle test`)
-4. Commit your changes (`git commit -m 'Add amazing feature'`)
-5. Push to the branch (`git push origin feature/amazing-feature`)
-6. Open a Pull Request
+1. Create a branch from `dev`
+2. Run the contract suite before pushing
+3. Keep ABI artifacts and frontend wiring aligned with contract changes
+4. Prefer fixing stale docs when protocol behavior changes
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+Repository-wide licensing still needs cleanup.
 
-## Acknowledgments
+- most Solidity files use `SPDX-License-Identifier: MIT`
+- [ethereum/package.json](/Users/jacopo/Documents/development/chessgame/ethereum/package.json) currently declares `ISC`
+- the repo does not currently ship a top-level `LICENSE` file
 
-- [OpenZeppelin](https://openzeppelin.com/) for secure contract libraries
-- [Lichess](https://lichess.org/) for open-source sound effects
-- Chess.js for move validation reference
-
----
-
-**Disclaimer**: This software is provided "as is" without warranty. Use at your own risk. Smart contracts have not been formally audited for production use.
+If this project is meant to be distributed publicly, add a single root license file and align the package manifests with it.
