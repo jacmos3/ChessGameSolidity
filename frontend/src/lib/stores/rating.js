@@ -1,9 +1,7 @@
 import { writable, derived, get } from 'svelte/store';
 import { wallet } from './wallet.js';
 import { ethers } from 'ethers';
-
-// Import ABI
-import PlayerRatingABI from '../contracts/PlayerRating.json';
+import { loadContractAbi } from '../contracts/loadAbi.js';
 
 // Contract addresses per network
 const RATING_ADDRESSES = {
@@ -12,6 +10,8 @@ const RATING_ADDRESSES = {
 	84532: import.meta.env.VITE_PLAYER_RATING_BASE_SEPOLIA || '',
 	8453: import.meta.env.VITE_PLAYER_RATING_BASE || ''
 };
+
+const getPlayerRatingAbi = () => loadContractAbi('PlayerRating');
 
 // Rating store
 function createRatingStore() {
@@ -50,7 +50,8 @@ function createRatingStore() {
 			update(s => ({ ...s, loading: true, error: null }));
 
 			try {
-				const contract = new ethers.Contract(ratingAddress, PlayerRatingABI.abi, $wallet.signer);
+				const playerRatingAbi = await getPlayerRatingAbi();
+				const contract = new ethers.Contract(ratingAddress, playerRatingAbi, $wallet.signer);
 
 				const [stats, winRate, provisional] = await Promise.all([
 					contract.getPlayerStats(address),
@@ -87,7 +88,8 @@ function createRatingStore() {
 			if (!ratingAddress) return null;
 
 			try {
-				const contract = new ethers.Contract(ratingAddress, PlayerRatingABI.abi, $wallet.signer);
+				const playerRatingAbi = await getPlayerRatingAbi();
+				const contract = new ethers.Contract(ratingAddress, playerRatingAbi, $wallet.signer);
 
 				const [stats, winRate, provisional] = await Promise.all([
 					contract.getPlayerStats(playerAddress),
@@ -124,7 +126,8 @@ function createRatingStore() {
 			update(s => ({ ...s, loading: true, error: null }));
 
 			try {
-				const contract = new ethers.Contract(ratingAddress, PlayerRatingABI.abi, $wallet.signer);
+				const playerRatingAbi = await getPlayerRatingAbi();
+				const contract = new ethers.Contract(ratingAddress, playerRatingAbi, $wallet.signer);
 
 				const [totalPlayers, topPlayersData] = await Promise.all([
 					contract.getRankedPlayerCount(),

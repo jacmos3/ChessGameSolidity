@@ -64,6 +64,7 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         uint256 challengedAt;
         uint256 commitDeadline;
         uint256 revealDeadline;
+        uint256 requiredQuorum;
 
         uint256 legitVotes;
         uint256 cheatVotes;
@@ -86,12 +87,15 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
     mapping(uint256 => Dispute) public disputes;      // disputeId => Dispute
     mapping(uint256 => mapping(address => VoteCommit)) public votes; // disputeId => arbitrator => vote
     mapping(uint256 => uint256) public gameToDispute; // gameId => disputeId
+    mapping(uint256 => address) public gameWhitePlayer; // gameId => white player
+    mapping(uint256 => address) public gameBlackPlayer; // gameId => black player
     mapping(address => uint256) public activeChallenges; // challenger => count
 
     uint256 public disputeCounter;
     uint256 public constant MAX_ACTIVE_CHALLENGES = 3;
     uint256 public constant MAX_DISPUTE_DURATION = 30 days;
     uint256 private constant PERCENTAGE_BASE = 100;
+    uint256 private constant MIN_EFFECTIVE_QUORUM = 2;
 
     // Events
     event GameRegistered(uint256 indexed gameId, address white, address black, uint256 stake);
@@ -133,6 +137,8 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         uint256 stake
     ) external onlyRole(GAME_MANAGER_ROLE) {
         require(gameToDispute[gameId] == 0, "Game already registered");
+        require(white != address(0) && black != address(0), "Invalid players");
+        require(white != black, "Same player");
 
         disputeCounter++;
         uint256 disputeId = disputeCounter;
@@ -148,6 +154,7 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
             challengedAt: 0,
             commitDeadline: 0,
             revealDeadline: 0,
+            requiredQuorum: 0,
             legitVotes: 0,
             cheatVotes: 0,
             abstainVotes: 0,
@@ -158,6 +165,8 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         });
 
         gameToDispute[gameId] = disputeId;
+        gameWhitePlayer[gameId] = white;
+        gameBlackPlayer[gameId] = black;
 
         // Record game in arbitrator registry for exclusion tracking
         arbitratorRegistry.recordGame(white, black);
@@ -175,8 +184,11 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         require(disputeId != 0, "Game not registered");
 
         Dispute storage dispute = disputes[disputeId];
+        address white = gameWhitePlayer[gameId];
+        address black = gameBlackPlayer[gameId];
         require(dispute.state == DisputeState.Pending, "Not in challenge window");
         require(activeChallenges[msg.sender] < MAX_ACTIVE_CHALLENGES, "Too many active challenges");
+        require(accusedPlayer == white || accusedPlayer == black, "Accused not in game");
 
         // Enforce challenge window (48 hours from registration)
         require(
@@ -189,6 +201,7 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
 
         dispute.challenger = msg.sender;
         dispute.accusedPlayer = accusedPlayer;
+        dispute.otherPlayer = (accusedPlayer == white) ? black : white;
         dispute.state = DisputeState.Challenged;
         dispute.challengedAt = block.timestamp;
         dispute.commitDeadline = block.timestamp + commitPeriod;
@@ -204,6 +217,7 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
             5
         );
         dispute.selectedArbitrators = arbitrators;
+        dispute.requiredQuorum = _calculateRequiredQuorum(arbitrators.length);
 
         emit DisputeCreated(disputeId, gameId, msg.sender, accusedPlayer);
     }
@@ -295,10 +309,11 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         );
         require(block.timestamp > dispute.revealDeadline, "Reveal period not ended");
 
-        uint256 totalVotes = dispute.legitVotes + dispute.cheatVotes;
+        uint256 totalVotes = dispute.legitVotes + dispute.cheatVotes + dispute.abstainVotes;
+        uint256 requiredQuorum = dispute.requiredQuorum;
 
         // Check quorum
-        if (totalVotes < quorum) {
+        if (requiredQuorum == 0 || totalVotes < requiredQuorum) {
             // Not enough votes - escalate or return deposits
             _escalate(disputeId);
             return;
@@ -453,8 +468,16 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
             newCount
         );
         dispute.selectedArbitrators = newArbitrators;
+        dispute.requiredQuorum = _calculateRequiredQuorum(newArbitrators.length);
 
         emit DisputeEscalated(disputeId, dispute.escalationLevel);
+    }
+
+    function _calculateRequiredQuorum(uint256 selectedCount) internal view returns (uint256) {
+        if (selectedCount < MIN_EFFECTIVE_QUORUM) {
+            return 0;
+        }
+        return selectedCount < quorum ? selectedCount : quorum;
     }
 
     function _updateArbitratorReputations(uint256 disputeId) internal {
@@ -518,6 +541,10 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
 
     function getSelectedArbitrators(uint256 disputeId) external view returns (address[] memory) {
         return disputes[disputeId].selectedArbitrators;
+    }
+
+    function getEffectiveQuorum(uint256 disputeId) external view returns (uint256) {
+        return disputes[disputeId].requiredQuorum;
     }
 
     function getVoteStatus(uint256 disputeId, address arbitrator) external view returns (

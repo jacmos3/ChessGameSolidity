@@ -94,7 +94,7 @@ module.exports = async function (deployer, network, accounts) {
 
   // 5.2 Link library to ChessCore and deploy implementation
   await deployer.link(ChessMediaLibrary, ChessCore);
-  await deployer.deploy(ChessCore, { from: admin });
+  await deployer.deploy(ChessCore, { from: admin, gas: 25000000 });
   const chessCoreImpl = await ChessCore.deployed();
   console.log(`  ChessCore implementation deployed at: ${chessCoreImpl.address}`);
 

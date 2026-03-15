@@ -28,11 +28,12 @@
 	).length;
 
 	$: draws = myGames.filter(g => g.state === 3).length;
+	$: completedMatchGames = myGames.filter(g => g.state >= 3 && g.state <= 5);
 
 	$: activeGames = myGames.filter(g => g.state === 1 || g.state === 2).length;
 
-	$: winRate = myGames.filter(g => g.state >= 3).length > 0
-		? Math.round((wins / myGames.filter(g => g.state >= 3).length) * 100)
+	$: winRate = completedMatchGames.length > 0
+		? Math.round((wins / completedMatchGames.length) * 100)
 		: 0;
 
 	$: totalEthWon = myGames
@@ -51,7 +52,7 @@
 
 	// Game history sorted by completion
 	$: completedGames = myGames
-		.filter(g => g.state >= 3)
+		.filter(g => g.state >= 3 && g.state <= 5)
 		.sort((a, b) => b.state - a.state);
 </script>
 

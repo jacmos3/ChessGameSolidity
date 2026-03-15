@@ -30,7 +30,7 @@
 			// Status filter
 			if (statusFilter === 'open' && g.state !== 1) return false;
 			if (statusFilter === 'active' && g.state !== 2) return false;
-			if (statusFilter === 'finished' && g.state < 3) return false;
+			if (statusFilter === 'finished' && (g.state < 3 || g.state > 5)) return false;
 
 			// Stake filter
 			const stake = parseFloat(g.betting);

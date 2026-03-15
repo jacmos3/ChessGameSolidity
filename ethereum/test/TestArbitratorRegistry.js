@@ -1,6 +1,32 @@
 const ChessToken = artifacts.require("ChessToken");
 const ArbitratorRegistry = artifacts.require("ArbitratorRegistry");
 
+const advanceTime = (seconds) => new Promise((resolve, reject) => {
+  web3.currentProvider.send(
+    {
+      jsonrpc: "2.0",
+      method: "evm_increaseTime",
+      params: [seconds],
+      id: Date.now()
+    },
+    (err) => {
+      if (err) return reject(err);
+      web3.currentProvider.send(
+        {
+          jsonrpc: "2.0",
+          method: "evm_mine",
+          params: [],
+          id: Date.now() + 1
+        },
+        (mineErr, result) => {
+          if (mineErr) return reject(mineErr);
+          resolve(result);
+        }
+      );
+    }
+  );
+});
+
 contract("ArbitratorRegistry", (accounts) => {
   const admin = accounts[0];
   const teamWallet = accounts[1];
@@ -345,6 +371,34 @@ contract("ArbitratorRegistry", (accounts) => {
       // Selection returns empty because arbitrators can't vote during timelock
       assert.isTrue(Array.isArray(selected));
       assert.equal(selected.length, 0, "Should return empty array during timelock");
+    });
+
+    it("should return a unique full panel from a single populated tier after timelock", async () => {
+      const freshRegistry = await ArbitratorRegistry.new(chessToken.address, { from: admin });
+      const disputeRole = await freshRegistry.DISPUTE_MANAGER_ROLE();
+      await freshRegistry.grantRole(disputeRole, disputeManager, { from: admin });
+
+      await chessToken.approve(freshRegistry.address, TIER1_STAKE, { from: arbitrator1 });
+      await chessToken.approve(freshRegistry.address, TIER1_STAKE, { from: arbitrator2 });
+      await chessToken.approve(freshRegistry.address, TIER1_STAKE, { from: arbitrator3 });
+
+      await freshRegistry.stake(TIER1_STAKE, { from: arbitrator1 });
+      await freshRegistry.stake(TIER1_STAKE, { from: arbitrator2 });
+      await freshRegistry.stake(TIER1_STAKE, { from: arbitrator3 });
+
+      await advanceTime(7 * 24 * 60 * 60 + 1);
+
+      const selected = await freshRegistry.selectArbitrators.call(
+        7,
+        player1,
+        player2,
+        5,
+        { from: disputeManager }
+      );
+
+      const unique = new Set(selected.map((address) => address.toLowerCase()));
+      assert.equal(selected.length, 3, "Should select all eligible arbitrators from the populated tier");
+      assert.equal(unique.size, 3, "Selected arbitrators should be unique");
     });
   });
 

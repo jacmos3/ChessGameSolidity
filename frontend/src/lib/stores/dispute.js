@@ -1,11 +1,7 @@
 import { writable, derived, get } from 'svelte/store';
 import { wallet } from './wallet.js';
 import { ethers } from 'ethers';
-
-// Import ABIs
-import DisputeDAOABI from '../contracts/DisputeDAO.json';
-import ArbitratorRegistryABI from '../contracts/ArbitratorRegistry.json';
-import ChessTokenABI from '../contracts/ChessToken.json';
+import { loadContractAbi } from '../contracts/loadAbi.js';
 
 // Contract addresses per network
 const DISPUTE_DAO_ADDRESSES = {
@@ -28,6 +24,10 @@ const CHESS_TOKEN_ADDRESSES = {
 	84532: import.meta.env.VITE_CHESS_TOKEN_BASE_SEPOLIA || '',
 	8453: import.meta.env.VITE_CHESS_TOKEN_BASE || ''
 };
+
+const getDisputeDaoAbi = () => loadContractAbi('DisputeDAO');
+const getArbitratorRegistryAbi = () => loadContractAbi('ArbitratorRegistry');
+const getChessTokenAbi = () => loadContractAbi('ChessToken');
 
 // Dispute states enum (matches contract)
 export const DisputeState = {
@@ -79,7 +79,8 @@ function createDisputeStore() {
 			if (!daoAddress) return;
 
 			try {
-				const dao = new ethers.Contract(daoAddress, DisputeDAOABI.abi, $wallet.signer);
+				const disputeDaoAbi = await getDisputeDaoAbi();
+				const dao = new ethers.Contract(daoAddress, disputeDaoAbi, $wallet.signer);
 
 				const [
 					challengeWindow,
@@ -119,18 +120,27 @@ function createDisputeStore() {
 		 */
 		async getDisputeByGame(gameId) {
 			const $wallet = get(wallet);
-			if (!$wallet.signer || !$wallet.chainId) return null;
+			if (!$wallet.signer || !$wallet.chainId || !gameId) return null;
 
 			const daoAddress = DISPUTE_DAO_ADDRESSES[$wallet.chainId];
 			if (!daoAddress) return null;
 
 			try {
-				const dao = new ethers.Contract(daoAddress, DisputeDAOABI.abi, $wallet.signer);
-				const disputeId = await dao.gameToDispute(gameId);
+				const disputeDaoAbi = await getDisputeDaoAbi();
+				const dao = new ethers.Contract(daoAddress, disputeDaoAbi, $wallet.signer);
+				const [disputeId, challengeWindowOpen, challengeWindowRemaining] = await Promise.all([
+					dao.gameToDispute(gameId),
+					dao.isChallengeWindowOpen(gameId).catch(() => false),
+					dao.getChallengeWindowRemaining(gameId).catch(() => ethers.BigNumber.from(0))
+				]);
 
 				if (disputeId.eq(0)) return null;
 
-				return await this.getDispute(disputeId.toNumber());
+				return await this.getDispute(disputeId.toNumber(), {
+					gameId,
+					challengeWindowOpen,
+					challengeWindowRemaining: challengeWindowRemaining.toNumber()
+				});
 			} catch (err) {
 				console.error('Error getting dispute by game:', err);
 				return null;
@@ -140,7 +150,7 @@ function createDisputeStore() {
 		/**
 		 * Get dispute details
 		 */
-		async getDispute(disputeId) {
+		async getDispute(disputeId, context = {}) {
 			const $wallet = get(wallet);
 			if (!$wallet.signer || !$wallet.chainId) return null;
 
@@ -150,15 +160,34 @@ function createDisputeStore() {
 			update(s => ({ ...s, loading: true, error: null }));
 
 			try {
-				const dao = new ethers.Contract(daoAddress, DisputeDAOABI.abi, $wallet.signer);
+				const [disputeDaoAbi, arbitratorRegistryAbi] = await Promise.all([
+					getDisputeDaoAbi(),
+					getArbitratorRegistryAbi()
+				]);
+				const dao = new ethers.Contract(daoAddress, disputeDaoAbi, $wallet.signer);
+				const registryAddress = ARBITRATOR_REGISTRY_ADDRESSES[$wallet.chainId];
+				const registry = registryAddress
+					? new ethers.Contract(registryAddress, arbitratorRegistryAbi, $wallet.signer)
+					: null;
 
-				const [disputeData, arbitrators] = await Promise.all([
+				const [disputeData, arbitrators, effectiveQuorum, voteStatus, arbitratorInfo] = await Promise.all([
 					dao.getDispute(disputeId),
-					dao.getSelectedArbitrators(disputeId)
+					dao.getSelectedArbitrators(disputeId),
+					dao.getEffectiveQuorum(disputeId),
+					$wallet.account
+						? dao.getVoteStatus(disputeId, $wallet.account).catch(() => [false, false, Vote.None])
+						: Promise.resolve([false, false, Vote.None]),
+					registry && $wallet.account
+						? registry.getArbitratorInfo($wallet.account).catch(() => null)
+						: Promise.resolve(null)
 				]);
 
 				// Also get timing info from disputes mapping
 				const fullDispute = await dao.disputes(disputeId);
+				const abstainVotes = fullDispute.abstainVotes.toNumber();
+				const isSelectedArbitrator = arbitrators.some(
+					arbitrator => arbitrator.toLowerCase() === $wallet.account?.toLowerCase()
+				);
 
 				const dispute = {
 					id: disputeId,
@@ -168,14 +197,29 @@ function createDisputeStore() {
 					state: disputeData.state,
 					legitVotes: disputeData.legitVotes.toNumber(),
 					cheatVotes: disputeData.cheatVotes.toNumber(),
+					abstainVotes,
+					totalVotes: disputeData.legitVotes.toNumber() + disputeData.cheatVotes.toNumber() + abstainVotes,
 					finalDecision: disputeData.finalDecision,
 					escalationLevel: disputeData.escalationLevel.toNumber(),
 					arbitrators,
+					panelSize: arbitrators.length,
+					effectiveQuorum: effectiveQuorum.toNumber(),
 					// Timing
+					registeredAt: fullDispute.registeredAt.toNumber(),
 					challengedAt: fullDispute.challengedAt.toNumber(),
 					commitDeadline: fullDispute.commitDeadline.toNumber(),
 					revealDeadline: fullDispute.revealDeadline.toNumber(),
-					gameStake: ethers.utils.formatEther(fullDispute.gameStake)
+					gameStake: ethers.utils.formatEther(fullDispute.gameStake),
+					challengeWindowOpen: Boolean(context.challengeWindowOpen),
+					challengeWindowRemaining: context.challengeWindowRemaining || 0,
+					user: {
+						isSelectedArbitrator,
+						isArbitrator: Boolean(arbitratorInfo?.isActive),
+						canVoteNow: Boolean(arbitratorInfo?.canVoteNow),
+						hasCommitted: Boolean(voteStatus?.[0]),
+						hasRevealed: Boolean(voteStatus?.[1]),
+						revealedVote: Number(voteStatus?.[2] ?? Vote.None)
+					}
 				};
 
 				update(s => ({ ...s, loading: false, currentDispute: dispute }));
@@ -205,8 +249,12 @@ function createDisputeStore() {
 			update(s => ({ ...s, loading: true, error: null }));
 
 			try {
-				const dao = new ethers.Contract(daoAddress, DisputeDAOABI.abi, $wallet.signer);
-				const token = new ethers.Contract(tokenAddress, ChessTokenABI.abi, $wallet.signer);
+				const [disputeDaoAbi, chessTokenAbi] = await Promise.all([
+					getDisputeDaoAbi(),
+					getChessTokenAbi()
+				]);
+				const dao = new ethers.Contract(daoAddress, disputeDaoAbi, $wallet.signer);
+				const token = new ethers.Contract(tokenAddress, chessTokenAbi, $wallet.signer);
 
 				// Check allowance and approve if needed
 				const challengeDeposit = await dao.challengeDeposit();
@@ -247,7 +295,8 @@ function createDisputeStore() {
 			update(s => ({ ...s, loading: true, error: null }));
 
 			try {
-				const dao = new ethers.Contract(daoAddress, DisputeDAOABI.abi, $wallet.signer);
+				const disputeDaoAbi = await getDisputeDaoAbi();
+				const dao = new ethers.Contract(daoAddress, disputeDaoAbi, $wallet.signer);
 
 				// Create commit hash: keccak256(abi.encodePacked(vote, salt, msg.sender))
 				const commitHash = ethers.utils.solidityKeccak256(
@@ -284,7 +333,8 @@ function createDisputeStore() {
 			update(s => ({ ...s, loading: true, error: null }));
 
 			try {
-				const dao = new ethers.Contract(daoAddress, DisputeDAOABI.abi, $wallet.signer);
+				const disputeDaoAbi = await getDisputeDaoAbi();
+				const dao = new ethers.Contract(daoAddress, disputeDaoAbi, $wallet.signer);
 
 				const tx = await dao.revealVote(disputeId, vote, salt);
 				await tx.wait();
@@ -315,7 +365,8 @@ function createDisputeStore() {
 			update(s => ({ ...s, loading: true, error: null }));
 
 			try {
-				const dao = new ethers.Contract(daoAddress, DisputeDAOABI.abi, $wallet.signer);
+				const disputeDaoAbi = await getDisputeDaoAbi();
+				const dao = new ethers.Contract(daoAddress, disputeDaoAbi, $wallet.signer);
 
 				const tx = await dao.resolveDispute(disputeId);
 				await tx.wait();
@@ -324,6 +375,37 @@ function createDisputeStore() {
 				return true;
 			} catch (err) {
 				console.error('Error resolving dispute:', err);
+				update(s => ({ ...s, loading: false, error: err.message }));
+				throw err;
+			}
+		},
+
+		/**
+		 * Close an expired challenge window
+		 */
+		async closeChallengeWindow(gameId) {
+			const $wallet = get(wallet);
+			if (!$wallet.signer || !$wallet.chainId) {
+				throw new Error('Wallet not connected');
+			}
+
+			const daoAddress = DISPUTE_DAO_ADDRESSES[$wallet.chainId];
+			if (!daoAddress) {
+				throw new Error('Dispute system not available');
+			}
+
+			update(s => ({ ...s, loading: true, error: null }));
+
+			try {
+				const disputeDaoAbi = await getDisputeDaoAbi();
+				const dao = new ethers.Contract(daoAddress, disputeDaoAbi, $wallet.signer);
+				const tx = await dao.closeChallengeWindow(gameId);
+				await tx.wait();
+
+				update(s => ({ ...s, loading: false }));
+				return true;
+			} catch (err) {
+				console.error('Error closing challenge window:', err);
 				update(s => ({ ...s, loading: false, error: err.message }));
 				throw err;
 			}
@@ -340,7 +422,8 @@ function createDisputeStore() {
 			if (!daoAddress) return null;
 
 			try {
-				const dao = new ethers.Contract(daoAddress, DisputeDAOABI.abi, $wallet.signer);
+				const disputeDaoAbi = await getDisputeDaoAbi();
+				const dao = new ethers.Contract(daoAddress, disputeDaoAbi, $wallet.signer);
 				const status = await dao.getVoteStatus(disputeId, arbitrator);
 
 				return {
@@ -419,9 +502,10 @@ function createArbitratorStore() {
 			update(s => ({ ...s, loading: true, error: null }));
 
 			try {
+				const arbitratorRegistryAbi = await getArbitratorRegistryAbi();
 				const registry = new ethers.Contract(
 					registryAddress,
-					ArbitratorRegistryABI.abi,
+					arbitratorRegistryAbi,
 					$wallet.signer
 				);
 
@@ -476,12 +560,16 @@ function createArbitratorStore() {
 			update(s => ({ ...s, loading: true, error: null }));
 
 			try {
+				const [arbitratorRegistryAbi, chessTokenAbi] = await Promise.all([
+					getArbitratorRegistryAbi(),
+					getChessTokenAbi()
+				]);
 				const registry = new ethers.Contract(
 					registryAddress,
-					ArbitratorRegistryABI.abi,
+					arbitratorRegistryAbi,
 					$wallet.signer
 				);
-				const token = new ethers.Contract(tokenAddress, ChessTokenABI.abi, $wallet.signer);
+				const token = new ethers.Contract(tokenAddress, chessTokenAbi, $wallet.signer);
 
 				const amountWei = ethers.utils.parseEther(amount.toString());
 
@@ -525,9 +613,10 @@ function createArbitratorStore() {
 			update(s => ({ ...s, loading: true, error: null }));
 
 			try {
+				const arbitratorRegistryAbi = await getArbitratorRegistryAbi();
 				const registry = new ethers.Contract(
 					registryAddress,
-					ArbitratorRegistryABI.abi,
+					arbitratorRegistryAbi,
 					$wallet.signer
 				);
 

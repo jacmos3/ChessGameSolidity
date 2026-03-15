@@ -3,6 +3,32 @@ const BondingManager = artifacts.require("BondingManager");
 const ArbitratorRegistry = artifacts.require("ArbitratorRegistry");
 const DisputeDAO = artifacts.require("DisputeDAO");
 
+const advanceTime = (seconds) => new Promise((resolve, reject) => {
+  web3.currentProvider.send(
+    {
+      jsonrpc: "2.0",
+      method: "evm_increaseTime",
+      params: [seconds],
+      id: Date.now()
+    },
+    (err) => {
+      if (err) return reject(err);
+      web3.currentProvider.send(
+        {
+          jsonrpc: "2.0",
+          method: "evm_mine",
+          params: [],
+          id: Date.now() + 1
+        },
+        (mineErr, result) => {
+          if (mineErr) return reject(mineErr);
+          resolve(result);
+        }
+      );
+    }
+  );
+});
+
 contract("DisputeDAO", (accounts) => {
   const admin = accounts[0];
   const teamWallet = accounts[1];
@@ -131,6 +157,18 @@ contract("DisputeDAO", (accounts) => {
       assert.equal(dispute.state.toString(), "1"); // Pending
     });
 
+    it("should store the registered players for later challenge validation", async () => {
+      const gameId = 1;
+      const stake = web3.utils.toWei("0.1", "ether");
+
+      await disputeDAO.registerGame(gameId, player1, player2, stake, { from: gameManager });
+
+      const storedWhite = await disputeDAO.gameWhitePlayer(gameId);
+      const storedBlack = await disputeDAO.gameBlackPlayer(gameId);
+      assert.equal(storedWhite, player1);
+      assert.equal(storedBlack, player2);
+    });
+
     it("should reject duplicate game registration", async () => {
       const gameId = 1;
       const stake = web3.utils.toWei("0.1", "ether");
@@ -183,6 +221,22 @@ contract("DisputeDAO", (accounts) => {
       assert.equal(dispute.state.toString(), "2"); // Challenged
       assert.equal(dispute.challenger, challenger);
       assert.equal(dispute.accusedPlayer, player1);
+    });
+
+    it("should set otherPlayer to the non-accused game participant", async () => {
+      await disputeDAO.challenge(gameId, player1, { from: challenger });
+
+      const fullDispute = await disputeDAO.disputes(1);
+      assert.equal(fullDispute.otherPlayer, player2);
+    });
+
+    it("should reject challenges against addresses that are not players in the game", async () => {
+      try {
+        await disputeDAO.challenge(gameId, gameManager, { from: challenger });
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
     });
 
     it("should track active challenges per user", async () => {
@@ -305,6 +359,10 @@ contract("DisputeDAO", (accounts) => {
 
       const dispute = await disputeDAO.getDispute(1);
       assert.equal(dispute.state.toString(), "4"); // Resolved
+
+      const fullDispute = await disputeDAO.disputes(1);
+      assert.isTrue(fullDispute.resolved, "Pending dispute should be marked resolved after the window is closed");
+      assert.equal(fullDispute.finalDecision.toString(), "0", "Closing an unchallenged window should not fabricate a decision");
     });
 
     it("should not close window if already challenged", async () => {
@@ -387,6 +445,20 @@ contract("DisputeDAO", (accounts) => {
         remaining.toNumber() > 0,
         `Remaining time should be > 0, got ${remaining.toNumber()}`
       );
+    });
+
+    it("should return 0 remaining time after the challenge window expires", async () => {
+      await advanceTime(48 * 3600 + 1);
+
+      const remaining = await disputeDAO.getChallengeWindowRemaining(gameId);
+      assert.equal(remaining.toString(), "0", "Expired windows should report zero remaining time");
+    });
+
+    it("should return 0 remaining time after a challenge is submitted", async () => {
+      await disputeDAO.challenge(gameId, player1, { from: challenger });
+
+      const remaining = await disputeDAO.getChallengeWindowRemaining(gameId);
+      assert.equal(remaining.toString(), "0", "Once challenged, the pending challenge window should be closed");
     });
 
     it("should return false for isChallengeWindowOpen on non-registered game", async () => {
@@ -597,6 +669,85 @@ contract("DisputeDAO", (accounts) => {
 
       assert.equal(disputeId1.toString(), "1");
       assert.equal(disputeId2.toString(), "2");
+    });
+  });
+
+  describe("Dynamic Quorum Resolution", () => {
+    const gameId = 1;
+    const stake = web3.utils.toWei("0.1", "ether");
+
+    beforeEach(async () => {
+      await advanceTime(7 * 24 * 60 * 60 + 1);
+      await disputeDAO.registerGame(gameId, player1, player2, stake, { from: gameManager });
+      await disputeDAO.challenge(gameId, player1, { from: challenger });
+    });
+
+    async function commitAndRevealVotes(voteMap) {
+      const disputeId = await disputeDAO.gameToDispute(gameId);
+      const selectedArbitrators = await disputeDAO.getSelectedArbitrators(disputeId);
+
+      for (let i = 0; i < selectedArbitrators.length; i++) {
+        const arbitrator = selectedArbitrators[i];
+        const vote = voteMap[arbitrator] ?? voteMap.defaultVote;
+        const salt = web3.utils.soliditySha3(`dynamic-quorum-${i}-${vote}`);
+        const commitHash = web3.utils.soliditySha3(
+          { type: "uint8", value: vote },
+          { type: "bytes32", value: salt },
+          { type: "address", value: arbitrator }
+        );
+
+        await disputeDAO.commitVote(disputeId, commitHash, { from: arbitrator });
+        voteMap[`${arbitrator.toLowerCase()}-salt`] = salt;
+      }
+
+      await advanceTime(24 * 3600 + 1);
+
+      for (let i = 0; i < selectedArbitrators.length; i++) {
+        const arbitrator = selectedArbitrators[i];
+        const vote = voteMap[arbitrator] ?? voteMap.defaultVote;
+        const salt = voteMap[`${arbitrator.toLowerCase()}-salt`];
+        await disputeDAO.revealVote(disputeId, vote, salt, { from: arbitrator });
+      }
+
+      await advanceTime(24 * 3600 + 1);
+
+      return { disputeId, selectedArbitrators };
+    }
+
+    it("should derive effective quorum from the selected panel size", async () => {
+      const disputeId = await disputeDAO.gameToDispute(gameId);
+      const selectedArbitrators = await disputeDAO.getSelectedArbitrators(disputeId);
+      const effectiveQuorum = await disputeDAO.getEffectiveQuorum(disputeId);
+
+      assert.equal(selectedArbitrators.length, 3, "Expected the small bootstrap panel to contain three arbitrators");
+      assert.equal(effectiveQuorum.toString(), "3", "Effective quorum should match the selected panel when configured quorum is higher");
+    });
+
+    it("should resolve a dispute with the bootstrap panel instead of escalating forever", async () => {
+      const { disputeId } = await commitAndRevealVotes({ defaultVote: 2 });
+
+      await disputeDAO.resolveDispute(disputeId, { from: challenger });
+
+      const dispute = await disputeDAO.getDispute(disputeId);
+      assert.equal(dispute.state.toString(), "4", "Dispute should resolve with the available bootstrap panel");
+      assert.equal(dispute.finalDecision.toString(), "2", "Decision should be Cheat");
+    });
+
+    it("should count abstentions toward quorum without handing victory to a single vote", async () => {
+      const disputeId = await disputeDAO.gameToDispute(gameId);
+      const selectedArbitrators = await disputeDAO.getSelectedArbitrators(disputeId);
+
+      const voteMap = {
+        defaultVote: 2,
+        [selectedArbitrators[2]]: 3
+      };
+
+      await commitAndRevealVotes(voteMap);
+      await disputeDAO.resolveDispute(disputeId, { from: challenger });
+
+      const dispute = await disputeDAO.getDispute(disputeId);
+      assert.equal(dispute.state.toString(), "4", "Dispute should still resolve when two of three arbitrators agree");
+      assert.equal(dispute.finalDecision.toString(), "2", "Two cheat votes and one abstain should still produce a cheat decision");
     });
   });
 });

@@ -1,8 +1,10 @@
 import { writable, get } from 'svelte/store';
 import { wallet, contractAddress } from './wallet.js';
 import { ethers } from 'ethers';
-import ChessFactoryABI from '../contracts/ChessFactory.json';
-import ChessCoreABI from '../contracts/ChessCore.json';
+import { loadContractAbi } from '../contracts/loadAbi.js';
+
+const getChessFactoryAbi = () => loadContractAbi('ChessFactory');
+const getChessCoreAbi = () => loadContractAbi('ChessCore');
 
 // Leaderboard store
 function createLeaderboardStore() {
@@ -25,9 +27,13 @@ function createLeaderboardStore() {
 			update(s => ({ ...s, loading: true, error: null }));
 
 			try {
+				const [factoryAbi, chessCoreAbi] = await Promise.all([
+					getChessFactoryAbi(),
+					getChessCoreAbi()
+				]);
 				const factory = new ethers.Contract(
 					$contractAddress,
-					ChessFactoryABI.abi,
+					factoryAbi,
 					$wallet.signer
 				);
 
@@ -61,7 +67,7 @@ function createLeaderboardStore() {
 					const results = await Promise.all(
 						batch.map(async (addr) => {
 							try {
-								const game = new ethers.Contract(addr, ChessCoreABI.abi, $wallet.provider);
+								const game = new ethers.Contract(addr, chessCoreAbi, $wallet.provider);
 								const [players, state, betting] = await Promise.all([
 									game.getPlayers(),
 									game.getGameState(),
@@ -82,8 +88,8 @@ function createLeaderboardStore() {
 						const whitePlayer = players[0];
 						const blackPlayer = players[1];
 
-						// Skip games that haven't started or are still in progress
-						if (state < 3) continue;
+						// Skip games that haven't started, are still in progress, or were cancelled
+						if (state < 3 || state > 5) continue;
 
 						const white = ensurePlayer(whitePlayer);
 						const black = ensurePlayer(blackPlayer);

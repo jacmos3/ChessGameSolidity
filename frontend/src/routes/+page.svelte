@@ -14,6 +14,7 @@
 		g.whitePlayer?.toLowerCase() === $wallet.account?.toLowerCase() ||
 		g.blackPlayer?.toLowerCase() === $wallet.account?.toLowerCase()
 	);
+	$: completedGames = myGames.filter(g => g.state >= 3 && g.state <= 5);
 
 	$: myActiveGames = myGames.filter(g => g.state === 1 || g.state === 2);
 	$: openGames = $games.games.filter(g => g.state === 1); // NotStarted = waiting for opponent
@@ -69,10 +70,9 @@
 				Please switch to a supported network
 			</p>
 			<div class="flex flex-wrap justify-center gap-2">
-				<span class="px-3 py-1 rounded bg-chess-accent/10 text-chess-accent text-sm">Sepolia</span>
-				<span class="px-3 py-1 rounded bg-chess-accent/10 text-chess-accent text-sm">Holesky</span>
-				<span class="px-3 py-1 rounded bg-chess-accent/10 text-chess-accent text-sm">Linea Sepolia</span>
-				<span class="px-3 py-1 rounded bg-chess-accent/10 text-chess-accent text-sm">Localhost</span>
+				<span class="px-3 py-1 rounded bg-chess-accent/10 text-chess-accent text-sm">Ganache</span>
+				<span class="px-3 py-1 rounded bg-chess-accent/10 text-chess-accent text-sm">Base Sepolia</span>
+				<span class="px-3 py-1 rounded bg-chess-accent/10 text-chess-accent text-sm">Base</span>
 			</div>
 		</div>
 	</section>
@@ -130,7 +130,7 @@
 							{#each myActiveGames as game (game.address)}
 								{@const isWhite = game.whitePlayer?.toLowerCase() === $wallet.account?.toLowerCase()}
 								{@const opponent = isWhite ? game.blackPlayer : game.whitePlayer}
-								{@const isMyTurn = (game.state === 1 && isWhite) || (game.state === 2 && !isWhite)}
+								{@const isMyTurn = !!game.isMyTurn}
 
 								<a href="/game/{game.address}" class="card flex items-center gap-4 hover:border-chess-accent/50 cursor-pointer !p-4">
 									<div class="text-3xl">{isWhite ? '♔' : '♚'}</div>
@@ -158,10 +158,10 @@
 					{/if}
 
 					<!-- Recent completed games -->
-					{#if myGames.filter(g => g.state >= 3).length > 0}
+					{#if completedGames.length > 0}
 						<h3 class="font-display text-lg mt-8 mb-4 text-chess-gray">Recent Games</h3>
 						<div class="space-y-2">
-							{#each myGames.filter(g => g.state >= 3).slice(0, 3) as game (game.address)}
+							{#each completedGames.slice(0, 3) as game (game.address)}
 								{@const isWhite = game.whitePlayer?.toLowerCase() === $wallet.account?.toLowerCase()}
 								{@const won = (game.state === 4 && isWhite) || (game.state === 5 && !isWhite)}
 

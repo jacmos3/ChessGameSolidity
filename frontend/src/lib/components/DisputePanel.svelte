@@ -14,58 +14,192 @@
 	export let gameId;
 	export let whitePlayer = '';
 	export let blackPlayer = '';
-	export let gameState = 0; // Game state from contract
+	export let gameState = 0;
 
 	let disputeData = null;
 	let loading = false;
 	let error = null;
 	let success = null;
 
-	// Challenge form
 	let accusedPlayer = '';
-
-	// Vote form
 	let selectedVote = Vote.None;
 	let voteSalt = '';
-	let savedCommit = null; // Store commit locally for reveal
+	let savedCommit = null;
+	let hasSavedCommit = false;
+	let lastLoadKey = '';
 
 	onMount(async () => {
 		if ($wallet.connected && $disputeAvailable) {
-			await dispute.fetchParams();
-			await loadDispute();
+			await refreshPanel(true);
 		}
 	});
 
 	$: if ($wallet.connected && $disputeAvailable && gameId) {
-		loadDispute();
+		refreshPanel();
+	}
+
+	$: canChallenge = gameState >= 3 && gameState <= 5 &&
+		(!disputeData || (disputeData.state === DisputeState.Pending && disputeData.challengeWindowOpen));
+	$: canCloseChallengeWindow = disputeData?.state === DisputeState.Pending && !disputeData?.challengeWindowOpen;
+	$: isSelectedArbitrator = disputeData?.user?.isSelectedArbitrator ?? false;
+	$: currentPhase = disputeData ? getPhase(disputeData) : null;
+	$: timelineSteps = disputeData ? buildTimeline(disputeData) : [];
+
+	async function refreshPanel(force = false) {
+		const loadKey = `${gameId}:${$wallet.account || ''}:${$wallet.chainId || ''}`;
+		if (!force && loadKey === lastLoadKey) return;
+
+		lastLoadKey = loadKey;
+		await dispute.fetchParams();
+		await loadDispute();
 	}
 
 	async function loadDispute() {
 		loading = true;
 		disputeData = await dispute.getDisputeByGame(gameId);
+		syncSavedCommit();
 		loading = false;
 	}
 
-	// Check if game is finished and can be challenged
-	$: canChallenge = gameState >= 3 && gameState <= 5 && // Draw, WhiteWin, BlackWin
-		(!disputeData || disputeData.state === DisputeState.Pending);
+	function syncSavedCommit() {
+		if (typeof localStorage === 'undefined' || !disputeData?.id) {
+			savedCommit = null;
+			hasSavedCommit = false;
+			return;
+		}
 
-	// Check if current user is a selected arbitrator
-	$: isArbitrator = disputeData?.arbitrators?.some(
-		a => a.toLowerCase() === $wallet.account?.toLowerCase()
-	);
-
-	// Current phase
-	$: currentPhase = disputeData ? getPhase(disputeData) : null;
+		savedCommit = JSON.parse(localStorage.getItem(`vote_commit_${disputeData.id}`) || 'null');
+		hasSavedCommit = Boolean(savedCommit);
+	}
 
 	function getPhase(d) {
 		const now = Math.floor(Date.now() / 1000);
-		if (d.state === DisputeState.Challenged) {
-			if (now <= d.commitDeadline) return 'commit';
-			return 'revealing';
+
+		if (d.state === DisputeState.Pending) {
+			return d.challengeWindowOpen ? 'challenge' : 'resolve';
 		}
-		if (d.state === DisputeState.Revealing) return 'reveal';
-		return null;
+
+		if (d.state === DisputeState.Challenged) {
+			return now <= d.commitDeadline ? 'commit' : 'reveal';
+		}
+
+		if (d.state === DisputeState.Revealing) {
+			return now <= d.revealDeadline ? 'reveal' : 'resolve';
+		}
+
+		if (d.state === DisputeState.Resolved) {
+			return 'resolved';
+		}
+
+		return 'idle';
+	}
+
+	function formatRemainingSeconds(seconds) {
+		if (!seconds || seconds <= 0) return 'Ended';
+
+		const hours = Math.floor(seconds / 3600);
+		const minutes = Math.floor((seconds % 3600) / 60);
+
+		if (hours > 24) {
+			const days = Math.floor(hours / 24);
+			return `${days}d ${hours % 24}h`;
+		}
+
+		return `${hours}h ${minutes}m`;
+	}
+
+	function buildTimeline(d) {
+		if (d.state === DisputeState.Pending) {
+			return [
+				{
+					label: 'Challenge',
+					status: d.challengeWindowOpen ? 'active' : 'expired',
+					detail: d.challengeWindowOpen
+						? `${formatRemainingSeconds(d.challengeWindowRemaining)} left`
+						: 'Window expired'
+				},
+				{ label: 'Commit', status: 'upcoming', detail: 'Starts after a challenge' },
+				{ label: 'Reveal', status: 'upcoming', detail: 'Hidden votes are revealed' },
+				{
+					label: 'Resolve',
+					status: d.challengeWindowOpen ? 'upcoming' : 'active',
+					detail: d.challengeWindowOpen ? 'Waiting for challenge or expiry' : 'Ready to close'
+				}
+			];
+		}
+
+		if (d.state === DisputeState.Challenged) {
+			const now = Math.floor(Date.now() / 1000);
+			const commitActive = now <= d.commitDeadline;
+
+			return [
+				{ label: 'Challenge', status: 'complete', detail: 'Panel selected' },
+				{
+					label: 'Commit',
+					status: commitActive ? 'active' : 'complete',
+					detail: commitActive ? formatTimeRemaining(d.commitDeadline) : 'Commit closed'
+				},
+				{
+					label: 'Reveal',
+					status: commitActive ? 'upcoming' : 'active',
+					detail: commitActive ? 'Starts after commit' : formatTimeRemaining(d.revealDeadline)
+				},
+				{ label: 'Resolve', status: 'upcoming', detail: 'Final decision after reveal' }
+			];
+		}
+
+		if (d.state === DisputeState.Revealing) {
+			const now = Math.floor(Date.now() / 1000);
+			const revealActive = now <= d.revealDeadline;
+
+			return [
+				{ label: 'Challenge', status: 'complete', detail: 'Challenge accepted' },
+				{ label: 'Commit', status: 'complete', detail: 'Votes committed' },
+				{
+					label: 'Reveal',
+					status: revealActive ? 'active' : 'complete',
+					detail: revealActive ? formatTimeRemaining(d.revealDeadline) : 'Reveal closed'
+				},
+				{
+					label: 'Resolve',
+					status: revealActive ? 'upcoming' : 'active',
+					detail: revealActive ? 'Waiting for reveal deadline' : 'Ready to resolve'
+				}
+			];
+		}
+
+		return [
+			{ label: 'Challenge', status: 'complete', detail: 'Closed' },
+			{ label: 'Commit', status: 'complete', detail: 'Completed' },
+			{ label: 'Reveal', status: 'complete', detail: 'Completed' },
+			{
+				label: 'Resolve',
+				status: 'complete',
+				detail: d.finalDecision === Vote.None ? 'No challenge' : getVoteLabel(d.finalDecision)
+			}
+		];
+	}
+
+	function getStepClasses(status) {
+		if (status === 'complete') return 'border-chess-success/30 bg-chess-success/10';
+		if (status === 'active') return 'border-chess-accent/40 bg-chess-accent/10';
+		if (status === 'expired') return 'border-chess-danger/30 bg-chess-danger/10';
+		return 'border-chess-accent/10 bg-chess-darker/40';
+	}
+
+	function getStepLabel(status) {
+		if (status === 'complete') return 'Done';
+		if (status === 'active') return 'Current';
+		if (status === 'expired') return 'Expired';
+		return 'Next';
+	}
+
+	function formatParticipant(address, fallback) {
+		if (!address || address === '0x0000000000000000000000000000000000000000') {
+			return fallback;
+		}
+
+		return truncateAddress(address);
 	}
 
 	async function handleChallenge() {
@@ -80,7 +214,7 @@
 
 		try {
 			await dispute.challenge(gameId, accusedPlayer);
-			success = 'Challenge submitted! Arbitrators will vote.';
+			success = 'Challenge submitted. Arbitrators can now commit votes.';
 			await loadDispute();
 		} catch (err) {
 			error = err.message || 'Failed to submit challenge';
@@ -100,25 +234,21 @@
 		success = null;
 
 		try {
-			// Generate salt
 			const salt = dispute.generateSalt();
 			voteSalt = salt;
 
-			// Commit vote
 			const commitHash = await dispute.commitVote(disputeData.id, selectedVote, salt);
 
-			// Save commit data locally for reveal phase
 			savedCommit = {
 				disputeId: disputeData.id,
 				vote: selectedVote,
-				salt: salt,
+				salt,
 				hash: commitHash
 			};
 
-			// Store in localStorage for persistence
 			localStorage.setItem(`vote_commit_${disputeData.id}`, JSON.stringify(savedCommit));
-
-			success = 'Vote committed! Save this info for reveal phase. Salt: ' + salt.slice(0, 10) + '...';
+			hasSavedCommit = true;
+			success = `Vote committed. Save this salt: ${salt.slice(0, 10)}...`;
 			await loadDispute();
 		} catch (err) {
 			error = err.message || 'Failed to commit vote';
@@ -128,11 +258,10 @@
 	}
 
 	async function handleRevealVote() {
-		// Try to load saved commit
 		const saved = savedCommit || JSON.parse(localStorage.getItem(`vote_commit_${disputeData.id}`) || 'null');
 
 		if (!saved) {
-			error = 'No saved commit found. Enter your vote and salt manually.';
+			error = 'No saved commit found for reveal.';
 			return;
 		}
 
@@ -142,15 +271,29 @@
 
 		try {
 			await dispute.revealVote(saved.disputeId, saved.vote, saved.salt);
-			success = 'Vote revealed successfully!';
-
-			// Clear saved commit
+			success = 'Vote revealed successfully.';
 			localStorage.removeItem(`vote_commit_${disputeData.id}`);
 			savedCommit = null;
-
+			hasSavedCommit = false;
 			await loadDispute();
 		} catch (err) {
 			error = err.message || 'Failed to reveal vote';
+		}
+
+		loading = false;
+	}
+
+	async function handleCloseChallengeWindow() {
+		loading = true;
+		error = null;
+		success = null;
+
+		try {
+			await dispute.closeChallengeWindow(gameId);
+			success = 'Challenge window closed.';
+			await loadDispute();
+		} catch (err) {
+			error = err.message || 'Failed to close challenge window';
 		}
 
 		loading = false;
@@ -163,7 +306,7 @@
 
 		try {
 			await dispute.resolveDispute(disputeData.id);
-			success = 'Dispute resolved!';
+			success = 'Dispute resolved.';
 			await loadDispute();
 		} catch (err) {
 			error = err.message || 'Failed to resolve dispute';
@@ -171,18 +314,9 @@
 
 		loading = false;
 	}
-
-	// Load saved commit on mount if exists
-	onMount(() => {
-		if (disputeData?.id) {
-			savedCommit = JSON.parse(localStorage.getItem(`vote_commit_${disputeData.id}`) || 'null');
-		}
-	});
 </script>
 
-{#if !$disputeAvailable}
-	<!-- Dispute system not available -->
-{:else}
+{#if $disputeAvailable}
 	<div class="card mt-4">
 		<div class="p-4 border-b border-chess-accent/10">
 			<h3 class="font-display text-lg flex items-center gap-2">
@@ -195,65 +329,12 @@
 			<div class="p-6 text-center text-chess-gray">
 				<div class="animate-pulse">Loading dispute data...</div>
 			</div>
-		{:else if !disputeData || disputeData.state === DisputeState.None || disputeData.state === DisputeState.Pending}
-			<!-- No active dispute - show challenge option -->
-			{#if canChallenge}
-				<div class="p-4">
-					<p class="text-sm text-chess-gray mb-4">
-						Suspect cheating? Challenge this game within the challenge window.
-						Requires {$dispute.challengeDeposit} CHESS deposit.
-					</p>
-
-					<div class="mb-4">
-						<label class="text-sm text-chess-gray mb-2 block">Accuse Player</label>
-						<div class="flex gap-2">
-							<button
-								class="flex-1 py-2 px-3 rounded-lg text-sm transition-colors
-									{accusedPlayer === whitePlayer ? 'bg-chess-accent text-chess-darker' : 'bg-chess-darker hover:bg-chess-dark'}"
-								on:click={() => accusedPlayer = whitePlayer}
-							>
-								White: {truncateAddress(whitePlayer)}
-							</button>
-							<button
-								class="flex-1 py-2 px-3 rounded-lg text-sm transition-colors
-									{accusedPlayer === blackPlayer ? 'bg-chess-accent text-chess-darker' : 'bg-chess-darker hover:bg-chess-dark'}"
-								on:click={() => accusedPlayer = blackPlayer}
-							>
-								Black: {truncateAddress(blackPlayer)}
-							</button>
-						</div>
-					</div>
-
-					{#if error}
-						<div class="bg-chess-danger/10 border border-chess-danger/30 text-chess-danger rounded-lg p-3 text-sm mb-4">
-							{error}
-						</div>
-					{/if}
-
-					{#if success}
-						<div class="bg-chess-success/10 border border-chess-success/30 text-chess-success rounded-lg p-3 text-sm mb-4">
-							{success}
-						</div>
-					{/if}
-
-					<button
-						class="btn btn-danger w-full"
-						on:click={handleChallenge}
-						disabled={loading || !accusedPlayer}
-					>
-						{loading ? 'Submitting...' : 'Challenge Game'}
-					</button>
-				</div>
-			{:else}
-				<div class="p-4 text-center text-chess-gray">
-					<p>No active dispute for this game.</p>
-				</div>
-			{/if}
-
+		{:else if !disputeData || disputeData.state === DisputeState.None}
+			<div class="p-4 text-center text-chess-gray">
+				<p>No dispute record found for this game.</p>
+			</div>
 		{:else}
-			<!-- Active dispute -->
 			<div class="p-4 space-y-4">
-				<!-- Status header -->
 				<div class="bg-chess-darker/50 rounded-lg p-3">
 					<div class="flex justify-between items-center mb-2">
 						<span class="text-xs text-chess-gray uppercase">Status</span>
@@ -266,11 +347,11 @@
 					<div class="grid grid-cols-2 gap-4 text-sm">
 						<div>
 							<span class="text-chess-gray">Challenger:</span>
-							<span class="ml-1">{truncateAddress(disputeData.challenger)}</span>
+							<span class="ml-1">{formatParticipant(disputeData.challenger, 'Open window')}</span>
 						</div>
 						<div>
 							<span class="text-chess-gray">Accused:</span>
-							<span class="ml-1">{truncateAddress(disputeData.accusedPlayer)}</span>
+							<span class="ml-1">{formatParticipant(disputeData.accusedPlayer, 'Not selected')}</span>
 						</div>
 						<div>
 							<span class="text-chess-gray">Stake:</span>
@@ -280,11 +361,101 @@
 							<span class="text-chess-gray">Escalation:</span>
 							<span class="ml-1">Level {disputeData.escalationLevel}</span>
 						</div>
+						{#if disputeData.state === DisputeState.Pending}
+							<div>
+								<span class="text-chess-gray">Window:</span>
+								<span class="ml-1">
+									{#if disputeData.challengeWindowOpen}
+										{formatRemainingSeconds(disputeData.challengeWindowRemaining)}
+									{:else}
+										Expired
+									{/if}
+								</span>
+							</div>
+							<div>
+								<span class="text-chess-gray">Next:</span>
+								<span class="ml-1">{disputeData.challengeWindowOpen ? 'Awaiting challenge' : 'Close window'}</span>
+							</div>
+						{:else}
+							<div>
+								<span class="text-chess-gray">Panel:</span>
+								<span class="ml-1">{disputeData.panelSize} arbitrators</span>
+							</div>
+							<div>
+								<span class="text-chess-gray">Quorum:</span>
+								<span class="ml-1">{disputeData.effectiveQuorum || 0}</span>
+							</div>
+						{/if}
 					</div>
 				</div>
 
-				<!-- Voting progress -->
-				{#if disputeData.state !== DisputeState.Resolved}
+				<div class="grid grid-cols-2 lg:grid-cols-4 gap-2">
+					{#each timelineSteps as step}
+						<div class="rounded-lg border px-3 py-2 {getStepClasses(step.status)}">
+							<div class="flex items-center justify-between gap-2">
+								<div class="text-[11px] uppercase tracking-wide text-chess-gray">{step.label}</div>
+								<div class="text-[11px] uppercase tracking-wide text-chess-gray">{getStepLabel(step.status)}</div>
+							</div>
+							<div class="text-xs mt-2 text-chess-light">{step.detail}</div>
+						</div>
+					{/each}
+				</div>
+
+				{#if disputeData.state === DisputeState.Pending}
+					<div class="bg-chess-darker/50 rounded-lg p-3 space-y-3">
+						<div class="text-sm">
+							{#if disputeData.challengeWindowOpen}
+								The challenge window is open. Anyone can accuse one player of cheating by posting the CHESS deposit.
+							{:else}
+								The challenge window expired. This record is still pending only because nobody has closed it on-chain yet.
+							{/if}
+						</div>
+						<div class="text-xs text-chess-gray">
+							Deposit required: {$dispute.challengeDeposit} CHESS
+						</div>
+					</div>
+
+					{#if canChallenge}
+						<div class="space-y-4">
+							<div>
+								<div class="text-sm text-chess-gray mb-2">Accuse Player</div>
+								<div class="flex gap-2">
+									<button
+										class="flex-1 py-2 px-3 rounded-lg text-sm transition-colors
+											{accusedPlayer === whitePlayer ? 'bg-chess-accent text-chess-darker' : 'bg-chess-darker hover:bg-chess-dark'}"
+										on:click={() => accusedPlayer = whitePlayer}
+									>
+										White: {truncateAddress(whitePlayer)}
+									</button>
+									<button
+										class="flex-1 py-2 px-3 rounded-lg text-sm transition-colors
+											{accusedPlayer === blackPlayer ? 'bg-chess-accent text-chess-darker' : 'bg-chess-darker hover:bg-chess-dark'}"
+										on:click={() => accusedPlayer = blackPlayer}
+									>
+										Black: {truncateAddress(blackPlayer)}
+									</button>
+								</div>
+							</div>
+
+							<button
+								class="btn btn-danger w-full"
+								on:click={handleChallenge}
+								disabled={loading || !accusedPlayer}
+							>
+								{loading ? 'Submitting...' : 'Challenge Game'}
+							</button>
+						</div>
+					{:else if canCloseChallengeWindow}
+						<button
+							class="btn btn-secondary w-full"
+							on:click={handleCloseChallengeWindow}
+							disabled={loading}
+						>
+							{loading ? 'Closing...' : 'Close Challenge Window'}
+						</button>
+					{/if}
+
+				{:else if disputeData.state !== DisputeState.Resolved}
 					<div class="bg-chess-darker/50 rounded-lg p-3">
 						<div class="flex justify-between text-sm mb-2">
 							<span class="text-chess-gray">Votes</span>
@@ -294,108 +465,132 @@
 								<span class="text-chess-danger">{disputeData.cheatVotes} Cheat</span>
 							</span>
 						</div>
+						<div class="grid grid-cols-2 gap-3 text-xs text-chess-gray mb-2">
+							<div>Participation: {disputeData.totalVotes}/{disputeData.panelSize}</div>
+							<div>Abstain: {disputeData.abstainVotes}</div>
+						</div>
 
 						{#if currentPhase === 'commit'}
 							<div class="text-xs text-chess-gray">
 								Commit deadline: {formatTimeRemaining(disputeData.commitDeadline)}
 							</div>
-						{:else if currentPhase === 'reveal' || currentPhase === 'revealing'}
+						{:else if currentPhase === 'reveal'}
 							<div class="text-xs text-chess-gray">
 								Reveal deadline: {formatTimeRemaining(disputeData.revealDeadline)}
 							</div>
+						{:else if currentPhase === 'resolve'}
+							<div class="text-xs text-chess-gray">
+								Reveal period ended. Anyone can resolve this dispute now.
+							</div>
 						{/if}
 					</div>
-				{:else}
-					<!-- Final result -->
-					<div class="bg-chess-darker/50 rounded-lg p-3 text-center">
-						<div class="text-xs text-chess-gray uppercase mb-1">Final Decision</div>
-						<div class="text-xl font-display
-							{disputeData.finalDecision === Vote.Cheat ? 'text-chess-danger' : 'text-chess-success'}">
-							{getVoteLabel(disputeData.finalDecision)}
-						</div>
-						<div class="text-sm text-chess-gray mt-1">
-							{disputeData.legitVotes} Legit vs {disputeData.cheatVotes} Cheat
-						</div>
-					</div>
-				{/if}
 
-				<!-- Arbitrator voting panel -->
-				{#if isArbitrator && disputeData.state !== DisputeState.Resolved}
-					<div class="border-t border-chess-accent/10 pt-4">
-						<h4 class="font-display text-sm mb-3 flex items-center gap-2">
-							<span class="text-chess-accent">*</span>
-							You are an Arbitrator
-						</h4>
-
-						{#if currentPhase === 'commit'}
-							<!-- Commit phase -->
-							<div class="space-y-3">
-								<p class="text-xs text-chess-gray">
-									Select your vote. Your choice is hidden until the reveal phase.
-								</p>
-
-								<div class="flex gap-2">
-									<button
-										class="flex-1 py-2 px-3 rounded-lg text-sm transition-colors
-											{selectedVote === Vote.Legit ? 'bg-chess-success text-chess-darker' : 'bg-chess-darker hover:bg-chess-dark'}"
-										on:click={() => selectedVote = Vote.Legit}
-									>
-										Legitimate
-									</button>
-									<button
-										class="flex-1 py-2 px-3 rounded-lg text-sm transition-colors
-											{selectedVote === Vote.Cheat ? 'bg-chess-danger text-chess-darker' : 'bg-chess-darker hover:bg-chess-dark'}"
-										on:click={() => selectedVote = Vote.Cheat}
-									>
-										Cheating
-									</button>
-									<button
-										class="flex-1 py-2 px-3 rounded-lg text-sm transition-colors
-											{selectedVote === Vote.Abstain ? 'bg-chess-gray text-chess-darker' : 'bg-chess-darker hover:bg-chess-dark'}"
-										on:click={() => selectedVote = Vote.Abstain}
-									>
-										Abstain
-									</button>
-								</div>
-
-								<button
-									class="btn btn-primary w-full"
-									on:click={handleCommitVote}
-									disabled={loading || selectedVote === Vote.None}
-								>
-									{loading ? 'Committing...' : 'Commit Vote'}
-								</button>
-							</div>
-
-						{:else if currentPhase === 'reveal' || currentPhase === 'revealing'}
-							<!-- Reveal phase -->
-							<div class="space-y-3">
-								{#if savedCommit || localStorage.getItem(`vote_commit_${disputeData.id}`)}
-									<p class="text-xs text-chess-gray">
-										You have a saved vote commit. Click to reveal your vote.
-									</p>
-
-									<button
-										class="btn btn-primary w-full"
-										on:click={handleRevealVote}
-										disabled={loading}
-									>
-										{loading ? 'Revealing...' : 'Reveal Vote'}
-									</button>
+					{#if disputeData.user.isSelectedArbitrator || disputeData.user.isArbitrator}
+						<div class="bg-chess-darker/50 rounded-lg p-3 text-sm space-y-2">
+							<div class="font-display text-sm">Arbitrator Status</div>
+							<div>
+								{#if disputeData.user.isSelectedArbitrator}
+									<span class="text-chess-accent">You are selected for this dispute.</span>
 								{:else}
-									<p class="text-xs text-chess-danger">
-										No saved commit found. If you committed a vote, you need your original salt to reveal.
-									</p>
+									<span class="text-chess-gray">You are an arbitrator, but not on this panel.</span>
 								{/if}
 							</div>
-						{/if}
-					</div>
-				{/if}
+							<div class="text-xs text-chess-gray">
+								Registry status: {disputeData.user.canVoteNow ? 'available for new selections' : 'cooldown or unavailable for new selections'}
+							</div>
+							{#if disputeData.user.hasCommitted && !disputeData.user.hasRevealed}
+								<div class="text-xs text-chess-accent">Commit submitted. Reveal is still required.</div>
+							{/if}
+							{#if disputeData.user.hasRevealed}
+								<div class="text-xs text-chess-success">Revealed vote: {getVoteLabel(disputeData.user.revealedVote)}</div>
+							{/if}
+						</div>
+					{/if}
 
-				<!-- Resolve button -->
-				{#if disputeData.state === DisputeState.Revealing}
-					{@const now = Math.floor(Date.now() / 1000)}
-					{#if now > disputeData.revealDeadline}
+					{#if isSelectedArbitrator}
+						<div class="border-t border-chess-accent/10 pt-4">
+							<h4 class="font-display text-sm mb-3 flex items-center gap-2">
+								<span class="text-chess-accent">*</span>
+								Panel Actions
+							</h4>
+
+							{#if currentPhase === 'commit'}
+								{#if disputeData.user.hasCommitted}
+									<div class="text-xs text-chess-accent">
+										Commit already submitted. Wait for the reveal phase.
+									</div>
+								{:else}
+									<div class="space-y-3">
+										<p class="text-xs text-chess-gray">
+											Select your vote. Your choice stays hidden until reveal.
+										</p>
+
+										<div class="flex gap-2">
+											<button
+												class="flex-1 py-2 px-3 rounded-lg text-sm transition-colors
+													{selectedVote === Vote.Legit ? 'bg-chess-success text-chess-darker' : 'bg-chess-darker hover:bg-chess-dark'}"
+												on:click={() => selectedVote = Vote.Legit}
+											>
+												Legitimate
+											</button>
+											<button
+												class="flex-1 py-2 px-3 rounded-lg text-sm transition-colors
+													{selectedVote === Vote.Cheat ? 'bg-chess-danger text-chess-darker' : 'bg-chess-darker hover:bg-chess-dark'}"
+												on:click={() => selectedVote = Vote.Cheat}
+											>
+												Cheating
+											</button>
+											<button
+												class="flex-1 py-2 px-3 rounded-lg text-sm transition-colors
+													{selectedVote === Vote.Abstain ? 'bg-chess-gray text-chess-darker' : 'bg-chess-darker hover:bg-chess-dark'}"
+												on:click={() => selectedVote = Vote.Abstain}
+											>
+												Abstain
+											</button>
+										</div>
+
+										<button
+											class="btn btn-primary w-full"
+											on:click={handleCommitVote}
+											disabled={loading || selectedVote === Vote.None}
+										>
+											{loading ? 'Committing...' : 'Commit Vote'}
+										</button>
+									</div>
+								{/if}
+							{:else if currentPhase === 'reveal' || currentPhase === 'resolve'}
+								<div class="space-y-3">
+									{#if disputeData.user.hasRevealed}
+										<p class="text-xs text-chess-success">
+											Your vote is already revealed.
+										</p>
+									{:else if hasSavedCommit}
+										<p class="text-xs text-chess-gray">
+											You have a saved commit. Use it now to reveal your vote.
+										</p>
+
+										<button
+											class="btn btn-primary w-full"
+											on:click={handleRevealVote}
+											disabled={loading}
+										>
+											{loading ? 'Revealing...' : 'Reveal Vote'}
+										</button>
+									{:else if disputeData.user.hasCommitted}
+										<p class="text-xs text-chess-danger">
+											Commit found on-chain, but this browser has no saved salt for reveal.
+										</p>
+									{:else}
+										<p class="text-xs text-chess-gray">
+											No commit found for your address in this dispute.
+										</p>
+									{/if}
+								</div>
+							{/if}
+						</div>
+					{/if}
+
+					{#if disputeData.state === DisputeState.Revealing && currentPhase === 'resolve'}
 						<button
 							class="btn btn-secondary w-full"
 							on:click={handleResolve}
@@ -404,9 +599,26 @@
 							{loading ? 'Resolving...' : 'Resolve Dispute'}
 						</button>
 					{/if}
+
+				{:else}
+					<div class="bg-chess-darker/50 rounded-lg p-3 text-center">
+						<div class="text-xs text-chess-gray uppercase mb-1">Final Decision</div>
+						<div class="text-xl font-display
+							{disputeData.finalDecision === Vote.Cheat ? 'text-chess-danger' : 'text-chess-success'}">
+							{getVoteLabel(disputeData.finalDecision)}
+						</div>
+						<div class="text-sm text-chess-gray mt-1">
+							{disputeData.legitVotes} Legit vs {disputeData.cheatVotes} Cheat
+							{#if disputeData.abstainVotes > 0}
+								<span> • {disputeData.abstainVotes} Abstain</span>
+							{/if}
+						</div>
+						<div class="text-xs text-chess-gray mt-1">
+							Panel {disputeData.panelSize} • Effective quorum {disputeData.effectiveQuorum || 0}
+						</div>
+					</div>
 				{/if}
 
-				<!-- Error/Success messages -->
 				{#if error}
 					<div class="bg-chess-danger/10 border border-chess-danger/30 text-chess-danger rounded-lg p-3 text-sm">
 						{error}
@@ -419,22 +631,23 @@
 					</div>
 				{/if}
 
-				<!-- Arbitrators list -->
-				<details class="text-sm">
-					<summary class="text-chess-gray cursor-pointer hover:text-chess-light">
-						View arbitrators ({disputeData.arbitrators.length})
-					</summary>
-					<div class="mt-2 space-y-1 text-xs">
-						{#each disputeData.arbitrators as arb}
-							<div class="flex items-center gap-2">
-								<span class="font-mono">{truncateAddress(arb)}</span>
-								{#if arb.toLowerCase() === $wallet.account?.toLowerCase()}
-									<span class="text-chess-accent">(you)</span>
-								{/if}
-							</div>
-						{/each}
-					</div>
-				</details>
+				{#if disputeData.arbitrators.length > 0}
+					<details class="text-sm">
+						<summary class="text-chess-gray cursor-pointer hover:text-chess-light">
+							View arbitrators ({disputeData.arbitrators.length})
+						</summary>
+						<div class="mt-2 space-y-1 text-xs">
+							{#each disputeData.arbitrators as arb}
+								<div class="flex items-center gap-2">
+									<span class="font-mono">{truncateAddress(arb)}</span>
+									{#if arb.toLowerCase() === $wallet.account?.toLowerCase()}
+										<span class="text-chess-accent">(you)</span>
+									{/if}
+								</div>
+							{/each}
+						</div>
+					</details>
+				{/if}
 			</div>
 		{/if}
 	</div>

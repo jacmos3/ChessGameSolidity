@@ -1,10 +1,7 @@
 import { writable, derived, get } from 'svelte/store';
 import { wallet, contractAddress } from './wallet.js';
 import { ethers } from 'ethers';
-
-// Import ABIs (will be copied from ethereum/build/contracts)
-import ChessFactoryABI from '../contracts/ChessFactory.json';
-import ChessCoreABI from '../contracts/ChessCore.json';
+import { loadContractAbi } from '../contracts/loadAbi.js';
 
 // Game states mapping
 export const GAME_STATES = {
@@ -12,8 +9,12 @@ export const GAME_STATES = {
 	2: { text: 'In Progress', color: 'success', canJoin: false, isActive: true },
 	3: { text: 'Draw', color: 'gray', canJoin: false, isActive: false },
 	4: { text: 'White Wins', color: 'accent', canJoin: false, isActive: false },
-	5: { text: 'Black Wins', color: 'purple', canJoin: false, isActive: false }
+	5: { text: 'Black Wins', color: 'purple', canJoin: false, isActive: false },
+	6: { text: 'Cancelled', color: 'gray', canJoin: false, isActive: false }
 };
+
+const getChessFactoryAbi = () => loadContractAbi('ChessFactory');
+const getChessCoreAbi = () => loadContractAbi('ChessCore');
 
 // Games list store
 function createGamesStore() {
@@ -35,9 +36,13 @@ function createGamesStore() {
 			update(s => ({ ...s, loading: true, error: null }));
 
 			try {
+				const [factoryAbi, chessCoreAbi] = await Promise.all([
+					getChessFactoryAbi(),
+					getChessCoreAbi()
+				]);
 				const factory = new ethers.Contract(
 					$contractAddress,
-					ChessFactoryABI.abi,
+					factoryAbi,
 					$wallet.signer
 				);
 
@@ -46,10 +51,11 @@ function createGamesStore() {
 
 				for (const addr of gameAddresses) {
 					try {
-						const game = new ethers.Contract(addr, ChessCoreABI.abi, $wallet.signer);
+						const game = new ethers.Contract(addr, chessCoreAbi, $wallet.signer);
 
-						const [players, state, betting, svgData] = await Promise.all([
+						const [players, currentPlayer, state, betting, svgData] = await Promise.all([
 							game.getPlayers(),
+							game.currentPlayer(),
 							game.getGameState(),
 							game.betting(),
 							game.printChessBoardLayoutSVG().catch(() => null)
@@ -67,6 +73,8 @@ function createGamesStore() {
 							address: addr,
 							whitePlayer: players[0],
 							blackPlayer: players[1],
+							currentPlayer,
+							isMyTurn: currentPlayer?.toLowerCase?.() === $wallet.account?.toLowerCase(),
 							state: Number(state),
 							stateInfo: GAME_STATES[Number(state)] || GAME_STATES[1],
 							betting: ethers.utils.formatEther(betting),
@@ -91,9 +99,10 @@ function createGamesStore() {
 				throw new Error('Wallet not connected');
 			}
 
+			const factoryAbi = await getChessFactoryAbi();
 			const factory = new ethers.Contract(
 				$contractAddress,
-				ChessFactoryABI.abi,
+				factoryAbi,
 				$wallet.signer
 			);
 
@@ -340,9 +349,10 @@ function createActiveGameStore() {
 			update(s => ({ ...s, address, loading: true, error: null }));
 
 			try {
-				const game = new ethers.Contract(address, ChessCoreABI.abi, $wallet.signer);
+				const chessCoreAbi = await getChessCoreAbi();
+				const game = new ethers.Contract(address, chessCoreAbi, $wallet.signer);
 
-				const [players, currentPlayer, state, betting, boardState, timeoutStatus, drawOfferStatus, timeoutBlocks, gameMode] = await Promise.all([
+				const [players, currentPlayer, state, betting, boardState, timeoutStatus, drawOfferStatus, timeoutBlocks, gameMode, gameId, canCancelUnjoinedGame, cancelUnjoinedRemaining] = await Promise.all([
 					game.getPlayers(),
 					game.currentPlayer(),
 					game.getGameState(),
@@ -351,7 +361,10 @@ function createActiveGameStore() {
 					game.getTimeoutStatus().catch(() => null), // May not exist on older contracts
 					game.getDrawOfferStatus().catch(() => null), // May not exist on older contracts
 					game.timeoutBlocks().catch(() => 300), // Default to 300 blocks
-					game.gameMode().catch(() => 0) // Default to Tournament if not available
+					game.gameMode().catch(() => 0), // Default to Tournament if not available
+					game.gameId().catch(() => 0),
+					game.canCancelUnjoinedGame($wallet.account || ethers.constants.AddressZero).catch(() => false),
+					game.getCancelUnjoinedRemaining().catch(() => 0)
 				]);
 
 				// Convert board state from contract format
@@ -430,6 +443,7 @@ function createActiveGameStore() {
 					loading: false,
 					error: null,
 					data: {
+						gameId: Number(gameId),
 						whitePlayer: players[0],
 						blackPlayer: players[1],
 						currentPlayer,
@@ -442,7 +456,9 @@ function createActiveGameStore() {
 						moveHistory,
 						timeout,
 						drawOfferedBy,
-						gameMode: Number(gameMode) // 0=Tournament, 1=Friendly
+						gameMode: Number(gameMode), // 0=Tournament, 1=Friendly
+						canCancelUnjoinedGame: Boolean(canCancelUnjoinedGame),
+						cancelUnjoinedRemaining: Number(cancelUnjoinedRemaining)
 					}
 				});
 
@@ -481,7 +497,8 @@ function createActiveGameStore() {
 			}
 
 			try {
-				const game = new ethers.Contract($state.address, ChessCoreABI.abi, $wallet.signer);
+				const chessCoreAbi = await getChessCoreAbi();
+				const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
 				let gasEstimate;
 
 				if (promotionPiece !== 0) {
@@ -555,7 +572,8 @@ function createActiveGameStore() {
 			}
 
 			try {
-				const game = new ethers.Contract($state.address, ChessCoreABI.abi, $wallet.signer);
+				const chessCoreAbi = await getChessCoreAbi();
+				const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
 				let tx;
 				if (promotionPiece !== 0) {
 					tx = await game.makeMoveWithPromotion(fromRow, fromCol, toRow, toCol, promotionPiece);
@@ -598,10 +616,25 @@ function createActiveGameStore() {
 				throw new Error('No game loaded');
 			}
 
-			const game = new ethers.Contract($state.address, ChessCoreABI.abi, $wallet.signer);
+			const chessCoreAbi = await getChessCoreAbi();
+			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
 			const tx = await game.joinGameAsBlack({
 				value: ethers.utils.parseEther($state.data.betting.toString())
 			});
+			await tx.wait();
+		},
+
+		async cancelUnjoinedGame() {
+			const $wallet = get(wallet);
+			const $state = get({ subscribe });
+
+			if (!$wallet.signer || !$state.address) {
+				throw new Error('No game loaded');
+			}
+
+			const chessCoreAbi = await getChessCoreAbi();
+			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
+			const tx = await game.cancelUnjoinedGame();
 			await tx.wait();
 		},
 
@@ -613,7 +646,8 @@ function createActiveGameStore() {
 				throw new Error('No game loaded');
 			}
 
-			const game = new ethers.Contract($state.address, ChessCoreABI.abi, $wallet.signer);
+			const chessCoreAbi = await getChessCoreAbi();
+			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
 			const tx = await game.resign();
 			await tx.wait();
 		},
@@ -626,7 +660,8 @@ function createActiveGameStore() {
 				throw new Error('No game loaded');
 			}
 
-			const game = new ethers.Contract($state.address, ChessCoreABI.abi, $wallet.signer);
+			const chessCoreAbi = await getChessCoreAbi();
+			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
 			const tx = await game.offerDraw();
 			await tx.wait();
 
@@ -645,7 +680,8 @@ function createActiveGameStore() {
 				throw new Error('No game loaded');
 			}
 
-			const game = new ethers.Contract($state.address, ChessCoreABI.abi, $wallet.signer);
+			const chessCoreAbi = await getChessCoreAbi();
+			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
 			const tx = await game.acceptDraw();
 			await tx.wait();
 		},
@@ -658,7 +694,8 @@ function createActiveGameStore() {
 				throw new Error('No game loaded');
 			}
 
-			const game = new ethers.Contract($state.address, ChessCoreABI.abi, $wallet.signer);
+			const chessCoreAbi = await getChessCoreAbi();
+			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
 			const tx = await game.declineDraw();
 			await tx.wait();
 
@@ -677,7 +714,8 @@ function createActiveGameStore() {
 				throw new Error('No game loaded');
 			}
 
-			const game = new ethers.Contract($state.address, ChessCoreABI.abi, $wallet.signer);
+			const chessCoreAbi = await getChessCoreAbi();
+			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
 			const tx = await game.cancelDrawOffer();
 			await tx.wait();
 
@@ -696,8 +734,20 @@ function createActiveGameStore() {
 				throw new Error('No game loaded');
 			}
 
-			const game = new ethers.Contract($state.address, ChessCoreABI.abi, $wallet.signer);
-			const tx = await game.claimPrize();
+			const chessCoreAbi = await getChessCoreAbi();
+			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
+
+			try {
+				const finalizeTx = await game.finalizePrizes();
+				await finalizeTx.wait();
+			} catch (err) {
+				const message = err?.message || '';
+				if (!message.includes('Already finalized')) {
+					throw err;
+				}
+			}
+
+			const tx = await game.withdrawPrize();
 			await tx.wait();
 		},
 

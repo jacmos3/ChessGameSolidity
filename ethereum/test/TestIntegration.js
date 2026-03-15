@@ -4,6 +4,8 @@ const ArbitratorRegistry = artifacts.require("ArbitratorRegistry");
 const DisputeDAO = artifacts.require("DisputeDAO");
 const ChessFactory = artifacts.require("ChessFactory");
 const ChessCore = artifacts.require("ChessCore");
+const PlayerRating = artifacts.require("PlayerRating");
+const RewardPool = artifacts.require("RewardPool");
 
 // Time manipulation helper using promise
 const advanceTime = (seconds) => {
@@ -391,6 +393,230 @@ contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
       const dispute = await disputeDAO.getDispute(disputeId);
 
       assert.equal(dispute.gameId.toString(), chessCoreGameId.toString());
+    });
+  });
+
+  describe("Dispute-aware settlement for rewards and rating", () => {
+    let chessCore;
+    let gameId;
+    let playerRating;
+    let rewardPool;
+    const extraArb1 = accounts[9];
+    const extraArb2 = accounts[10];
+
+    beforeEach(async () => {
+      playerRating = await PlayerRating.new({ from: admin });
+      rewardPool = await RewardPool.new(chessToken.address, playerRating.address, { from: admin });
+
+      await playerRating.setChessFactory(chessFactory.address, { from: admin });
+      await rewardPool.setChessFactory(chessFactory.address, { from: admin });
+      await chessFactory.setPlayerRating(playerRating.address, { from: admin });
+      await chessFactory.setRewardPool(rewardPool.address, { from: admin });
+
+      const rewardFunding = web3.utils.toWei("10000", "ether");
+      await chessToken.mintPlayToEarn(admin, rewardFunding, { from: admin });
+      await chessToken.approve(rewardPool.address, rewardFunding, { from: admin });
+      await rewardPool.depositRewardPool(rewardFunding, { from: admin });
+
+      const extraMintAmount = web3.utils.toWei("100000", "ether");
+      await chessToken.mintPlayToEarn(extraArb1, extraMintAmount, { from: admin });
+      await chessToken.mintPlayToEarn(extraArb2, extraMintAmount, { from: admin });
+      await chessToken.approve(arbitratorRegistry.address, extraMintAmount, { from: extraArb1 });
+      await chessToken.approve(arbitratorRegistry.address, extraMintAmount, { from: extraArb2 });
+      await arbitratorRegistry.stake(TIER1_STAKE, { from: extraArb1 });
+      await arbitratorRegistry.stake(TIER1_STAKE, { from: extraArb2 });
+
+      await disputeDAO.setParameters(
+        3600,
+        3600,
+        3600,
+        3,
+        66,
+        web3.utils.toWei("1", "ether"),
+        { from: admin }
+      );
+
+      await advanceTime(7 * 24 * 60 * 60 + 1);
+
+      const GAME_MANAGER_ROLE = await bondingManager.GAME_MANAGER_ROLE();
+      const GAME_MANAGER_ROLE_DAO = await disputeDAO.GAME_MANAGER_ROLE();
+
+      await chessFactory.createChessGame(2, 0, {
+        from: whitePlayer,
+        value: BET_AMOUNT
+      });
+
+      const games = await chessFactory.getDeployedChessGames();
+      chessCore = await ChessCore.at(games[games.length - 1]);
+      gameId = await chessCore.gameId();
+
+      await bondingManager.grantRole(GAME_MANAGER_ROLE, chessCore.address, { from: admin });
+      await disputeDAO.grantRole(GAME_MANAGER_ROLE_DAO, chessCore.address, { from: admin });
+
+      await chessCore.joinGameAsBlack({
+        from: blackPlayer,
+        value: BET_AMOUNT
+      });
+    });
+
+    async function resolveCurrentDisputeAsCheat(accusedPlayer, saltPrefix = "settlement-cheat") {
+      await disputeDAO.challenge(gameId, accusedPlayer, { from: challenger });
+      const disputeId = await disputeDAO.gameToDispute(gameId);
+      const selectedArbitrators = await disputeDAO.getSelectedArbitrators(disputeId);
+
+      assert.isAtLeast(selectedArbitrators.length, 3, "Dispute should select enough arbitrators to reach quorum");
+
+      const cheatVote = 2;
+      const salts = {};
+
+      for (let i = 0; i < selectedArbitrators.length; i++) {
+        const arbitrator = selectedArbitrators[i];
+        const salt = web3.utils.soliditySha3(`${saltPrefix}-${i}`);
+        salts[arbitrator.toLowerCase()] = salt;
+        const commitHash = web3.utils.soliditySha3(
+          { type: "uint8", value: cheatVote },
+          { type: "bytes32", value: salt },
+          { type: "address", value: arbitrator }
+        );
+
+        await disputeDAO.commitVote(disputeId, commitHash, { from: arbitrator });
+      }
+
+      await advanceTime(3600 + 1);
+
+      for (const arbitrator of selectedArbitrators) {
+        await disputeDAO.revealVote(disputeId, cheatVote, salts[arbitrator.toLowerCase()], { from: arbitrator });
+      }
+
+      await advanceTime(3600 + 1);
+      await disputeDAO.resolveDispute(disputeId, { from: challenger });
+
+      return disputeId;
+    }
+
+    it("should delay rewards and rating until settlement and use the dispute outcome", async () => {
+      const scriptedMoves = [
+        [6, 0, 5, 0, whitePlayer],
+        [1, 0, 2, 0, blackPlayer],
+        [6, 1, 5, 1, whitePlayer],
+        [1, 1, 2, 1, blackPlayer],
+        [6, 2, 5, 2, whitePlayer],
+        [1, 2, 2, 2, blackPlayer],
+        [6, 3, 5, 3, whitePlayer],
+        [1, 3, 2, 3, blackPlayer],
+        [6, 4, 5, 4, whitePlayer],
+        [1, 4, 2, 4, blackPlayer],
+        [6, 5, 5, 5, whitePlayer],
+        [1, 5, 2, 5, blackPlayer],
+        [6, 6, 5, 6, whitePlayer],
+        [1, 6, 2, 6, blackPlayer],
+        [6, 7, 5, 7, whitePlayer],
+        [1, 7, 2, 7, blackPlayer],
+        [5, 0, 4, 0, whitePlayer],
+        [2, 0, 3, 0, blackPlayer],
+        [5, 1, 4, 1, whitePlayer],
+        [2, 1, 3, 1, blackPlayer]
+      ];
+
+      for (const [fromRow, fromCol, toRow, toCol, player] of scriptedMoves) {
+        await chessCore.makeMove(fromRow, fromCol, toRow, toCol, { from: player });
+      }
+
+      const recordedPlyCount = await chessCore.plyCount();
+      assert.equal(recordedPlyCount.toString(), "20", "Every half-move should be counted");
+
+      await chessCore.resign({ from: whitePlayer });
+
+      const whiteTokenBeforeSettlement = await chessToken.balanceOf(whitePlayer);
+      const blackTokenBeforeSettlement = await chessToken.balanceOf(blackPlayer);
+      const whiteRatingBeforeSettlement = await playerRating.getRating(whitePlayer);
+      const blackRatingBeforeSettlement = await playerRating.getRating(blackPlayer);
+
+      const disputeId = await resolveCurrentDisputeAsCheat(blackPlayer);
+
+      const dispute = await disputeDAO.getDispute(disputeId);
+      assert.equal(dispute.finalDecision.toString(), "2", "The dispute should resolve as Cheat");
+
+      assert.equal(
+        (await chessToken.balanceOf(whitePlayer)).toString(),
+        whiteTokenBeforeSettlement.toString(),
+        "Rewards should not be distributed before settlement"
+      );
+      assert.equal(
+        (await chessToken.balanceOf(blackPlayer)).toString(),
+        blackTokenBeforeSettlement.toString(),
+        "Loser rewards should not be distributed before settlement"
+      );
+      assert.equal(
+        (await playerRating.getRating(whitePlayer)).toString(),
+        whiteRatingBeforeSettlement.toString(),
+        "Rating should not change before settlement"
+      );
+      assert.equal(
+        (await playerRating.getRating(blackPlayer)).toString(),
+        blackRatingBeforeSettlement.toString(),
+        "Opponent rating should not change before settlement"
+      );
+
+      await chessCore.finalizePrizes({ from: whitePlayer });
+
+      const whiteTokenAfterSettlement = await chessToken.balanceOf(whitePlayer);
+      const blackTokenAfterSettlement = await chessToken.balanceOf(blackPlayer);
+      const whiteRewardDelta = web3.utils.toBN(whiteTokenAfterSettlement).sub(web3.utils.toBN(whiteTokenBeforeSettlement));
+      const blackRewardDelta = web3.utils.toBN(blackTokenAfterSettlement).sub(web3.utils.toBN(blackTokenBeforeSettlement));
+
+      assert.isTrue(whiteRewardDelta.gt(web3.utils.toBN("0")), "White should receive the winner reward");
+      assert.isTrue(blackRewardDelta.gt(web3.utils.toBN("0")), "Black should still receive the loser reward");
+      assert.isTrue(whiteRewardDelta.gt(blackRewardDelta), "Winner reward should exceed loser reward");
+
+      const whiteRatingAfterSettlement = await playerRating.getRating(whitePlayer);
+      const blackRatingAfterSettlement = await playerRating.getRating(blackPlayer);
+
+      assert.isTrue(
+        web3.utils.toBN(whiteRatingAfterSettlement).gt(web3.utils.toBN(whiteRatingBeforeSettlement)),
+        "White rating should increase after the dispute flips the outcome"
+      );
+      assert.isTrue(
+        web3.utils.toBN(blackRatingAfterSettlement).lt(web3.utils.toBN(blackRatingBeforeSettlement)),
+        "Black rating should decrease after being judged the cheater"
+      );
+
+      const whitePendingPrize = await chessCore.pendingPrize(whitePlayer);
+      const blackPendingPrize = await chessCore.pendingPrize(blackPlayer);
+      assert.equal(whitePendingPrize.toString(), (BigInt(BET_AMOUNT) * 2n).toString(), "White should receive the full prize after settlement");
+      assert.equal(blackPendingPrize.toString(), "0", "Cheater should not keep any pending prize");
+
+      const blackFactors = await rewardPool.getPlayerFactors(blackPlayer);
+      const blackBehaviorFactor = blackFactors.behaviorFactor || blackFactors[2];
+      assert.equal(blackBehaviorFactor.toString(), "1000", "Cheat resolution should not fabricate a resign penalty for black");
+    });
+
+    it("should block the cheater from claiming the prize and allow the honest player to claim it", async () => {
+      await chessCore.resign({ from: whitePlayer });
+      await resolveCurrentDisputeAsCheat(blackPlayer, "claim-prize-cheat");
+
+      const canClaim = await chessCore.canClaimPrize();
+      assert.isTrue(canClaim, "Prize should be claimable once the cheat dispute is resolved");
+
+      try {
+        await chessCore.claimPrize({ from: blackPlayer });
+        assert.fail("Cheater should not be able to claim the prize");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+
+      const whiteBalanceBefore = BigInt(await web3.eth.getBalance(whitePlayer));
+      const tx = await chessCore.claimPrize({ from: whitePlayer });
+      const gasUsed = BigInt(tx.receipt.gasUsed);
+      const gasPrice = BigInt((await web3.eth.getTransaction(tx.tx)).gasPrice);
+      const gasCost = gasUsed * gasPrice;
+      const whiteBalanceAfter = BigInt(await web3.eth.getBalance(whitePlayer));
+
+      const prizeIncrease = whiteBalanceAfter - whiteBalanceBefore + gasCost;
+      assert.equal(prizeIncrease.toString(), (BigInt(BET_AMOUNT) * 2n).toString(), "Honest player should receive the full prize");
+
+      const contractBalance = await web3.eth.getBalance(chessCore.address);
+      assert.equal(contractBalance.toString(), "0", "Prize claim should empty the game contract");
     });
   });
 

@@ -1,10 +1,7 @@
 import { writable, derived, get } from 'svelte/store';
 import { wallet } from './wallet.js';
 import { ethers } from 'ethers';
-
-// Import ABIs
-import BondingManagerABI from '../contracts/BondingManager.json';
-import ChessTokenABI from '../contracts/ChessToken.json';
+import { loadContractAbi } from '../contracts/loadAbi.js';
 
 // BondingManager contract addresses per network
 const BONDING_MANAGER_ADDRESSES = {
@@ -21,6 +18,9 @@ const CHESS_TOKEN_ADDRESSES = {
 	84532: import.meta.env.VITE_CHESS_TOKEN_BASE_SEPOLIA || '',
 	8453: import.meta.env.VITE_CHESS_TOKEN_BASE || ''
 };
+
+const getBondingManagerAbi = () => loadContractAbi('BondingManager');
+const getChessTokenAbi = () => loadContractAbi('ChessToken');
 
 // Bonding state store
 function createBondingStore() {
@@ -68,14 +68,18 @@ function createBondingStore() {
 			update(s => ({ ...s, loading: true, error: null }));
 
 			try {
+				const [bondingManagerAbi, chessTokenAbi] = await Promise.all([
+					getBondingManagerAbi(),
+					getChessTokenAbi()
+				]);
 				const bondingManager = new ethers.Contract(
 					bondingAddress,
-					BondingManagerABI.abi,
+					bondingManagerAbi,
 					$wallet.signer
 				);
 				const chessToken = new ethers.Contract(
 					tokenAddress,
-					ChessTokenABI.abi,
+					chessTokenAbi,
 					$wallet.signer
 				);
 
@@ -137,9 +141,10 @@ function createBondingStore() {
 			if (!bondingAddress) return null;
 
 			try {
+				const bondingManagerAbi = await getBondingManagerAbi();
 				const bondingManager = new ethers.Contract(
 					bondingAddress,
-					BondingManagerABI.abi,
+					bondingManagerAbi,
 					$wallet.signer
 				);
 
@@ -167,9 +172,10 @@ function createBondingStore() {
 			if (!bondingAddress) return true; // No bonding on this network
 
 			try {
+				const bondingManagerAbi = await getBondingManagerAbi();
 				const bondingManager = new ethers.Contract(
 					bondingAddress,
-					BondingManagerABI.abi,
+					bondingManagerAbi,
 					$wallet.signer
 				);
 
@@ -202,9 +208,10 @@ function createBondingStore() {
 			console.log('BondingManager address (spender):', bondingAddress);
 			console.log('User address:', $wallet.account);
 
+			const chessTokenAbi = await getChessTokenAbi();
 			const chessToken = new ethers.Contract(
 				tokenAddress,
-				ChessTokenABI.abi,
+				chessTokenAbi,
 				$wallet.signer
 			);
 
@@ -261,9 +268,10 @@ function createBondingStore() {
 
 			// Pre-check allowance if depositing CHESS
 			if (chessWei.gt(0)) {
+				const chessTokenAbi = await getChessTokenAbi();
 				const chessToken = new ethers.Contract(
 					tokenAddress,
-					ChessTokenABI.abi,
+					chessTokenAbi,
 					$wallet.signer
 				);
 
@@ -282,9 +290,10 @@ function createBondingStore() {
 				}
 			}
 
+			const bondingManagerAbi = await getBondingManagerAbi();
 			const bondingManager = new ethers.Contract(
 				bondingAddress,
-				BondingManagerABI.abi,
+				bondingManagerAbi,
 				$wallet.signer
 			);
 
@@ -313,9 +322,10 @@ function createBondingStore() {
 				throw new Error('Bonding not available on this network');
 			}
 
+			const bondingManagerAbi = await getBondingManagerAbi();
 			const bondingManager = new ethers.Contract(
 				bondingAddress,
-				BondingManagerABI.abi,
+				bondingManagerAbi,
 				$wallet.signer
 			);
 
@@ -341,9 +351,10 @@ function createBondingStore() {
 				throw new Error('Bonding not available on this network');
 			}
 
+			const bondingManagerAbi = await getBondingManagerAbi();
 			const bondingManager = new ethers.Contract(
 				bondingAddress,
-				BondingManagerABI.abi,
+				bondingManagerAbi,
 				$wallet.signer
 			);
 
@@ -369,9 +380,10 @@ function createBondingStore() {
 				throw new Error('ChessToken not available on this network');
 			}
 
+			const chessTokenAbi = await getChessTokenAbi();
 			const chessToken = new ethers.Contract(
 				tokenAddress,
-				ChessTokenABI.abi,
+				chessTokenAbi,
 				$wallet.signer
 			);
 

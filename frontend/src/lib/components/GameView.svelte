@@ -23,9 +23,23 @@
 	$: canMove = data?.stateInfo.isActive && data?.isMyTurn && data?.playerRole !== 'spectator';
 	$: canJoin = data?.stateInfo.canJoin && data?.playerRole === 'spectator';
 	$: canResign = data?.stateInfo.isActive && data?.playerRole !== 'spectator';
+	$: canCancelUnjoined = !!data?.canCancelUnjoinedGame;
 	$: canClaim = (data?.state === 3) ||
 		(data?.state === 4 && data?.playerRole === 'white') ||
 		(data?.state === 5 && data?.playerRole === 'black');
+	$: showCancelCountdown = data?.playerRole === 'white' &&
+		data?.state === 1 &&
+		data?.blackPlayer === '0x0000000000000000000000000000000000000000' &&
+		(data?.cancelUnjoinedRemaining ?? 0) > 0;
+
+	function formatDuration(totalSeconds) {
+		const seconds = Math.max(0, Number(totalSeconds) || 0);
+		const hours = Math.floor(seconds / 3600);
+		const minutes = Math.floor((seconds % 3600) / 60);
+		if (hours > 0) return `${hours}h ${minutes}m`;
+		if (minutes > 0) return `${minutes}m`;
+		return `${seconds}s`;
+	}
 
 	async function handleMove(e) {
 		const { from, to } = e.detail;
@@ -90,6 +104,21 @@
 			await activeGame.load(address);
 		} catch (err) {
 			actionError = err.message || 'Failed to claim prize';
+		}
+
+		actionLoading = false;
+	}
+
+	async function handleCancelUnjoined() {
+		actionLoading = true;
+		actionError = null;
+
+		try {
+			await activeGame.cancelUnjoinedGame();
+			actionSuccess = 'Game cancelled and stake refunded';
+			await activeGame.load(address);
+		} catch (err) {
+			actionError = err.message || 'Failed to cancel game';
 		}
 
 		actionLoading = false;
@@ -202,6 +231,22 @@
 					{data.isMyTurn ? "Your Turn - Drag a piece to move!" : "Opponent's Turn"}
 				</div>
 			{/if}
+
+			{#if canCancelUnjoined}
+				<div class="mt-4 py-3 px-4 rounded-lg bg-chess-danger/10 border border-chess-danger/30 flex items-center justify-between gap-4">
+					<div>
+						<div class="text-chess-danger font-medium">No one joined this game</div>
+						<div class="text-chess-gray text-sm">You can cancel it now and recover your stake.</div>
+					</div>
+					<button class="btn btn-danger" on:click={handleCancelUnjoined} disabled={actionLoading}>
+						Cancel Game
+					</button>
+				</div>
+			{:else if showCancelCountdown}
+				<div class="mt-4 py-3 px-4 rounded-lg bg-chess-gray/10 border border-chess-gray/30 text-chess-gray text-sm">
+					Refund unlocks in <span class="text-white font-medium">{formatDuration(data.cancelUnjoinedRemaining)}</span>
+				</div>
+			{/if}
 		</div>
 
 		<!-- Chess board -->
@@ -238,6 +283,16 @@
 				</button>
 			{/if}
 
+			{#if canCancelUnjoined}
+				<button
+					class="btn btn-danger"
+					on:click={handleCancelUnjoined}
+					disabled={actionLoading}
+				>
+					Cancel Game
+				</button>
+			{/if}
+
 			{#if canResign}
 				<button
 					class="btn btn-danger"
@@ -254,7 +309,7 @@
 					on:click={handleClaimPrize}
 					disabled={actionLoading}
 				>
-					Claim Prize ({parseFloat(data.betting) * 2} ETH)
+					{data.state === 3 ? `Claim Share (${data.betting} ETH)` : `Claim Prize (${parseFloat(data.betting) * 2} ETH)`}
 				</button>
 			{/if}
 		</div>

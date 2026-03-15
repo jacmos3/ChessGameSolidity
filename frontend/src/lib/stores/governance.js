@@ -1,11 +1,7 @@
 import { writable, derived, get } from 'svelte/store';
 import { wallet } from './wallet.js';
 import { ethers } from 'ethers';
-
-// Import ABIs
-import ChessGovernorABI from '../contracts/ChessGovernor.json';
-import ChessTimelockABI from '../contracts/ChessTimelock.json';
-import ChessTokenABI from '../contracts/ChessToken.json';
+import { loadContractAbi } from '../contracts/loadAbi.js';
 
 // Contract addresses per network
 const GOVERNOR_ADDRESSES = {
@@ -28,6 +24,10 @@ const CHESS_TOKEN_ADDRESSES = {
 	84532: import.meta.env.VITE_CHESS_TOKEN_BASE_SEPOLIA || '',
 	8453: import.meta.env.VITE_CHESS_TOKEN_BASE || ''
 };
+
+const getChessGovernorAbi = () => loadContractAbi('ChessGovernor');
+const getChessTimelockAbi = () => loadContractAbi('ChessTimelock');
+const getChessTokenAbi = () => loadContractAbi('ChessToken');
 
 // Proposal states (from Governor contract)
 export const ProposalState = {
@@ -86,9 +86,14 @@ function createGovernanceStore() {
 			update(s => ({ ...s, loading: true, error: null }));
 
 			try {
-				const governor = new ethers.Contract(governorAddress, ChessGovernorABI.abi, $wallet.signer);
-				const timelock = new ethers.Contract(timelockAddress, ChessTimelockABI.abi, $wallet.signer);
-				const token = new ethers.Contract(tokenAddress, ChessTokenABI.abi, $wallet.signer);
+				const [chessGovernorAbi, chessTimelockAbi, chessTokenAbi] = await Promise.all([
+					getChessGovernorAbi(),
+					getChessTimelockAbi(),
+					getChessTokenAbi()
+				]);
+				const governor = new ethers.Contract(governorAddress, chessGovernorAbi, $wallet.signer);
+				const timelock = new ethers.Contract(timelockAddress, chessTimelockAbi, $wallet.signer);
+				const token = new ethers.Contract(tokenAddress, chessTokenAbi, $wallet.signer);
 
 				const [
 					votingDelay,
@@ -147,7 +152,8 @@ function createGovernanceStore() {
 			update(s => ({ ...s, loading: true, error: null }));
 
 			try {
-				const token = new ethers.Contract(tokenAddress, ChessTokenABI.abi, $wallet.signer);
+				const chessTokenAbi = await getChessTokenAbi();
+				const token = new ethers.Contract(tokenAddress, chessTokenAbi, $wallet.signer);
 				const tx = await token.delegate(delegatee);
 				await tx.wait();
 
@@ -187,7 +193,8 @@ function createGovernanceStore() {
 			update(s => ({ ...s, loading: true, error: null }));
 
 			try {
-				const governor = new ethers.Contract(governorAddress, ChessGovernorABI.abi, $wallet.signer);
+				const chessGovernorAbi = await getChessGovernorAbi();
+				const governor = new ethers.Contract(governorAddress, chessGovernorAbi, $wallet.signer);
 				const tx = await governor.propose(targets, values, calldatas, description);
 				const receipt = await tx.wait();
 
@@ -215,7 +222,8 @@ function createGovernanceStore() {
 			if (!governorAddress) return null;
 
 			try {
-				const governor = new ethers.Contract(governorAddress, ChessGovernorABI.abi, $wallet.signer);
+				const chessGovernorAbi = await getChessGovernorAbi();
+				const governor = new ethers.Contract(governorAddress, chessGovernorAbi, $wallet.signer);
 				return await governor.state(proposalId);
 			} catch (err) {
 				console.error('Error getting proposal state:', err);
@@ -240,7 +248,8 @@ function createGovernanceStore() {
 			update(s => ({ ...s, loading: true, error: null }));
 
 			try {
-				const governor = new ethers.Contract(governorAddress, ChessGovernorABI.abi, $wallet.signer);
+				const chessGovernorAbi = await getChessGovernorAbi();
+				const governor = new ethers.Contract(governorAddress, chessGovernorAbi, $wallet.signer);
 				const tx = await governor.castVote(proposalId, support);
 				await tx.wait();
 
@@ -268,7 +277,8 @@ function createGovernanceStore() {
 			update(s => ({ ...s, loading: true, error: null }));
 
 			try {
-				const governor = new ethers.Contract(governorAddress, ChessGovernorABI.abi, $wallet.signer);
+				const chessGovernorAbi = await getChessGovernorAbi();
+				const governor = new ethers.Contract(governorAddress, chessGovernorAbi, $wallet.signer);
 				const tx = await governor.queue(targets, values, calldatas, descriptionHash);
 				await tx.wait();
 
@@ -296,7 +306,8 @@ function createGovernanceStore() {
 			update(s => ({ ...s, loading: true, error: null }));
 
 			try {
-				const governor = new ethers.Contract(governorAddress, ChessGovernorABI.abi, $wallet.signer);
+				const chessGovernorAbi = await getChessGovernorAbi();
+				const governor = new ethers.Contract(governorAddress, chessGovernorAbi, $wallet.signer);
 				const tx = await governor.execute(targets, values, calldatas, descriptionHash);
 				await tx.wait();
 
@@ -320,7 +331,8 @@ function createGovernanceStore() {
 			if (!governorAddress) return null;
 
 			try {
-				const governor = new ethers.Contract(governorAddress, ChessGovernorABI.abi, $wallet.signer);
+				const chessGovernorAbi = await getChessGovernorAbi();
+				const governor = new ethers.Contract(governorAddress, chessGovernorAbi, $wallet.signer);
 				const votes = await governor.proposalVotes(proposalId);
 
 				return {
@@ -345,7 +357,8 @@ function createGovernanceStore() {
 			if (!governorAddress) return false;
 
 			try {
-				const governor = new ethers.Contract(governorAddress, ChessGovernorABI.abi, $wallet.signer);
+				const chessGovernorAbi = await getChessGovernorAbi();
+				const governor = new ethers.Contract(governorAddress, chessGovernorAbi, $wallet.signer);
 				return await governor.hasVoted(proposalId, $wallet.account);
 			} catch (err) {
 				console.error('Error checking vote:', err);

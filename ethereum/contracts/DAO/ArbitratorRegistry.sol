@@ -199,13 +199,13 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
 
         // Select from each tier
         selectedCount = _selectFromTier(
-            tier1Arbitrators, disputeId, player1, player2, count, selected, selectedCount
+            tier1Arbitrators, disputeId, player1, player2, count, selected, selectedCount, 1
         );
         selectedCount = _selectFromTier(
-            tier2Arbitrators, disputeId, player1, player2, count, selected, selectedCount
+            tier2Arbitrators, disputeId, player1, player2, count, selected, selectedCount, 2
         );
         selectedCount = _selectFromTier(
-            tier3Arbitrators, disputeId, player1, player2, count, selected, selectedCount
+            tier3Arbitrators, disputeId, player1, player2, count, selected, selectedCount, 3
         );
 
         // Resize array if we couldn't fill all slots
@@ -387,44 +387,63 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
         address player2,
         uint256 count,
         address[] memory selected,
-        uint256 startIndex
+        uint256 startIndex,
+        uint256 salt
     ) internal returns (uint256) {
         if (pool.length == 0) return startIndex;
 
         uint256 selectedFromTier = 0;
-        uint256 attempts = 0;
-        uint256 maxAttempts = pool.length * 2;
+        uint256 scanStart = _selectionSeed(disputeId, player1, player2, salt) % pool.length;
+        uint256 scanned = 0;
 
-        while (selectedFromTier < count && attempts < maxAttempts) {
-            // Pseudo-random selection (in production use VRF)
-            uint256 randomIndex = uint256(keccak256(abi.encodePacked(
-                disputeId, block.timestamp, attempts, pool.length
-            ))) % pool.length;
+        while (selectedFromTier < count && scanned < pool.length) {
+            address candidate = pool[(scanStart + scanned) % pool.length];
+            scanned++;
 
-            address candidate = pool[randomIndex];
-            attempts++;
-
-            // Check exclusions
             if (shouldExclude(candidate, player1, player2)) continue;
             if (!canVote(candidate)) continue;
-
-            // Check not already selected
-            bool alreadySelected = false;
-            for (uint256 i = 0; i < startIndex + selectedFromTier; i++) {
-                if (selected[i] == candidate) {
-                    alreadySelected = true;
-                    break;
-                }
-            }
-            if (alreadySelected) continue;
+            if (_isAlreadySelected(selected, startIndex + selectedFromTier, candidate)) continue;
 
             selected[startIndex + selectedFromTier] = candidate;
             selectedFromTier++;
-
             emit ArbitratorSelected(disputeId, candidate);
         }
 
         return startIndex + selectedFromTier;
+    }
+
+    function _isAlreadySelected(
+        address[] memory selected,
+        uint256 selectedCount,
+        address candidate
+    ) internal pure returns (bool) {
+        for (uint256 i = 0; i < selectedCount; i++) {
+            if (selected[i] == candidate) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function _selectionSeed(
+        uint256 disputeId,
+        address player1,
+        address player2,
+        uint256 salt
+    ) internal view returns (uint256) {
+        return uint256(
+            keccak256(
+                abi.encodePacked(
+                    disputeId,
+                    player1,
+                    player2,
+                    salt,
+                    block.prevrandao,
+                    totalStaked,
+                    totalArbitrators
+                )
+            )
+        );
     }
 
     // View functions

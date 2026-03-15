@@ -4,9 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "npm run sync:abis",
     "dev": "vite dev",
+    "prebuild": "npm run sync:abis",
     "build": "vite build",
-    "preview": "vite preview"
+    "prepreview": "npm run sync:abis",
+    "preview": "vite preview",
+    "sync:abis": "node scripts/extract-abis.mjs"
   },
   "devDependencies": {
     "@sveltejs/adapter-auto": "^2.1.1",

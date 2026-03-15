@@ -258,7 +258,7 @@
 
 					<!-- Delegate to another address -->
 					<div class="space-y-3">
-						<label class="text-sm">Or delegate to another address:</label>
+						<div class="text-sm">Or delegate to another address:</div>
 						<input
 							type="text"
 							bind:value={delegateAddress}

@@ -1,6 +1,28 @@
 const ChessFactory = artifacts.require("ChessFactory");
 const ChessCore = artifacts.require("ChessCore");
 
+const advanceTime = (seconds) => {
+  return new Promise((resolve, reject) => {
+    web3.currentProvider.send({
+      jsonrpc: "2.0",
+      method: "evm_increaseTime",
+      params: [seconds],
+      id: Date.now()
+    }, (err) => {
+      if (err) return reject(err);
+      web3.currentProvider.send({
+        jsonrpc: "2.0",
+        method: "evm_mine",
+        params: [],
+        id: Date.now() + 1
+      }, (err2) => {
+        if (err2) return reject(err2);
+        resolve();
+      });
+    });
+  });
+};
+
 contract("ChessCore - Game Mechanics", (accounts) => {
   const whitePlayer = accounts[0];
   const blackPlayer = accounts[1];
@@ -22,7 +44,8 @@ contract("ChessCore - Game Mechanics", (accounts) => {
     InProgress: 2,
     Draw: 3,
     WhiteWins: 4,
-    BlackWins: 5
+    BlackWins: 5,
+    Cancelled: 6
   };
 
   let chessFactory;
@@ -107,6 +130,87 @@ contract("ChessCore - Game Mechanics", (accounts) => {
       await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
       const currentPlayer = await chessCore.currentPlayer();
       assert.equal(currentPlayer, whitePlayer, "White should be current player");
+    });
+
+    it("should reject moves before black joins", async () => {
+      try {
+        await chessCore.makeMove(6, 4, 4, 4, { from: whitePlayer });
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+    });
+
+    it("should not allow cancelling an unjoined game before timeout", async () => {
+      try {
+        await chessCore.cancelUnjoinedGame({ from: whitePlayer });
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+    });
+
+    it("should allow white to cancel an unjoined game after timeout", async () => {
+      const whiteBalanceBefore = BigInt(await web3.eth.getBalance(whitePlayer));
+
+      await advanceTime(24 * 60 * 60 + 1);
+
+      const tx = await chessCore.cancelUnjoinedGame({ from: whitePlayer });
+      const gasUsed = BigInt(tx.receipt.gasUsed);
+      const gasPrice = BigInt((await web3.eth.getTransaction(tx.tx)).gasPrice);
+      const gasCost = gasUsed * gasPrice;
+
+      const whiteBalanceAfter = BigInt(await web3.eth.getBalance(whitePlayer));
+      const refundedAmount = whiteBalanceAfter - whiteBalanceBefore + gasCost;
+
+      assert.equal(refundedAmount.toString(), BigInt(betAmount).toString(), "White should recover the full initial stake");
+
+      const gameState = await chessCore.getGameState();
+      assert.equal(gameState.toNumber(), GameState.Cancelled, "Game should be marked as cancelled");
+    });
+
+    it("should reject cancellation by non-white even after timeout", async () => {
+      await advanceTime(24 * 60 * 60 + 1);
+
+      try {
+        await chessCore.cancelUnjoinedGame({ from: blackPlayer });
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+    });
+
+    it("should reject cancellation after black has already joined", async () => {
+      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+      await advanceTime(24 * 60 * 60 + 1);
+
+      try {
+        await chessCore.cancelUnjoinedGame({ from: whitePlayer });
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+    });
+
+    it("should reject resignation before the game has started", async () => {
+      try {
+        await chessCore.resign({ from: whitePlayer });
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+    });
+
+    it("should reject joining after the white player cancels the game", async () => {
+      await advanceTime(24 * 60 * 60 + 1);
+      await chessCore.cancelUnjoinedGame({ from: whitePlayer });
+
+      try {
+        await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
     });
   });
 
@@ -462,9 +566,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
       // Don't join yet - tests will set up board first
     });
 
-    it("should split prize equally on draw", async () => {
-      // Set up a draw scenario using debugCreative
-      // Create a stalemate position
+    it("should detect stalemate and split the prize equally", async () => {
       // Clear the board first
       for (let i = 0; i < 8; i++) {
         for (let j = 0; j < 8; j++) {
@@ -472,20 +574,30 @@ contract("ChessCore - Game Mechanics", (accounts) => {
         }
       }
 
-      // Set up stalemate: Black king alone, white king and queen trap it
+      // White to move: Qc5-b6 creates a real stalemate against the black king on a8.
       await chessCore.debugCreative(0, 0, -KING, { from: whitePlayer }); // Black king at a8
-      await chessCore.debugCreative(2, 1, KING, { from: whitePlayer });  // White king at b6
-      await chessCore.debugCreative(1, 2, QUEEN, { from: whitePlayer }); // White queen at c7
+      await chessCore.debugCreative(2, 2, KING, { from: whitePlayer });  // White king at c6
+      await chessCore.debugCreative(3, 2, QUEEN, { from: whitePlayer }); // White queen at c5
 
       await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
 
-      // For now, let's test that if we could get to draw state, the prize would split correctly
-      // Stalemate detection is complex and the position may need adjustment
+      await chessCore.makeMove(3, 2, 2, 1, { from: whitePlayer }); // Qc5 -> b6, stalemate
+
       const gameState = await chessCore.getGameState();
-      assert.isTrue(
-        gameState.toNumber() === GameState.InProgress || gameState.toNumber() === GameState.Draw,
-        "Game state should be valid"
-      );
+      assert.equal(gameState.toNumber(), GameState.Draw, "Game should end in a draw by stalemate");
+
+      await chessCore.finalizePrizes({ from: whitePlayer });
+
+      const whitePendingPrize = await chessCore.pendingPrize(whitePlayer);
+      const blackPendingPrize = await chessCore.pendingPrize(blackPlayer);
+      assert.equal(whitePendingPrize.toString(), betAmount, "White should receive half the pot");
+      assert.equal(blackPendingPrize.toString(), betAmount, "Black should receive half the pot");
+
+      await chessCore.withdrawPrize({ from: whitePlayer });
+      await chessCore.withdrawPrize({ from: blackPlayer });
+
+      const contractBalance = await web3.eth.getBalance(chessCore.address);
+      assert.equal(contractBalance.toString(), "0", "Contract balance should be fully withdrawn after both claims");
     });
   });
 
