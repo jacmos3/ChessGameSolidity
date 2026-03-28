@@ -7,6 +7,7 @@ import "./ChessNFT.sol";
 import "../Token/BondingManager.sol";
 import "../Token/RewardPool.sol";
 import "../Rating/PlayerRating.sol";
+import "../DAO/DisputeDAO.sol";
 
 contract ChessFactory {
     using Clones for address;
@@ -116,6 +117,13 @@ contract ChessFactory {
 
         // Create a minimal proxy clone of ChessCore implementation
         address clone = chessCoreImplementation.clone();
+
+        if (bondingManager != address(0)) {
+            BondingManager(payable(bondingManager)).authorizeGameContract(clone);
+        }
+        if (disputeDAO != address(0)) {
+            DisputeDAO(disputeDAO).authorizeGameContract(clone);
+        }
 
         // Initialize the clone with game parameters
         ChessCore(payable(clone)).initialize{value: msg.value}(

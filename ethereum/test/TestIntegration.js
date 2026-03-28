@@ -73,6 +73,8 @@ contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
     // Configure ChessFactory with anti-cheating contracts
     await chessFactory.setBondingManager(bondingManager.address, { from: admin });
     await chessFactory.setDisputeDAO(disputeDAO.address, { from: admin });
+    await bondingManager.setChessFactory(chessFactory.address, { from: admin });
+    await disputeDAO.setChessFactory(chessFactory.address, { from: admin });
 
     // Grant roles
     const GAME_MANAGER_ROLE = await bondingManager.GAME_MANAGER_ROLE();
@@ -85,8 +87,10 @@ contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
     await arbitratorRegistry.grantRole(DISPUTE_MANAGER_ROLE_ARB, disputeDAO.address, { from: admin });
 
     const GAME_MANAGER_ROLE_DAO = await disputeDAO.GAME_MANAGER_ROLE();
-    // Grant GAME_MANAGER_ROLE to all ChessCore games created by factory
-    // We'll grant it to individual games as they're created
+    assert.isFalse(
+      await disputeDAO.hasRole(GAME_MANAGER_ROLE_DAO, chessFactory.address),
+      "Factory should not need GAME_MANAGER_ROLE on DisputeDAO"
+    );
 
     // Mint tokens to players for bonding
     const mintAmount = web3.utils.toWei("100000", "ether");
@@ -164,9 +168,6 @@ contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
     let chessCore;
 
     beforeEach(async () => {
-      // Grant GAME_MANAGER_ROLE to factory for locking bonds
-      const GAME_MANAGER_ROLE = await bondingManager.GAME_MANAGER_ROLE();
-
       // Create game
       await chessFactory.createChessGame(2, 0, {
         from: whitePlayer,
@@ -175,9 +176,6 @@ contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
 
       const games = await chessFactory.getDeployedChessGames();
       chessCore = await ChessCore.at(games[0]);
-
-      // Grant GAME_MANAGER_ROLE to the ChessCore contract for locking bonds
-      await bondingManager.grantRole(GAME_MANAGER_ROLE, chessCore.address, { from: admin });
     });
 
     it("should have bonding manager set in ChessCore", async () => {
@@ -188,6 +186,14 @@ contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
     it("should have dispute DAO set in ChessCore", async () => {
       const dao = await chessCore.disputeDAO();
       assert.equal(dao, disputeDAO.address);
+    });
+
+    it("should authorize the cloned ChessCore on bonding manager and dispute DAO", async () => {
+      const bondingRole = await bondingManager.GAME_MANAGER_ROLE();
+      const disputeRole = await disputeDAO.GAME_MANAGER_ROLE();
+
+      assert.isTrue(await bondingManager.hasRole(bondingRole, chessCore.address));
+      assert.isTrue(await disputeDAO.hasRole(disputeRole, chessCore.address));
     });
 
     it("should lock bonds when black joins the game", async () => {
@@ -230,10 +236,6 @@ contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
     let gameId;
 
     beforeEach(async () => {
-      // Grant roles
-      const GAME_MANAGER_ROLE = await bondingManager.GAME_MANAGER_ROLE();
-      const GAME_MANAGER_ROLE_DAO = await disputeDAO.GAME_MANAGER_ROLE();
-
       // Create and start game
       await chessFactory.createChessGame(2, 0, {
         from: whitePlayer,
@@ -243,10 +245,6 @@ contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
       const games = await chessFactory.getDeployedChessGames();
       chessCore = await ChessCore.at(games[games.length - 1]); // Get latest game
       gameId = await chessCore.gameId();
-
-      // Grant roles to ChessCore contract
-      await bondingManager.grantRole(GAME_MANAGER_ROLE, chessCore.address, { from: admin });
-      await disputeDAO.grantRole(GAME_MANAGER_ROLE_DAO, chessCore.address, { from: admin });
 
       // Black joins
       await chessCore.joinGameAsBlack({
@@ -327,10 +325,6 @@ contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
     let gameId;
 
     beforeEach(async () => {
-      // Grant roles
-      const GAME_MANAGER_ROLE = await bondingManager.GAME_MANAGER_ROLE();
-      const GAME_MANAGER_ROLE_DAO = await disputeDAO.GAME_MANAGER_ROLE();
-
       // Create and start game
       await chessFactory.createChessGame(2, 0, {
         from: whitePlayer,
@@ -340,10 +334,6 @@ contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
       const games = await chessFactory.getDeployedChessGames();
       chessCore = await ChessCore.at(games[0]);
       gameId = await chessCore.gameId();
-
-      // Grant roles to ChessCore contract
-      await bondingManager.grantRole(GAME_MANAGER_ROLE, chessCore.address, { from: admin });
-      await disputeDAO.grantRole(GAME_MANAGER_ROLE_DAO, chessCore.address, { from: admin });
 
       // Black joins
       await chessCore.joinGameAsBlack({
@@ -438,9 +428,6 @@ contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
 
       await advanceTime(7 * 24 * 60 * 60 + 1);
 
-      const GAME_MANAGER_ROLE = await bondingManager.GAME_MANAGER_ROLE();
-      const GAME_MANAGER_ROLE_DAO = await disputeDAO.GAME_MANAGER_ROLE();
-
       await chessFactory.createChessGame(2, 0, {
         from: whitePlayer,
         value: BET_AMOUNT
@@ -449,9 +436,6 @@ contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
       const games = await chessFactory.getDeployedChessGames();
       chessCore = await ChessCore.at(games[games.length - 1]);
       gameId = await chessCore.gameId();
-
-      await bondingManager.grantRole(GAME_MANAGER_ROLE, chessCore.address, { from: admin });
-      await disputeDAO.grantRole(GAME_MANAGER_ROLE_DAO, chessCore.address, { from: admin });
 
       await chessCore.joinGameAsBlack({
         from: blackPlayer,

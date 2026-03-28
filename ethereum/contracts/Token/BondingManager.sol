@@ -42,6 +42,7 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
 
     // Minimum bond floor in ETH terms
     uint256 public minBondEthValue = 0.01 ether;
+    address public chessFactory;
 
     // Bond tracking per user
     struct UserBond {
@@ -78,6 +79,8 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
     event BondSlashed(uint256 indexed gameId, address indexed player, uint256 chessAmount, uint256 ethAmount);
     event PriceUpdated(uint256 oldPrice, uint256 newPrice);
     event CircuitBreakerTriggered(uint256 oldPrice, uint256 newPrice);
+    event ChessFactoryUpdated(address indexed previousFactory, address indexed newFactory);
+    event GameContractAuthorized(address indexed gameContract);
 
     constructor(address _chessToken, uint256 _initialPrice) {
         require(_chessToken != address(0), "Invalid token address");
@@ -89,6 +92,27 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
         priceLastUpdated = block.timestamp;
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+    }
+
+    /**
+     * @notice Set the ChessFactory allowed to authorize game clone contracts
+     * @param _chessFactory Address of the ChessFactory
+     */
+    function setChessFactory(address _chessFactory) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        emit ChessFactoryUpdated(chessFactory, _chessFactory);
+        chessFactory = _chessFactory;
+    }
+
+    /**
+     * @notice Authorize a ChessCore clone created by ChessFactory
+     * @param gameContract Address of the cloned ChessCore contract
+     */
+    function authorizeGameContract(address gameContract) external {
+        require(msg.sender == chessFactory, "Only factory");
+        require(gameContract != address(0), "Invalid game contract");
+
+        _grantRole(GAME_MANAGER_ROLE, gameContract);
+        emit GameContractAuthorized(gameContract);
     }
 
     /**

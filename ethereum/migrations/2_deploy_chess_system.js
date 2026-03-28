@@ -181,6 +181,12 @@ module.exports = async function (deployer, network, accounts) {
   console.log("  Setting DisputeDAO on ChessFactory...");
   await chessFactory.setDisputeDAO(disputeDAO.address, { from: admin });
 
+  console.log("  Setting ChessFactory on BondingManager...");
+  await bondingManager.setChessFactory(chessFactory.address, { from: admin });
+
+  console.log("  Setting ChessFactory on DisputeDAO...");
+  await disputeDAO.setChessFactory(chessFactory.address, { from: admin });
+
   console.log("  Setting PlayerRating on ChessFactory...");
   await chessFactory.setPlayerRating(playerRating.address, { from: admin });
 
@@ -226,6 +232,11 @@ module.exports = async function (deployer, network, accounts) {
   console.log(`\nChessFactory Configuration:`);
   console.log(`  BondingManager: ${factoryBM === bondingManager.address ? '✓' : '✗'} ${factoryBM}`);
   console.log(`  DisputeDAO: ${factoryDAO === disputeDAO.address ? '✓' : '✗'} ${factoryDAO}`);
+
+  const bondingFactory = await bondingManager.chessFactory();
+  const disputeFactory = await disputeDAO.chessFactory();
+  console.log(`  BondingManager factory: ${bondingFactory === chessFactory.address ? '✓' : '✗'} ${bondingFactory}`);
+  console.log(`  DisputeDAO factory: ${disputeFactory === chessFactory.address ? '✓' : '✗'} ${disputeFactory}`);
 
   // Verify roles
   const factoryHasGameManagerRole = await bondingManager.hasRole(GAME_MANAGER_ROLE_BM, chessFactory.address);

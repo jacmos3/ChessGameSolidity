@@ -96,6 +96,7 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
     uint256 public constant MAX_DISPUTE_DURATION = 30 days;
     uint256 private constant PERCENTAGE_BASE = 100;
     uint256 private constant MIN_EFFECTIVE_QUORUM = 2;
+    address public chessFactory;
 
     // Events
     event GameRegistered(uint256 indexed gameId, address white, address black, uint256 stake);
@@ -106,6 +107,8 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
     event DisputeEscalated(uint256 indexed disputeId, uint256 newLevel);
     event ChallengeWindowClosed(uint256 indexed gameId);
     event RewardDistributed(uint256 indexed disputeId, address indexed recipient, uint256 amount);
+    event ChessFactoryUpdated(address indexed previousFactory, address indexed newFactory);
+    event GameContractAuthorized(address indexed gameContract);
 
     constructor(
         address _chessToken,
@@ -121,6 +124,27 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         arbitratorRegistry = ArbitratorRegistry(_arbitratorRegistry);
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+    }
+
+    /**
+     * @notice Set the ChessFactory allowed to authorize game clone contracts
+     * @param _chessFactory Address of the ChessFactory
+     */
+    function setChessFactory(address _chessFactory) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        emit ChessFactoryUpdated(chessFactory, _chessFactory);
+        chessFactory = _chessFactory;
+    }
+
+    /**
+     * @notice Authorize a ChessCore clone created by ChessFactory
+     * @param gameContract Address of the cloned ChessCore contract
+     */
+    function authorizeGameContract(address gameContract) external {
+        require(msg.sender == chessFactory, "Only factory");
+        require(gameContract != address(0), "Invalid game contract");
+
+        _grantRole(GAME_MANAGER_ROLE, gameContract);
+        emit GameContractAuthorized(gameContract);
     }
 
     /**
