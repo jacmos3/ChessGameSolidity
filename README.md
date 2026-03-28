@@ -146,12 +146,47 @@ npm install
 
 ## Local Development
 
-### 1. Start a local RPC
+### Fast path
 
-By default Truffle expects `127.0.0.1:7545`.
+From the repo root:
 
 ```bash
-npx ganache --server.host 127.0.0.1 --server.port 7545 --wallet.totalAccounts 20
+npm run dev:local
+```
+
+This does four things in order:
+
+1. starts or reuses a local Ganache RPC on `127.0.0.1:8545`
+2. runs `truffle migrate --reset`
+3. writes `frontend/.env.local` from `ethereum/deployments/latest-development.json`
+4. starts the frontend dev server
+
+You can override the ports with:
+
+- `DEV_LOCAL_RPC_PORT`
+- `DEV_LOCAL_WEB_PORT`
+
+Once the local stack is up, you can run a contract-level smoke test against the same RPC:
+
+```bash
+LOCAL_RPC_PORT=8545 npm run smoke:local
+```
+
+The smoke flow covers a real end-to-end path on a fresh deployment:
+
+1. mint and stake arbitrators
+2. deposit player bonds
+3. create and join a game
+4. play opening moves and resign
+5. open a dispute and run commit/reveal voting
+6. resolve the dispute and verify prize settlement
+
+### 1. Start a local RPC
+
+If you want to run each step manually, Truffle can still target any local RPC through `LOCAL_RPC_PORT`.
+
+```bash
+npx ganache --server.host 127.0.0.1 --server.port 8545 --wallet.totalAccounts 20
 ```
 
 If you use another port, pass it through `LOCAL_RPC_PORT`.

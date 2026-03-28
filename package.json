@@ -1,0 +1,9 @@
+{
+  "name": "solidity-chess-workspace",
+  "private": true,
+  "scripts": {
+    "dev:local": "node scripts/dev-local.mjs",
+    "sync:local-env": "node scripts/write-frontend-local-env.mjs",
+    "smoke:local": "cd ethereum && npx truffle exec scripts/smoke-local.js"
+  }
+}
