@@ -1,6 +1,32 @@
 const ChessToken = artifacts.require("ChessToken");
 const BondingManager = artifacts.require("BondingManager");
 
+const advanceTime = (seconds) => new Promise((resolve, reject) => {
+  web3.currentProvider.send(
+    {
+      jsonrpc: "2.0",
+      method: "evm_increaseTime",
+      params: [seconds],
+      id: Date.now()
+    },
+    (err) => {
+      if (err) return reject(err);
+      web3.currentProvider.send(
+        {
+          jsonrpc: "2.0",
+          method: "evm_mine",
+          params: [],
+          id: Date.now() + 1
+        },
+        (mineErr, result) => {
+          if (mineErr) return reject(mineErr);
+          resolve(result);
+        }
+      );
+    }
+  );
+});
+
 contract("BondingManager", (accounts) => {
   const admin = accounts[0];
   const teamWallet = accounts[1];
@@ -9,6 +35,7 @@ contract("BondingManager", (accounts) => {
   const player2 = accounts[4];
   const gameManager = accounts[5];
   const disputeManager = accounts[6];
+  const oracleUpdater = accounts[7];
 
   let chessToken;
   let bondingManager;
@@ -216,6 +243,25 @@ contract("BondingManager", (accounts) => {
         assert.include(error.message, "revert");
       }
     });
+
+    it("should reject locking the same player bond twice for one game", async () => {
+      const gameId = 1;
+      const stake = web3.utils.toWei("0.1", "ether");
+
+      await bondingManager.lockBondForGame(gameId, player1, stake, { from: gameManager });
+      const bondBefore = await bondingManager.bonds(player1);
+
+      try {
+        await bondingManager.lockBondForGame(gameId, player1, stake, { from: gameManager });
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+
+      const bondAfter = await bondingManager.bonds(player1);
+      assert.equal(bondAfter.lockedChess.toString(), bondBefore.lockedChess.toString());
+      assert.equal(bondAfter.lockedEth.toString(), bondBefore.lockedEth.toString());
+    });
   });
 
   describe("Release Bond", () => {
@@ -251,6 +297,15 @@ contract("BondingManager", (accounts) => {
 
       try {
         await bondingManager.releaseBond(gameId, player1, { from: gameManager });
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+    });
+
+    it("should reject releasing a bond that was never locked", async () => {
+      try {
+        await bondingManager.releaseBond(999, player1, { from: gameManager });
         assert.fail("Should have reverted");
       } catch (error) {
         assert.include(error.message, "revert");
@@ -300,9 +355,35 @@ contract("BondingManager", (accounts) => {
       const gameBond = await bondingManager.gameBonds(gameId, player1);
       assert.isTrue(gameBond.slashed);
     });
+
+    it("should reject slashing a bond that was never locked", async () => {
+      try {
+        await bondingManager.slashBond(999, player1, { from: disputeManager });
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+    });
   });
 
   describe("Price Update & Circuit Breaker", () => {
+    it("should keep price updates available after rotating the oracle role", async () => {
+      const oracleRole = await bondingManager.ORACLE_ROLE();
+      await bondingManager.grantRole(oracleRole, oracleUpdater, { from: admin });
+      await bondingManager.renounceRole(oracleRole, admin, { from: admin });
+
+      try {
+        await bondingManager.updatePrice(web3.utils.toWei("0.0011", "ether"), { from: admin });
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+
+      const newPrice = web3.utils.toWei("0.0012", "ether");
+      await bondingManager.updatePrice(newPrice, { from: oracleUpdater });
+      assert.equal((await bondingManager.chessEthPrice()).toString(), newPrice);
+    });
+
     it("should update price", async () => {
       const newPrice = web3.utils.toWei("0.0012", "ether");
       await bondingManager.updatePrice(newPrice, { from: admin });
@@ -367,6 +448,21 @@ contract("BondingManager", (accounts) => {
     it("should have MIN_PRICE constant set correctly", async () => {
       const minPrice = await bondingManager.MIN_PRICE();
       assert.equal(minPrice.toString(), "1000000000000"); // 1e12
+    });
+
+    it("should reject bond calculations based on a stale price", async () => {
+      await advanceTime(7 * 24 * 3600 + 1);
+
+      try {
+        await bondingManager.calculateRequiredBond(web3.utils.toWei("0.1", "ether"));
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+
+      await bondingManager.updatePrice(initialPrice, { from: admin });
+      const result = await bondingManager.calculateRequiredBond(web3.utils.toWei("0.1", "ether"));
+      assert.equal(result.ethRequired.toString(), web3.utils.toWei("0.2", "ether"));
     });
   });
 

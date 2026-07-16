@@ -24,8 +24,17 @@
  const localRpcHost = process.env["LOCAL_RPC_HOST"] || "127.0.0.1";
  const localRpcPort = Number(process.env["LOCAL_RPC_PORT"] || "7545");
  const localRpcGas = Number(process.env["LOCAL_RPC_GAS"] || "25000000");
+ const baseSepoliaRpcUrl = process.env["BASE_SEPOLIA_RPC_URL"];
+ const baseRpcUrl = process.env["BASE_RPC_URL"];
  
  const HDWalletProvider = require('@truffle/hdwallet-provider');
+
+ const publicProvider = (rpcUrl, networkName) => {
+   if (!mnemonic || !rpcUrl) {
+     throw new Error(`MNEMONIC and ${networkName}_RPC_URL are required for ${networkName}`);
+   }
+   return new HDWalletProvider(mnemonic, rpcUrl);
+ };
 
 module.exports = {
   /**
@@ -56,6 +65,22 @@ module.exports = {
        provider: () => new HDWalletProvider(mnemonic, `https://goerli.infura.io/v3/${infuraProjectId}`),
        network_id: 5,       // Goerli's id
        chain_id: 5
+     },
+     base_sepolia: {
+       provider: () => publicProvider(baseSepoliaRpcUrl, "BASE_SEPOLIA"),
+       network_id: 84532,
+       chain_id: 84532,
+       confirmations: 2,
+       timeoutBlocks: 200,
+       skipDryRun: true
+     },
+     base: {
+       provider: () => publicProvider(baseRpcUrl, "BASE"),
+       network_id: 8453,
+       chain_id: 8453,
+       confirmations: 2,
+       timeoutBlocks: 200,
+       skipDryRun: false
      }
   },
 

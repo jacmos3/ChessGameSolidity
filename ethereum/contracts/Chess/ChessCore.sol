@@ -312,12 +312,26 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     function _releaseBonds() internal {
         if (address(bondingManager) != address(0) && bondsLocked) {
             if (whitePlayer != address(0)) {
-                try bondingManager.releaseBond(gameId, whitePlayer) {} catch {}
+                _releasePlayerBond(whitePlayer);
             }
             if (blackPlayer != address(0)) {
-                try bondingManager.releaseBond(gameId, blackPlayer) {} catch {}
+                _releasePlayerBond(blackPlayer);
             }
             bondsLocked = false;
+        }
+    }
+
+    function _releasePlayerBond(address player) internal {
+        (
+            ,
+            ,
+            ,
+            bool released,
+            bool slashed
+        ) = bondingManager.gameBonds(gameId, player);
+
+        if (!released && !slashed) {
+            bondingManager.releaseBond(gameId, player);
         }
     }
 

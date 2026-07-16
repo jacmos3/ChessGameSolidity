@@ -24,7 +24,7 @@ At a high level, the system does four things:
 
 ## Current Status
 
-- The contract suite currently passes locally with `330` passing tests.
+- The contract suite contains `355` passing tests. For long local runs, use fresh Ganache instances between batches to avoid the Node.js fallback provider degrading on a very large chain.
 - `ChessCore` was split to keep runtime size deployable by moving heavy rules logic into `ChessRulesEngine`.
 - The frontend is configured for static/IPFS deployment and now lazy-loads ABI-only artifacts.
 - The system is still not formally audited.
@@ -33,6 +33,8 @@ Two limitations should be stated plainly:
 
 - arbitrator selection is still pseudo-random on-chain, not VRF-backed
 - `PlayerRating.getTopPlayers()` is a pagination helper, not a fully sorted on-chain leaderboard
+- faucet eligibility and the CHESS/ETH price feed still depend on trusted, separately rotatable off-chain signers
+- game state, moves, stakes, disputes, and ratings are public blockchain data; the protocol does not provide player privacy
 
 ## Architecture
 
@@ -81,11 +83,13 @@ Dispute Layer
 - up to 3 escalation levels
 - slashing and challenger compensation on `Cheat` verdicts
 - arbitrator reputation tracking
+- per-dispute deposit escrow and assignment-based stake locks for selected arbitrators
 
 ### Token / Governance Layer
 
 - `CHESS` ERC20 with vesting and governance hooks
 - governor + timelock governance flow
+- automatic deployer-role removal on production deployments
 - configurable dispute and bonding parameters
 
 ### Ratings / Rewards
@@ -105,7 +109,7 @@ Dispute Layer
 | `ChessNFT` | NFT representation of created matches |
 | `ChessToken` | ERC20 governance / ecosystem token |
 | `BondingManager` | ETH + CHESS bond accounting and locking |
-| `RewardPool` | Reward distribution |
+| `RewardPool` | Reward distribution and signer-authorized faucet claims |
 | `ArbitratorRegistry` | Arbitrator staking, tiering, reputation, selection |
 | `DisputeDAO` | Challenge window, commit-reveal voting, escalation, final decisions |
 | `PlayerRating` | ELO ratings and player stats |
@@ -198,9 +202,27 @@ cd ethereum
 npx truffle migrate --reset
 ```
 
-The migration writes the latest addresses to:
+The migration writes the latest addresses to `ethereum/deployments/latest-development.json`.
 
-- [latest-development.json](/Users/jacopo/Documents/development/chessgame/ethereum/deployments/latest-development.json)
+### Public deployment configuration
+
+Truffle includes `base_sepolia` and `base` network profiles. Configure these variables before a public migration:
+
+```dotenv
+MNEMONIC=
+BASE_SEPOLIA_RPC_URL=
+BASE_RPC_URL=
+TEAM_WALLET=
+TREASURY_WALLET=
+FAUCET_SIGNER=
+ORACLE_UPDATER=
+```
+
+```bash
+npx truffle migrate --network base_sepolia --reset
+```
+
+`FAUCET_SIGNER` authorizes eligible faucet beneficiaries. `ORACLE_UPDATER` has only `ORACLE_ROLE` and must submit a fresh CHESS/ETH price at least once every seven days; stale prices block bond calculation and new bonded games. On `base`, `mainnet`, `arbitrum`, and `optimism`, migration ownership and admin roles are transferred to `ChessTimelock`, and the deployer renounces its protocol privileges. Set `GOVERNANCE_HANDOFF=true` to exercise the same flow on another network; both operational signers must then differ from the deployer.
 
 ### 3. Configure frontend addresses
 
@@ -349,6 +371,21 @@ function getEffectiveQuorum(uint256 disputeId) external view returns (uint256);
 function getSelectedArbitrators(uint256 disputeId) external view returns (address[] memory);
 ```
 
+### RewardPool faucet
+
+Faucet claims require an off-chain authorization bound to the pool address, chain ID, and beneficiary:
+
+```javascript
+const digest = ethers.utils.solidityKeccak256(
+  ["address", "uint256", "address"],
+  [rewardPool.address, chainId, beneficiary]
+);
+const authorization = await faucetSigner.signMessage(ethers.utils.arrayify(digest));
+await rewardPool.connect(beneficiary).claimFaucet(authorization);
+```
+
+An authorization cannot be replayed for another beneficiary, chain, or `RewardPool`. Eligibility remains a trusted off-chain policy enforced by `FAUCET_SIGNER`.
+
 ## Frontend Stack
 
 - SvelteKit `1.30.4`
@@ -368,12 +405,17 @@ Implemented protections include:
 - challenge windows and commit / reveal deadlines
 - dispute max duration cap
 - bond locking and slashing
+- stale-price rejection and a dedicated, revocable oracle role
+- signer-bound faucet authorizations without `tx.origin` or EOA-only assumptions
+- production governance handoff with deployer privilege removal
 - custom errors for lower revert overhead
 
 Known limitations:
 
 - no formal external audit yet
 - arbitrator selection is not VRF-backed
+- the price updater and faucet signer remain trusted operational roles
+- all gameplay and dispute data is public on-chain
 - local frontend config still depends on manual env address wiring
 - some older docs mention outdated network names and should be cleaned up separately
 
@@ -389,7 +431,7 @@ Known limitations:
 Repository-wide licensing still needs cleanup.
 
 - most Solidity files use `SPDX-License-Identifier: MIT`
-- [ethereum/package.json](/Users/jacopo/Documents/development/chessgame/ethereum/package.json) currently declares `ISC`
+- `ethereum/package.json` currently declares `ISC`
 - the repo does not currently ship a top-level `LICENSE` file
 
 If this project is meant to be distributed publicly, add a single root license file and align the package manifests with it.

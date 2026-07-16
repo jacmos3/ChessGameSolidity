@@ -5,6 +5,8 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import "../Rating/PlayerRating.sol";
 
 /// @title RewardPool - Play-to-Earn reward system for Chess
@@ -38,6 +40,7 @@ contract RewardPool is Ownable, ReentrancyGuard {
     IERC20 public chessToken;
     PlayerRating public playerRating;
     address public chessFactory;
+    address public faucetSigner;
 
     // Pool balances
     uint256 public faucetPool;
@@ -83,25 +86,34 @@ contract RewardPool is Ownable, ReentrancyGuard {
     event RewardPoolCapacitySet(uint256 newCapacity);
     event PoolLow(string poolType, uint256 remaining, uint256 threshold);
     event BehaviorRecorded(address indexed player, uint8 gameType);
+    event FaucetSignerUpdated(address indexed previousSigner, address indexed newSigner);
 
     // ========== CONSTRUCTOR ==========
     constructor(
         address _chessToken,
         address _playerRating
     ) Ownable(msg.sender) {
-        require(_chessToken != address(0), "Invalid token");
-        require(_playerRating != address(0), "Invalid rating");
+        require(_chessToken.code.length > 0, "Token must be contract");
+        require(_playerRating.code.length > 0, "Rating must be contract");
 
         chessToken = IERC20(_chessToken);
         playerRating = PlayerRating(_playerRating);
+        faucetSigner = msg.sender;
     }
 
     // ========== ADMIN FUNCTIONS ==========
 
     /// @notice Set the ChessFactory address (for game validation)
     function setChessFactory(address _chessFactory) external onlyOwner {
-        require(_chessFactory != address(0), "Invalid factory");
+        require(_chessFactory.code.length > 0, "Factory must be contract");
         chessFactory = _chessFactory;
+    }
+
+    /// @notice Set the service key allowed to authorize faucet beneficiaries
+    function setFaucetSigner(address newSigner) external onlyOwner {
+        require(newSigner != address(0), "Invalid signer");
+        emit FaucetSignerUpdated(faucetSigner, newSigner);
+        faucetSigner = newSigner;
     }
 
     /// @notice Deposit CHESS to faucet pool
@@ -152,25 +164,16 @@ contract RewardPool is Ownable, ReentrancyGuard {
 
     // ========== FAUCET ==========
 
-    /// @notice Claim faucet tokens (one-time per address)
-    /// @dev Requires the address to have made at least 1 transaction (nonce > 0)
-    function claimFaucet() external nonReentrant {
+    /// @notice Claim faucet tokens once with an off-chain eligibility authorization
+    /// @param authorization Signature over this pool, chain ID, and beneficiary
+    function claimFaucet(bytes calldata authorization) external nonReentrant {
         require(!hasClaimed[msg.sender], "Already claimed");
         require(chessToken.balanceOf(msg.sender) == 0, "Already has CHESS");
         require(faucetPool >= FAUCET_AMOUNT, "Faucet pool empty");
 
-        // Check that user has made at least 1 transaction (anti-sybil)
-        // This is checked by verifying the account has a nonce > 0
-        // Note: This won't work for first-time users on a fresh address
-        // but they need ETH for gas anyway, so they'll have a transaction
-        uint256 nonce;
-        assembly {
-            nonce := extcodesize(caller())
-        }
-        // Actually, we check the account nonce differently
-        // We'll use a simpler check: require msg.sender is not a contract
-        // and trust that they have ETH (gas cost is the anti-sybil measure)
-        require(msg.sender == tx.origin, "No contracts");
+        bytes32 digest = keccak256(abi.encodePacked(address(this), block.chainid, msg.sender));
+        address recovered = ECDSA.recover(MessageHashUtils.toEthSignedMessageHash(digest), authorization);
+        require(recovered == faucetSigner, "Invalid faucet authorization");
 
         hasClaimed[msg.sender] = true;
         faucetPool -= FAUCET_AMOUNT;
@@ -262,7 +265,7 @@ contract RewardPool is Ownable, ReentrancyGuard {
     /// @param gameContract Address of the deployed game contract
     function registerGameContract(address gameContract) external {
         require(msg.sender == chessFactory, "Only factory");
-        require(gameContract != address(0), "Invalid address");
+        require(gameContract.code.length > 0, "Game must be contract");
         validGameContracts[gameContract] = true;
     }
 

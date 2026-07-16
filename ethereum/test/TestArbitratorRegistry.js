@@ -202,6 +202,32 @@ contract("ArbitratorRegistry", (accounts) => {
       assert.isFalse(info.isActive);
     });
 
+    it("should allow an inactive arbitrator to withdraw the remaining stake", async () => {
+      const firstWithdrawal = web3.utils.toWei("4500", "ether");
+      const remainingStake = web3.utils.toWei("500", "ether");
+      await arbitratorRegistry.unstake(firstWithdrawal, { from: arbitrator1 });
+
+      await arbitratorRegistry.unstake(remainingStake, { from: arbitrator1 });
+
+      const info = await arbitratorRegistry.getArbitratorInfo(arbitrator1);
+      const totalStaked = await arbitratorRegistry.totalStaked();
+      const totalArbitrators = await arbitratorRegistry.totalArbitrators();
+      assert.equal(info.stakedAmount.toString(), "0");
+      assert.equal(totalStaked.toString(), "0");
+      assert.equal(totalArbitrators.toString(), "0");
+    });
+
+    it("should reactivate and restore pool membership using existing residual stake", async () => {
+      await arbitratorRegistry.unstake(web3.utils.toWei("4500", "ether"), { from: arbitrator1 });
+      await arbitratorRegistry.stake(web3.utils.toWei("500", "ether"), { from: arbitrator1 });
+
+      const info = await arbitratorRegistry.getArbitratorInfo(arbitrator1);
+      const tierCounts = await arbitratorRegistry.getTierCounts();
+      assert.isTrue(info.isActive);
+      assert.equal(info.stakedAmount.toString(), TIER1_STAKE);
+      assert.equal(tierCounts.t1.toString(), "1");
+    });
+
     it("should reject unstaking more than staked", async () => {
       const tooMuch = web3.utils.toWei("10000", "ether");
       try {
@@ -399,6 +425,38 @@ contract("ArbitratorRegistry", (accounts) => {
       const unique = new Set(selected.map((address) => address.toLowerCase()));
       assert.equal(selected.length, 3, "Should select all eligible arbitrators from the populated tier");
       assert.equal(unique.size, 3, "Selected arbitrators should be unique");
+    });
+
+    it("should lock selected arbitrator stakes until the dispute panel is released", async () => {
+      await advanceTime(7 * 24 * 60 * 60 + 1);
+
+      await arbitratorRegistry.selectArbitrators(
+        42,
+        player1,
+        player2,
+        1,
+        { from: disputeManager }
+      );
+
+      const assignments = await arbitratorRegistry.activeAssignments(arbitrator1);
+      assert.equal(assignments.toString(), "1", "The selected panel must be tracked");
+
+      try {
+        await arbitratorRegistry.unstake(TIER1_STAKE, { from: arbitrator1 });
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+
+      await arbitratorRegistry.releaseArbitrators(
+        42,
+        [arbitrator1, arbitrator2, arbitrator3],
+        { from: disputeManager }
+      );
+
+      const assignmentsAfterRelease = await arbitratorRegistry.activeAssignments(arbitrator1);
+      assert.equal(assignmentsAfterRelease.toString(), "0");
+      await arbitratorRegistry.unstake(TIER1_STAKE, { from: arbitrator1 });
     });
   });
 

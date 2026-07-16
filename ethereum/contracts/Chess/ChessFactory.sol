@@ -51,7 +51,7 @@ contract ChessFactory {
     }
 
     constructor(address _chessCoreImplementation) {
-        require(_chessCoreImplementation != address(0), "Invalid implementation");
+        require(_chessCoreImplementation.code.length > 0, "Implementation must be contract");
         owner = msg.sender;
         chessCoreImplementation = _chessCoreImplementation;
         ChessNFT newChessNFT = new ChessNFT(msg.sender);
@@ -61,7 +61,7 @@ contract ChessFactory {
     /// @notice Update ChessCore implementation (for upgrades)
     /// @param _newImplementation New implementation address
     function setImplementation(address _newImplementation) external onlyOwner {
-        require(_newImplementation != address(0), "Invalid implementation");
+        require(_newImplementation.code.length > 0, "Implementation must be contract");
         emit ImplementationUpdated(chessCoreImplementation, _newImplementation);
         chessCoreImplementation = _newImplementation;
     }
@@ -69,6 +69,8 @@ contract ChessFactory {
     /// @notice Set the BondingManager contract address
     /// @param _bondingManager Address of BondingManager (address(0) to disable)
     function setBondingManager(address _bondingManager) external onlyOwner {
+        require(_isContractOrZero(_bondingManager), "Bonding manager must be contract");
+        require(_bondingManager != address(0) || disputeDAO == address(0), "Disable disputes first");
         emit BondingManagerUpdated(bondingManager, _bondingManager);
         bondingManager = _bondingManager;
     }
@@ -76,6 +78,8 @@ contract ChessFactory {
     /// @notice Set the DisputeDAO contract address
     /// @param _disputeDAO Address of DisputeDAO (address(0) to disable)
     function setDisputeDAO(address _disputeDAO) external onlyOwner {
+        require(_isContractOrZero(_disputeDAO), "Dispute DAO must be contract");
+        require(_disputeDAO == address(0) || bondingManager != address(0), "Bonding manager required");
         emit DisputeDAOUpdated(disputeDAO, _disputeDAO);
         disputeDAO = _disputeDAO;
     }
@@ -83,6 +87,7 @@ contract ChessFactory {
     /// @notice Set the PlayerRating contract address
     /// @param _playerRating Address of PlayerRating (address(0) to disable)
     function setPlayerRating(address _playerRating) external onlyOwner {
+        require(_isContractOrZero(_playerRating), "Player rating must be contract");
         emit PlayerRatingUpdated(playerRating, _playerRating);
         playerRating = _playerRating;
     }
@@ -90,6 +95,7 @@ contract ChessFactory {
     /// @notice Set the RewardPool contract address
     /// @param _rewardPool Address of RewardPool (address(0) to disable)
     function setRewardPool(address _rewardPool) external onlyOwner {
+        require(_isContractOrZero(_rewardPool), "Reward pool must be contract");
         emit RewardPoolUpdated(rewardPool, _rewardPool);
         rewardPool = _rewardPool;
     }
@@ -173,6 +179,10 @@ contract ChessFactory {
 
     function getDeployedChessGames() public view returns (address[] memory) {
         return deployedChessGames;
+    }
+
+    function _isContractOrZero(address candidate) internal view returns (bool) {
+        return candidate == address(0) || candidate.code.length > 0;
     }
 
 }

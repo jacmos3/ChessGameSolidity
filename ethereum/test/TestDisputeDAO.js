@@ -70,6 +70,9 @@ contract("DisputeDAO", (accounts) => {
     const DISPUTE_MANAGER_ROLE_BONDING = await bondingManager.DISPUTE_MANAGER_ROLE();
     await bondingManager.grantRole(DISPUTE_MANAGER_ROLE_BONDING, disputeDAO.address, { from: admin });
 
+    const GAME_MANAGER_ROLE_BONDING = await bondingManager.GAME_MANAGER_ROLE();
+    await bondingManager.grantRole(GAME_MANAGER_ROLE_BONDING, gameManager, { from: admin });
+
     const DISPUTE_MANAGER_ROLE_ARB = await arbitratorRegistry.DISPUTE_MANAGER_ROLE();
     await arbitratorRegistry.grantRole(DISPUTE_MANAGER_ROLE_ARB, disputeDAO.address, { from: admin });
 
@@ -81,9 +84,6 @@ contract("DisputeDAO", (accounts) => {
     await chessToken.mintPlayToEarn(arb1, mintAmount, { from: admin });
     await chessToken.mintPlayToEarn(arb2, mintAmount, { from: admin });
     await chessToken.mintPlayToEarn(arb3, mintAmount, { from: admin });
-    // Mint to DAO for rewards
-    await chessToken.mintPlayToEarn(disputeDAO.address, mintAmount, { from: admin });
-
     // Approve tokens
     await chessToken.approve(disputeDAO.address, mintAmount, { from: challenger });
     await chessToken.approve(arbitratorRegistry.address, mintAmount, { from: arb1 });
@@ -391,6 +391,60 @@ contract("DisputeDAO", (accounts) => {
     });
   });
 
+  describe("Absolute Dispute Timeout", () => {
+    const gameId = 1;
+    const stake = web3.utils.toWei("0.1", "ether");
+
+    it("rejects resolution of a dispute that does not exist", async () => {
+      try {
+        await disputeDAO.resolveDispute(0, { from: challenger });
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+    });
+
+    it("resolves an unchallenged game without trying to refund a missing deposit", async () => {
+      await disputeDAO.registerGame(gameId, player1, player2, stake, { from: gameManager });
+      await advanceTime(30 * 24 * 3600 + 1);
+
+      const tx = await disputeDAO.resolveDispute(1, { from: challenger });
+      const dispute = await disputeDAO.getDispute(1);
+      const fullDispute = await disputeDAO.disputes(1);
+
+      assert.equal(dispute.state.toString(), "4", "The stale pending dispute should resolve");
+      assert.isTrue(fullDispute.resolved);
+      assert.equal(
+        tx.logs.filter((log) => log.event === "DisputeResolved").length,
+        1,
+        "The timeout resolution should be observable"
+      );
+    });
+
+    it("refunds the deposit captured when the challenge was created", async () => {
+      const challengerBalanceBefore = await chessToken.balanceOf(challenger);
+      await disputeDAO.registerGame(gameId, player1, player2, stake, { from: gameManager });
+      await disputeDAO.challenge(gameId, player1, { from: challenger });
+
+      await disputeDAO.setParameters(
+        48 * 3600,
+        24 * 3600,
+        24 * 3600,
+        10,
+        66,
+        web3.utils.toWei("100", "ether"),
+        { from: admin }
+      );
+      await advanceTime(30 * 24 * 3600 + 1);
+      await disputeDAO.resolveDispute(1, { from: challenger });
+
+      const challengerBalanceAfter = await chessToken.balanceOf(challenger);
+      const reservedDeposit = await disputeDAO.disputeDeposits(1);
+      assert.equal(challengerBalanceAfter.toString(), challengerBalanceBefore.toString());
+      assert.equal(reservedDeposit.toString(), "0", "The original deposit should be released");
+    });
+  });
+
   describe("Challenge Window Timestamp Enforcement", () => {
     const gameId = 1;
     const stake = web3.utils.toWei("0.1", "ether");
@@ -678,6 +732,8 @@ contract("DisputeDAO", (accounts) => {
 
     beforeEach(async () => {
       await advanceTime(7 * 24 * 60 * 60 + 1);
+      await bondingManager.updatePrice(initialPrice, { from: admin });
+      await bondingManager.lockBondsForGame(gameId, player1, player2, stake, { from: gameManager });
       await disputeDAO.registerGame(gameId, player1, player2, stake, { from: gameManager });
       await disputeDAO.challenge(gameId, player1, { from: challenger });
     });
@@ -725,12 +781,18 @@ contract("DisputeDAO", (accounts) => {
 
     it("should resolve a dispute with the bootstrap panel instead of escalating forever", async () => {
       const { disputeId } = await commitAndRevealVotes({ defaultVote: 2 });
+      const selectedArbitrators = await disputeDAO.getSelectedArbitrators(disputeId);
+
+      const assignmentsBefore = await arbitratorRegistry.activeAssignments(selectedArbitrators[0]);
+      assert.equal(assignmentsBefore.toString(), "1", "The panel stake should remain locked");
 
       await disputeDAO.resolveDispute(disputeId, { from: challenger });
 
       const dispute = await disputeDAO.getDispute(disputeId);
+      const assignmentsAfter = await arbitratorRegistry.activeAssignments(selectedArbitrators[0]);
       assert.equal(dispute.state.toString(), "4", "Dispute should resolve with the available bootstrap panel");
       assert.equal(dispute.finalDecision.toString(), "2", "Decision should be Cheat");
+      assert.equal(assignmentsAfter.toString(), "0", "Resolution should release the panel stake");
     });
 
     it("should count abstentions toward quorum without handing victory to a single vote", async () => {
@@ -748,6 +810,123 @@ contract("DisputeDAO", (accounts) => {
       const dispute = await disputeDAO.getDispute(disputeId);
       assert.equal(dispute.state.toString(), "4", "Dispute should still resolve when two of three arbitrators agree");
       assert.equal(dispute.finalDecision.toString(), "2", "Two cheat votes and one abstain should still produce a cheat decision");
+    });
+
+    it("should allow selected arbitrators to commit again after escalation", async () => {
+      const disputeId = await disputeDAO.gameToDispute(gameId);
+      const selectedArbitrators = await disputeDAO.getSelectedArbitrators(disputeId);
+
+      for (let i = 0; i < selectedArbitrators.length; i++) {
+        const arbitrator = selectedArbitrators[i];
+        const salt = web3.utils.soliditySha3(`first-round-${i}`);
+        const commitHash = web3.utils.soliditySha3(
+          { type: "uint8", value: 2 },
+          { type: "bytes32", value: salt },
+          { type: "address", value: arbitrator }
+        );
+        await disputeDAO.commitVote(disputeId, commitHash, { from: arbitrator });
+      }
+
+      await advanceTime(48 * 3600 + 2);
+      await disputeDAO.resolveDispute(disputeId, { from: challenger });
+
+      const escalatedArbitrators = await disputeDAO.getSelectedArbitrators(disputeId);
+      assert.equal(escalatedArbitrators.length, 3, "The bootstrap panel should be selected again");
+
+      for (let i = 0; i < escalatedArbitrators.length; i++) {
+        const arbitrator = escalatedArbitrators[i];
+        const status = await disputeDAO.getVoteStatus(disputeId, arbitrator);
+        const assignments = await arbitratorRegistry.activeAssignments(arbitrator);
+        const arbitratorInfo = await arbitratorRegistry.getArbitratorInfo(arbitrator);
+        assert.isFalse(status.hasCommitted, "The previous round commit must be cleared");
+        assert.equal(assignments.toString(), "1", "Escalation should replace, not duplicate, the assignment");
+        assert.equal(arbitratorInfo.reputation.toString(), "99", "Non-reveal must be penalized before escalation");
+
+        const salt = web3.utils.soliditySha3(`second-round-${i}`);
+        const commitHash = web3.utils.soliditySha3(
+          { type: "uint8", value: 1 },
+          { type: "bytes32", value: salt },
+          { type: "address", value: arbitrator }
+        );
+        await disputeDAO.commitVote(disputeId, commitHash, { from: arbitrator });
+      }
+    });
+  });
+
+  describe("Concurrent Dispute Escrow", () => {
+    const stake = web3.utils.toWei("0.1", "ether");
+
+    async function commitVotes(disputeId, vote, label) {
+      const selectedArbitrators = await disputeDAO.getSelectedArbitrators(disputeId);
+      const salts = [];
+
+      for (let i = 0; i < selectedArbitrators.length; i++) {
+        const arbitrator = selectedArbitrators[i];
+        const salt = web3.utils.soliditySha3(`${label}-${i}`);
+        const commitHash = web3.utils.soliditySha3(
+          { type: "uint8", value: vote },
+          { type: "bytes32", value: salt },
+          { type: "address", value: arbitrator }
+        );
+        await disputeDAO.commitVote(disputeId, commitHash, { from: arbitrator });
+        salts.push(salt);
+      }
+
+      return { selectedArbitrators, salts, vote };
+    }
+
+    async function revealVotes(disputeId, round) {
+      for (let i = 0; i < round.selectedArbitrators.length; i++) {
+        await disputeDAO.revealVote(disputeId, round.vote, round.salts[i], {
+          from: round.selectedArbitrators[i]
+        });
+      }
+    }
+
+    it("keeps every open challenge deposit fully reserved", async () => {
+      await advanceTime(7 * 24 * 60 * 60 + 1);
+      await bondingManager.updatePrice(initialPrice, { from: admin });
+      await bondingManager.lockBondsForGame(1, player1, player2, stake, { from: gameManager });
+      await bondingManager.lockBondsForGame(2, player1, player2, stake, { from: gameManager });
+      await disputeDAO.registerGame(1, player1, player2, stake, { from: gameManager });
+      await disputeDAO.registerGame(2, player1, player2, stake, { from: gameManager });
+      await disputeDAO.challenge(1, player1, { from: challenger });
+      await disputeDAO.challenge(2, player2, { from: challenger });
+
+      const disputeId1 = await disputeDAO.gameToDispute(1);
+      const disputeId2 = await disputeDAO.gameToDispute(2);
+      const cheatRound = await commitVotes(disputeId1, 2, "cheat");
+      const legitRound = await commitVotes(disputeId2, 1, "legit");
+      const sharedArbitrator = cheatRound.selectedArbitrators[0];
+      const concurrentAssignments = await arbitratorRegistry.activeAssignments(sharedArbitrator);
+      assert.equal(concurrentAssignments.toString(), "2", "Concurrent panels must be counted independently");
+
+      await advanceTime(24 * 3600 + 1);
+      await revealVotes(disputeId1, cheatRound);
+      await revealVotes(disputeId2, legitRound);
+      await advanceTime(24 * 3600 + 1);
+
+      await disputeDAO.resolveDispute(disputeId1, { from: challenger });
+
+      const reservedAfterFirstResolution = await disputeDAO.totalEscrowedDeposits();
+      const daoBalanceAfterFirstResolution = await chessToken.balanceOf(disputeDAO.address);
+      const assignmentsAfterFirstResolution = await arbitratorRegistry.activeAssignments(sharedArbitrator);
+      assert.equal(reservedAfterFirstResolution.toString(), CHALLENGE_DEPOSIT);
+      assert.equal(daoBalanceAfterFirstResolution.toString(), CHALLENGE_DEPOSIT);
+      assert.equal(assignmentsAfterFirstResolution.toString(), "1");
+
+      await disputeDAO.resolveDispute(disputeId2, { from: challenger });
+
+      const firstDispute = await disputeDAO.getDispute(disputeId1);
+      const secondDispute = await disputeDAO.getDispute(disputeId2);
+      const finalReserve = await disputeDAO.totalEscrowedDeposits();
+      const finalBalance = await chessToken.balanceOf(disputeDAO.address);
+      const finalAssignments = await arbitratorRegistry.activeAssignments(sharedArbitrator);
+      assert.equal(firstDispute.state.toString(), "4", "The cheat dispute should resolve");
+      assert.equal(secondDispute.state.toString(), "4", "The legit dispute should resolve");
+      assert.equal(finalReserve.toString(), "0", "No resolved deposit should remain reserved");
+      assert.equal(finalBalance.toString(), "0", "All deposits should be settled independently");
+      assert.equal(finalAssignments.toString(), "0", "Every panel assignment should be released");
     });
   });
 });

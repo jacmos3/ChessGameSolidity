@@ -15,7 +15,7 @@ module.exports = async function (deployer, network, accounts) {
   const admin = accounts[0];
 
   // Configuration based on network
-  const config = getNetworkConfig(network);
+  const config = getNetworkConfig(network, accounts);
 
   console.log("\n===========================================");
   console.log("  Chess Game Anti-Cheating System Deploy");
@@ -199,6 +199,17 @@ module.exports = async function (deployer, network, accounts) {
   console.log("  Setting ChessFactory on RewardPool...");
   await rewardPool.setChessFactory(chessFactory.address, { from: admin });
 
+  if (config.faucetSigner !== admin) {
+    console.log("  Setting dedicated faucet signer...");
+    await rewardPool.setFaucetSigner(config.faucetSigner, { from: admin });
+  }
+
+  const ORACLE_ROLE_BM = await bondingManager.ORACLE_ROLE();
+  if (config.oracleUpdater !== admin) {
+    console.log("  Granting ORACLE_ROLE to the dedicated price updater...");
+    await bondingManager.grantRole(ORACLE_ROLE_BM, config.oracleUpdater, { from: admin });
+  }
+
   // 7.2 Grant GAME_MANAGER_ROLE to ChessFactory on BondingManager
   const GAME_MANAGER_ROLE_BM = await bondingManager.GAME_MANAGER_ROLE();
   console.log("  Granting GAME_MANAGER_ROLE to ChessFactory on BondingManager...");
@@ -214,10 +225,43 @@ module.exports = async function (deployer, network, accounts) {
   console.log("  Granting DISPUTE_MANAGER_ROLE to DisputeDAO on ArbitratorRegistry...");
   await arbitratorRegistry.grantRole(DISPUTE_MANAGER_ROLE_AR, disputeDAO.address, { from: admin });
 
-  // 7.5 Transfer admin roles to Timelock for decentralization (optional - can be done later)
-  // This makes governance control the protocol parameters
-  // await bondingManager.grantRole(await bondingManager.DEFAULT_ADMIN_ROLE(), chessTimelock.address, { from: admin });
-  // await disputeDAO.grantRole(await disputeDAO.DEFAULT_ADMIN_ROLE(), chessTimelock.address, { from: admin });
+  // 7.5 Transfer protocol control to governance on production networks.
+  if (config.handoffGovernance) {
+    console.log("  Transferring protocol administration to ChessTimelock...");
+
+    const tokenAdminRole = await chessToken.DEFAULT_ADMIN_ROLE();
+    const tokenMinterRole = await chessToken.MINTER_ROLE();
+    const bondingAdminRole = await bondingManager.DEFAULT_ADMIN_ROLE();
+    const registryAdminRole = await arbitratorRegistry.DEFAULT_ADMIN_ROLE();
+    const disputeAdminRole = await disputeDAO.DEFAULT_ADMIN_ROLE();
+    const ratingAdminRole = await playerRating.DEFAULT_ADMIN_ROLE();
+    const timelockAdminRole = await chessTimelock.DEFAULT_ADMIN_ROLE();
+
+    await chessToken.grantRole(tokenAdminRole, chessTimelock.address, { from: admin });
+    await chessToken.grantRole(tokenMinterRole, chessTimelock.address, { from: admin });
+    await bondingManager.grantRole(bondingAdminRole, chessTimelock.address, { from: admin });
+    await arbitratorRegistry.grantRole(registryAdminRole, chessTimelock.address, { from: admin });
+    await disputeDAO.grantRole(disputeAdminRole, chessTimelock.address, { from: admin });
+    await playerRating.grantRole(ratingAdminRole, chessTimelock.address, { from: admin });
+
+    await chessFactory.transferOwnership(chessTimelock.address, { from: admin });
+    await rewardPool.transferOwnership(chessTimelock.address, { from: admin });
+    const chessNFT = await ChessNFT.at(chessNFTAddress);
+    await chessNFT.transferOwnership(chessTimelock.address, { from: admin });
+
+    await chessToken.renounceRole(tokenMinterRole, admin, { from: admin });
+    await chessToken.renounceRole(tokenAdminRole, admin, { from: admin });
+    await bondingManager.renounceRole(ORACLE_ROLE_BM, admin, { from: admin });
+    await bondingManager.renounceRole(bondingAdminRole, admin, { from: admin });
+    await arbitratorRegistry.renounceRole(registryAdminRole, admin, { from: admin });
+    await disputeDAO.renounceRole(disputeAdminRole, admin, { from: admin });
+    await playerRating.renounceRole(ratingAdminRole, admin, { from: admin });
+    await chessTimelock.renounceRole(timelockAdminRole, admin, { from: admin });
+
+    console.log("  Governance handoff complete; deployer privileges removed.");
+  } else {
+    console.log("  Governance handoff skipped for this network.");
+  }
 
   // =========================================
   // PHASE 8: Verification & Summary
@@ -312,7 +356,7 @@ module.exports = async function (deployer, network, accounts) {
 /**
  * Get network-specific configuration
  */
-function getNetworkConfig(network) {
+function getNetworkConfig(network, accounts) {
   const configs = {
     // Local development
     development: {
@@ -333,6 +377,20 @@ function getNetworkConfig(network) {
       teamWallet: process.env.TEAM_WALLET || null,
       treasury: process.env.TREASURY_WALLET || null,
       initialChessPrice: web3.utils.toWei("0.0001", "ether"),
+    },
+
+    // Base Sepolia testnet
+    base_sepolia: {
+      teamWallet: process.env.TEAM_WALLET || null,
+      treasury: process.env.TREASURY_WALLET || null,
+      initialChessPrice: web3.utils.toWei("0.0001", "ether"),
+    },
+
+    // Base mainnet
+    base: {
+      teamWallet: process.env.TEAM_WALLET,
+      treasury: process.env.TREASURY_WALLET,
+      initialChessPrice: web3.utils.toWei("0.001", "ether"),
     },
 
     // Mainnet
@@ -359,14 +417,49 @@ function getNetworkConfig(network) {
 
   const config = configs[network] || configs.development;
 
-  // For development, use test accounts if not specified
-  if (!config.teamWallet) {
-    config.teamWallet = web3.eth.accounts.create().address;
-    console.log(`  Generated teamWallet: ${config.teamWallet}`);
+  const productionNetworks = ["mainnet", "base", "arbitrum", "optimism"];
+  config.handoffGovernance = productionNetworks.includes(network) || process.env.GOVERNANCE_HANDOFF === "true";
+
+  const isDevelopment = network === "development" || network === "test";
+  if (!config.teamWallet || !config.treasury) {
+    if (!isDevelopment) {
+      throw new Error("TEAM_WALLET and TREASURY_WALLET must be configured for public networks");
+    }
+
+    config.teamWallet = config.teamWallet || accounts[1] || accounts[0];
+    config.treasury = config.treasury || accounts[2] || accounts[0];
   }
-  if (!config.treasury) {
-    config.treasury = web3.eth.accounts.create().address;
-    console.log(`  Generated treasury: ${config.treasury}`);
+
+  config.faucetSigner = process.env.FAUCET_SIGNER || (isDevelopment ? accounts[0] : null);
+  if (!config.faucetSigner) {
+    throw new Error("FAUCET_SIGNER must be configured for public networks");
+  }
+
+  config.oracleUpdater = process.env.ORACLE_UPDATER || (isDevelopment ? accounts[0] : null);
+  if (!config.oracleUpdater) {
+    throw new Error("ORACLE_UPDATER must be configured for public networks");
+  }
+
+  const configuredAddresses = {
+    TEAM_WALLET: config.teamWallet,
+    TREASURY_WALLET: config.treasury,
+    FAUCET_SIGNER: config.faucetSigner,
+    ORACLE_UPDATER: config.oracleUpdater
+  };
+  for (const [label, address] of Object.entries(configuredAddresses)) {
+    if (!web3.utils.isAddress(address) || address === "0x0000000000000000000000000000000000000000") {
+      throw new Error(`${label} must be a valid non-zero address`);
+    }
+  }
+
+  if (config.handoffGovernance) {
+    const deployerAddress = accounts[0].toLowerCase();
+    if (config.faucetSigner.toLowerCase() === deployerAddress) {
+      throw new Error("FAUCET_SIGNER must differ from the deployer when governance handoff is enabled");
+    }
+    if (config.oracleUpdater.toLowerCase() === deployerAddress) {
+      throw new Error("ORACLE_UPDATER must differ from the deployer when governance handoff is enabled");
+    }
   }
 
   return config;

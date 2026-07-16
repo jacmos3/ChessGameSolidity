@@ -85,10 +85,21 @@ contract ChessRulesEngine {
         int8 player = (piece > 0) ? PLAYER_WHITE : PLAYER_BLACK;
         uint8 kingX = (_abs(piece) == uint8(KING)) ? endX : (player == PLAYER_WHITE ? whiteKingRow : blackKingRow);
         uint8 kingY = (_abs(piece) == uint8(KING)) ? endY : (player == PLAYER_WHITE ? whiteKingCol : blackKingCol);
+        uint8 clearedRow = BOARD_SIZE;
+        uint8 clearedCol = BOARD_SIZE;
+
+        // En passant removes a pawn from a square other than the move destination.
+        if (_abs(piece) == uint8(PAWN) && startY != endY && board[endX][endY] == EMPTY) {
+            clearedRow = startX;
+            clearedCol = endY;
+        }
 
         for (uint8 row = 0; row < BOARD_SIZE; row++) {
             for (uint8 col = 0; col < BOARD_SIZE; col++) {
-                if (row == endX && col == endY) {
+                if (
+                    (row == endX && col == endY) ||
+                    (row == clearedRow && col == clearedCol)
+                ) {
                     continue;
                 }
 
@@ -97,7 +108,20 @@ contract ChessRulesEngine {
                     continue;
                 }
 
-                if (_canAttack(board, row, col, boardPiece, kingX, kingY, startX, startY, endX, endY)) {
+                if (_canAttack(
+                    board,
+                    row,
+                    col,
+                    boardPiece,
+                    kingX,
+                    kingY,
+                    startX,
+                    startY,
+                    endX,
+                    endY,
+                    clearedRow,
+                    clearedCol
+                )) {
                     return true;
                 }
             }
@@ -118,8 +142,8 @@ contract ChessRulesEngine {
         int8 enPassantCol,
         uint8 enPassantRow,
         uint8 castlingFlags,
-        uint8 endX,
-        uint8 endY
+        uint8,
+        uint8
     ) external pure returns (bool isCheck, bool isMate, uint8 newState) {
         if (tournamentMode && leavesKingInCheck) {
             return (false, true, moverIsWhite ? STATE_BLACK_WINS : STATE_WHITE_WINS);
@@ -135,9 +159,7 @@ contract ChessRulesEngine {
                 blackKingCol,
                 enPassantCol,
                 enPassantRow,
-                castlingFlags,
-                endX,
-                endY
+                castlingFlags
             );
             return (!isMate, isMate, isMate ? STATE_WHITE_WINS : STATE_IN_PROGRESS);
         }
@@ -152,9 +174,7 @@ contract ChessRulesEngine {
                 blackKingCol,
                 enPassantCol,
                 enPassantRow,
-                castlingFlags,
-                endX,
-                endY
+                castlingFlags
             );
             return (!isMate, isMate, isMate ? STATE_BLACK_WINS : STATE_IN_PROGRESS);
         }
@@ -213,19 +233,23 @@ contract ChessRulesEngine {
             if (piece == KING) {
                 if (startX == ROW_WHITE_PIECES && startY == COL_KING && !_hasFlag(castlingFlags, FLAG_WHITE_KING_MOVED)) {
                     if (_abs(board[startX][COL_LONGW_SHORTB_ROOK]) == uint8(ROOK) && endY == COL_KNIGHT && !_hasFlag(castlingFlags, FLAG_WHITE_LONG_ROOK_MOVED)) {
-                        return _isCastlingPathClear(board, startX, startY, endY);
+                        return board[startX][COL_LONGW_SHORTB_ROOK] == ROOK &&
+                            _isCastlingPathSafe(board, piece, startX, startY, endY);
                     }
                     if (_abs(board[startX][COL_SHORTW_LONGB_ROOK]) == uint8(ROOK) && endY == COL_BISHOP && !_hasFlag(castlingFlags, FLAG_WHITE_SHORT_ROOK_MOVED)) {
-                        return _isCastlingPathClear(board, startX, startY, endY);
+                        return board[startX][COL_SHORTW_LONGB_ROOK] == ROOK &&
+                            _isCastlingPathSafe(board, piece, startX, startY, endY);
                     }
                 }
             } else {
                 if (startX == ROW_BLACK_PIECES && startY == COL_KING && !_hasFlag(castlingFlags, FLAG_BLACK_KING_MOVED)) {
                     if (_abs(board[startX][COL_LONGW_SHORTB_ROOK]) == uint8(ROOK) && endY == COL_KNIGHT && !_hasFlag(castlingFlags, FLAG_BLACK_LONG_ROOK_MOVED)) {
-                        return _isCastlingPathClear(board, startX, startY, endY);
+                        return board[startX][COL_LONGW_SHORTB_ROOK] == -ROOK &&
+                            _isCastlingPathSafe(board, piece, startX, startY, endY);
                     }
                     if (_abs(board[startX][COL_SHORTW_LONGB_ROOK]) == uint8(ROOK) && endY == COL_BISHOP && !_hasFlag(castlingFlags, FLAG_BLACK_SHORT_ROOK_MOVED)) {
-                        return _isCastlingPathClear(board, startX, startY, endY);
+                        return board[startX][COL_SHORTW_LONGB_ROOK] == -ROOK &&
+                            _isCastlingPathSafe(board, piece, startX, startY, endY);
                     }
                 }
             }
@@ -238,7 +262,7 @@ contract ChessRulesEngine {
 
         uint8 absPiece = _abs(piece);
         if (absPiece == uint8(PAWN)) {
-            return _isPawnMoveValid(enPassantCol, enPassantRow, startX, startY, endX, endY, piece, target);
+            return _isPawnMoveValid(board, enPassantCol, enPassantRow, startX, startY, endX, endY, piece, target);
         }
         if (absPiece == uint8(KNIGHT)) {
             return _isKnightMoveValid(piece, target, startX, startY, endX, endY);
@@ -260,6 +284,7 @@ contract ChessRulesEngine {
     }
 
     function _isPawnMoveValid(
+        int8[8][8] memory board,
         int8 enPassantCol,
         uint8 enPassantRow,
         uint8 startX,
@@ -271,11 +296,25 @@ contract ChessRulesEngine {
     ) internal pure returns (bool) {
         if (startY == endY && target == EMPTY) {
             if (piece == -PAWN) {
-                if (endX == startX + 1 || (startX == ROW_BLACK_PAWNS && endX == ROW_BLACK_PAWNS_LONG_OPENING)) {
+                if (endX == startX + 1) {
+                    return true;
+                }
+                if (
+                    startX == ROW_BLACK_PAWNS &&
+                    endX == ROW_BLACK_PAWNS_LONG_OPENING &&
+                    board[startX + 1][startY] == EMPTY
+                ) {
                     return true;
                 }
             } else {
-                if (endX == startX - 1 || (startX == ROW_WHITE_PAWNS && endX == ROW_WHITE_PAWNS_LONG_OPENING)) {
+                if (endX == startX - 1) {
+                    return true;
+                }
+                if (
+                    startX == ROW_WHITE_PAWNS &&
+                    endX == ROW_WHITE_PAWNS_LONG_OPENING &&
+                    board[startX - 1][startY] == EMPTY
+                ) {
                     return true;
                 }
             }
@@ -403,6 +442,26 @@ contract ChessRulesEngine {
         return board[row][destCol] == EMPTY;
     }
 
+    function _isCastlingPathSafe(
+        int8[8][8] memory board,
+        int8 kingPiece,
+        uint8 row,
+        uint8 kingCol,
+        uint8 destCol
+    ) internal pure returns (bool) {
+        if (!_isCastlingPathClear(board, row, kingCol, destCol)) {
+            return false;
+        }
+
+        int8 player = kingPiece > 0 ? PLAYER_WHITE : PLAYER_BLACK;
+        uint8 transitCol = destCol > kingCol ? kingCol + 1 : kingCol - 1;
+
+        return
+            !_isSquareUnderAttackAfterKingMove(board, player, row, kingCol, row, kingCol) &&
+            !_isSquareUnderAttackAfterKingMove(board, player, row, transitCol, row, kingCol) &&
+            !_isSquareUnderAttackAfterKingMove(board, player, row, destCol, row, kingCol);
+    }
+
     function _isPathClear(
         int8[8][8] memory board,
         uint8 startX,
@@ -458,76 +517,19 @@ contract ChessRulesEngine {
         uint8 blackKingCol,
         int8 enPassantCol,
         uint8 enPassantRow,
-        uint8 castlingFlags,
-        uint8 attackerI,
-        uint8 attackerJ
+        uint8 castlingFlags
     ) internal pure returns (bool) {
-        if (_canKingMove(board, player, whiteKingRow, whiteKingCol, blackKingRow, blackKingCol)) {
-            return false;
-        }
-
-        if (_canCaptureAttacker(board, player, enPassantCol, enPassantRow, castlingFlags, attackerI, attackerJ)) {
-            return false;
-        }
-
-        if (_canBlockAttack(board, whiteKingRow, whiteKingCol, blackKingRow, blackKingCol, enPassantCol, enPassantRow, castlingFlags, attackerI, attackerJ)) {
-            return false;
-        }
-
-        return true;
-    }
-
-    function _canKingMove(
-        int8[8][8] memory board,
-        int8 player,
-        uint8 whiteKingRow,
-        uint8 whiteKingCol,
-        uint8 blackKingRow,
-        uint8 blackKingCol
-    ) internal pure returns (bool) {
-        uint8 kingX = (player == PLAYER_WHITE) ? whiteKingRow : blackKingRow;
-        uint8 kingY = (player == PLAYER_WHITE) ? whiteKingCol : blackKingCol;
-
-        for (int8 i = -1; i <= 1; i++) {
-            for (int8 j = -1; j <= 1; j++) {
-                if (i == 0 && j == 0) {
-                    continue;
-                }
-
-                if (_isKingMoveEscape(board, player, kingX, kingY, i, j)) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
-    function _isKingMoveEscape(
-        int8[8][8] memory board,
-        int8 player,
-        uint8 kingX,
-        uint8 kingY,
-        int8 di,
-        int8 dj
-    ) internal pure returns (bool) {
-        int8 x = int8(kingX) + di;
-        int8 y = int8(kingY) + dj;
-
-        if (x < 0 || x >= int8(BOARD_SIZE) || y < 0 || y >= int8(BOARD_SIZE)) {
-            return false;
-        }
-
-        uint8 newX = uint8(x);
-        uint8 newY = uint8(y);
-        int8 targetPiece = board[newX][newY];
-        int8 kingPiece = board[kingX][kingY];
-
-        if (targetPiece != EMPTY && targetPiece * kingPiece > 0) {
-            return false;
-        }
-
-        return !_isSquareUnderAttackAfterKingMove(board, player, newX, newY, kingX, kingY);
+        return !_hasAnyLegalMove(
+            board,
+            player,
+            whiteKingRow,
+            whiteKingCol,
+            blackKingRow,
+            blackKingCol,
+            enPassantCol,
+            enPassantRow,
+            castlingFlags
+        );
     }
 
     function _isSquareUnderAttackAfterKingMove(
@@ -646,6 +648,30 @@ contract ChessRulesEngine {
             return false;
         }
 
+        return !_hasAnyLegalMove(
+            board,
+            player,
+            whiteKingRow,
+            whiteKingCol,
+            blackKingRow,
+            blackKingCol,
+            enPassantCol,
+            enPassantRow,
+            castlingFlags
+        );
+    }
+
+    function _hasAnyLegalMove(
+        int8[8][8] memory board,
+        int8 player,
+        uint8 whiteKingRow,
+        uint8 whiteKingCol,
+        uint8 blackKingRow,
+        uint8 blackKingCol,
+        int8 enPassantCol,
+        uint8 enPassantRow,
+        uint8 castlingFlags
+    ) internal pure returns (bool) {
         for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
             for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
                 if (board[rowPiece][colPiece] * player <= 0) {
@@ -658,14 +684,6 @@ contract ChessRulesEngine {
                             continue;
                         }
                         if (_isValidMoveView(board, enPassantCol, enPassantRow, castlingFlags, rowPiece, colPiece, rowTarget, colTarget)) {
-                            int8 piece = board[rowPiece][colPiece];
-                            if (_abs(piece) == uint8(KING)) {
-                                if (!_isSquareUnderAttackAfterKingMove(board, player, rowTarget, colTarget, rowPiece, colPiece)) {
-                                    return false;
-                                }
-                                continue;
-                            }
-
                             if (
                                 !_wouldMoveLeaveKingInCheck(
                                     board,
@@ -679,86 +697,12 @@ contract ChessRulesEngine {
                                     colTarget
                                 )
                             ) {
-                                return false;
+                                return true;
                             }
                         }
                     }
                 }
             }
-        }
-
-        return true;
-    }
-
-    function _canCaptureAttacker(
-        int8[8][8] memory board,
-        int8 player,
-        int8 enPassantCol,
-        uint8 enPassantRow,
-        uint8 castlingFlags,
-        uint8 rowAttacker,
-        uint8 colAttacker
-    ) internal pure returns (bool) {
-        for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
-            for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
-                int8 piece = board[rowPiece][colPiece];
-                if (piece == EMPTY || piece * player < 0 || (rowPiece == rowAttacker && colPiece == colAttacker)) {
-                    continue;
-                }
-
-                if (_isValidMoveView(board, enPassantCol, enPassantRow, castlingFlags, rowPiece, colPiece, rowAttacker, colAttacker)) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
-    function _canBlockAttack(
-        int8[8][8] memory board,
-        uint8 whiteKingRow,
-        uint8 whiteKingCol,
-        uint8 blackKingRow,
-        uint8 blackKingCol,
-        int8 enPassantCol,
-        uint8 enPassantRow,
-        uint8 castlingFlags,
-        uint8 rowAttacker,
-        uint8 colAttacker
-    ) internal pure returns (bool) {
-        int8 attackerPiece = board[rowAttacker][colAttacker];
-        int8 defendingPlayer = (attackerPiece > 0) ? PLAYER_BLACK : PLAYER_WHITE;
-        uint8 kingRow = (defendingPlayer == PLAYER_WHITE) ? whiteKingRow : blackKingRow;
-        uint8 kingCol = (defendingPlayer == PLAYER_WHITE) ? whiteKingCol : blackKingCol;
-
-        if (_abs(attackerPiece) == uint8(KNIGHT)) {
-            return false;
-        }
-
-        int8 deltaRow = int8(kingRow) - int8(rowAttacker);
-        int8 deltaCol = int8(kingCol) - int8(colAttacker);
-        int8 stepRow = (deltaRow == 0) ? int8(0) : (deltaRow > 0 ? int8(1) : int8(-1));
-        int8 stepCol = (deltaCol == 0) ? int8(0) : (deltaCol > 0 ? int8(1) : int8(-1));
-        uint8 blockRow = uint8(int8(rowAttacker) + stepRow);
-        uint8 blockCol = uint8(int8(colAttacker) + stepCol);
-
-        while (blockRow != kingRow || blockCol != kingCol) {
-            for (uint8 pieceRow = 0; pieceRow < BOARD_SIZE; pieceRow++) {
-                for (uint8 pieceCol = 0; pieceCol < BOARD_SIZE; pieceCol++) {
-                    int8 piece = board[pieceRow][pieceCol];
-                    if (piece == EMPTY || piece * defendingPlayer <= 0 || _abs(piece) == uint8(KING)) {
-                        continue;
-                    }
-
-                    if (_isValidMoveView(board, enPassantCol, enPassantRow, castlingFlags, pieceRow, pieceCol, blockRow, blockCol)) {
-                        return true;
-                    }
-                }
-            }
-
-            blockRow = uint8(int8(blockRow) + stepRow);
-            blockCol = uint8(int8(blockCol) + stepCol);
         }
 
         return false;
@@ -774,7 +718,9 @@ contract ChessRulesEngine {
         uint8 fromRow,
         uint8 fromCol,
         uint8 toRow,
-        uint8 toCol
+        uint8 toCol,
+        uint8 clearedRow,
+        uint8 clearedCol
     ) internal pure returns (bool) {
         uint8 absPiece = _abs(attackerPiece);
         if (absPiece == uint8(PAWN)) {
@@ -815,7 +761,10 @@ contract ChessRulesEngine {
         uint8 checkCol = uint8(int8(attackerCol) + stepCol);
 
         while (checkRow != kingRow || checkCol != kingCol) {
-            if (!(checkRow == fromRow && checkCol == fromCol)) {
+            if (
+                !(checkRow == fromRow && checkCol == fromCol) &&
+                !(checkRow == clearedRow && checkCol == clearedCol)
+            ) {
                 if ((checkRow == toRow && checkCol == toCol) || board[checkRow][checkCol] != EMPTY) {
                     return false;
                 }

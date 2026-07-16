@@ -52,6 +52,8 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
     }
 
     mapping(address => Arbitrator) public arbitrators;
+    mapping(address => uint256) public activeAssignments;
+    mapping(uint256 => mapping(address => bool)) public disputeAssignments;
 
     // Tier pools for random selection
     address[] public tier1Arbitrators;
@@ -76,9 +78,10 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
     event ReputationUpdated(address indexed arbitrator, uint256 oldRep, uint256 newRep);
     event ArbitratorRemoved(address indexed arbitrator, string reason);
     event ArbitratorSelected(uint256 indexed disputeId, address indexed arbitrator);
+    event ArbitratorAssignmentReleased(uint256 indexed disputeId, address indexed arbitrator);
 
     constructor(address _chessToken) {
-        require(_chessToken != address(0), "Invalid token");
+        require(_chessToken.code.length > 0, "Token must be contract");
         chessToken = ChessToken(_chessToken);
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
     }
@@ -88,15 +91,16 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
      * @param amount Amount of CHESS to stake
      */
     function stake(uint256 amount) external nonReentrant {
-        require(amount >= TIER1_MIN, "Minimum stake not met");
-
         Arbitrator storage arb = arbitrators[msg.sender];
+        bool wasActive = arb.isActive;
+        require(amount > 0, "Amount must be > 0");
+        require(wasActive || arb.stakedAmount + amount >= TIER1_MIN, "Minimum stake not met");
 
         // Transfer tokens
         require(chessToken.transferFrom(msg.sender, address(this), amount), "Transfer failed");
 
-        if (!arb.isActive) {
-            // New arbitrator
+        if (!wasActive) {
+            // New or reactivated arbitrator
             arb.stakedAt = block.timestamp;
             arb.votingPowerActiveAt = block.timestamp + VOTING_POWER_DELAY;
             arb.reputation = INITIAL_REPUTATION;
@@ -111,10 +115,10 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
         uint8 newTier = _getTier(arb.stakedAmount);
 
         // Update tier pools
-        if (oldTier != newTier) {
-            _removeFromTierPool(msg.sender, oldTier);
+        if (!wasActive) {
             _addToTierPool(msg.sender, newTier);
-        } else if (oldTier == 0 && newTier > 0) {
+        } else if (oldTier != newTier) {
+            _removeFromTierPool(msg.sender, oldTier);
             _addToTierPool(msg.sender, newTier);
         }
 
@@ -127,8 +131,11 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
      */
     function unstake(uint256 amount) external nonReentrant {
         Arbitrator storage arb = arbitrators[msg.sender];
-        require(arb.isActive, "Not an arbitrator");
+        bool wasActive = arb.isActive;
+        require(amount > 0, "Amount must be > 0");
+        require(arb.stakedAmount > 0, "No stake");
         require(amount <= arb.stakedAmount, "Insufficient stake");
+        require(activeAssignments[msg.sender] == 0, "Assigned to active dispute");
 
         // Check if in cooldown (can't unstake during active disputes)
         require(block.timestamp >= arb.lastVoteTime + VOTE_COOLDOWN, "In cooldown");
@@ -141,13 +148,13 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
         // Update tier pools
         if (oldTier != newTier) {
             _removeFromTierPool(msg.sender, oldTier);
-            if (newTier > 0) {
+            if (wasActive && newTier > 0) {
                 _addToTierPool(msg.sender, newTier);
             }
         }
 
         // If stake falls below minimum, deactivate
-        if (arb.stakedAmount < TIER1_MIN) {
+        if (wasActive && arb.stakedAmount < TIER1_MIN) {
             arb.isActive = false;
             totalArbitrators--;
             emit ArbitratorRemoved(msg.sender, "Stake below minimum");
@@ -218,6 +225,27 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
         }
 
         return selected;
+    }
+
+    /**
+     * @notice Release the stake lock for a dispute panel
+     * @param disputeId Dispute identifier used when the panel was selected
+     * @param panel Arbitrators whose assignment has ended
+     */
+    function releaseArbitrators(uint256 disputeId, address[] calldata panel)
+        external
+        onlyRole(DISPUTE_MANAGER_ROLE)
+    {
+        for (uint256 i = 0; i < panel.length;) {
+            address arbitrator = panel[i];
+            require(disputeAssignments[disputeId][arbitrator], "Assignment not found");
+
+            delete disputeAssignments[disputeId][arbitrator];
+            activeAssignments[arbitrator]--;
+            emit ArbitratorAssignmentReleased(disputeId, arbitrator);
+
+            unchecked { ++i; }
+        }
     }
 
     /**
@@ -402,9 +430,12 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
 
             if (shouldExclude(candidate, player1, player2)) continue;
             if (!canVote(candidate)) continue;
+            if (disputeAssignments[disputeId][candidate]) continue;
             if (_isAlreadySelected(selected, startIndex + selectedFromTier, candidate)) continue;
 
             selected[startIndex + selectedFromTier] = candidate;
+            disputeAssignments[disputeId][candidate] = true;
+            activeAssignments[candidate]++;
             selectedFromTier++;
             emit ArbitratorSelected(disputeId, candidate);
         }

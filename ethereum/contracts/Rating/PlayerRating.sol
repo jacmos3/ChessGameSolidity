@@ -74,6 +74,7 @@ contract PlayerRating is AccessControl {
 
     /// @notice Set the ChessFactory address (allows game contracts to report)
     function setChessFactory(address _chessFactory) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_chessFactory == address(0) || _chessFactory.code.length > 0, "Factory must be contract");
         chessFactory = _chessFactory;
     }
 
@@ -87,7 +88,7 @@ contract PlayerRating is AccessControl {
     /// @param gameContract Address of the deployed game contract
     function registerGameContract(address gameContract) external {
         require(msg.sender == chessFactory, "Only factory");
-        require(gameContract != address(0), "Invalid address");
+        require(gameContract.code.length > 0, "Game must be contract");
         validGameContracts[gameContract] = true;
     }
 

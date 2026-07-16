@@ -90,8 +90,10 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
     mapping(uint256 => address) public gameWhitePlayer; // gameId => white player
     mapping(uint256 => address) public gameBlackPlayer; // gameId => black player
     mapping(address => uint256) public activeChallenges; // challenger => count
+    mapping(uint256 => uint256) public disputeDeposits; // disputeId => reserved challenge deposit
 
     uint256 public disputeCounter;
+    uint256 public totalEscrowedDeposits;
     uint256 public constant MAX_ACTIVE_CHALLENGES = 3;
     uint256 public constant MAX_DISPUTE_DURATION = 30 days;
     uint256 private constant PERCENTAGE_BASE = 100;
@@ -109,15 +111,17 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
     event RewardDistributed(uint256 indexed disputeId, address indexed recipient, uint256 amount);
     event ChessFactoryUpdated(address indexed previousFactory, address indexed newFactory);
     event GameContractAuthorized(address indexed gameContract);
+    event ChallengeDepositReserved(uint256 indexed disputeId, uint256 amount);
+    event ChallengeDepositReleased(uint256 indexed disputeId, uint256 amount);
 
     constructor(
         address _chessToken,
         address _bondingManager,
         address _arbitratorRegistry
     ) {
-        require(_chessToken != address(0), "Invalid token");
-        require(_bondingManager != address(0), "Invalid bonding manager");
-        require(_arbitratorRegistry != address(0), "Invalid arbitrator registry");
+        require(_chessToken.code.length > 0, "Token must be contract");
+        require(_bondingManager.code.length > 0, "Bonding manager must be contract");
+        require(_arbitratorRegistry.code.length > 0, "Registry must be contract");
 
         chessToken = ChessToken(_chessToken);
         bondingManager = BondingManager(payable(_bondingManager));
@@ -131,6 +135,7 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
      * @param _chessFactory Address of the ChessFactory
      */
     function setChessFactory(address _chessFactory) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_chessFactory == address(0) || _chessFactory.code.length > 0, "Factory must be contract");
         emit ChessFactoryUpdated(chessFactory, _chessFactory);
         chessFactory = _chessFactory;
     }
@@ -141,7 +146,7 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
      */
     function authorizeGameContract(address gameContract) external {
         require(msg.sender == chessFactory, "Only factory");
-        require(gameContract != address(0), "Invalid game contract");
+        require(gameContract.code.length > 0, "Game must be contract");
 
         _grantRole(GAME_MANAGER_ROLE, gameContract);
         emit GameContractAuthorized(gameContract);
@@ -221,7 +226,11 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         );
 
         // Transfer challenge deposit (using SafeERC20)
-        chessToken.safeTransferFrom(msg.sender, address(this), challengeDeposit);
+        uint256 depositAmount = challengeDeposit;
+        chessToken.safeTransferFrom(msg.sender, address(this), depositAmount);
+        disputeDeposits[disputeId] = depositAmount;
+        totalEscrowedDeposits += depositAmount;
+        emit ChallengeDepositReserved(disputeId, depositAmount);
 
         dispute.challenger = msg.sender;
         dispute.accusedPlayer = accusedPlayer;
@@ -256,6 +265,7 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         require(dispute.state == DisputeState.Challenged, "Not in commit phase");
         require(block.timestamp <= dispute.commitDeadline, "Commit period ended");
         require(_isSelectedArbitrator(disputeId, msg.sender), "Not selected arbitrator");
+        require(commitHash != bytes32(0), "Invalid commit");
         require(votes[disputeId][msg.sender].commitHash == bytes32(0), "Already committed");
 
         votes[disputeId][msg.sender].commitHash = commitHash;
@@ -312,6 +322,7 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
      * @param disputeId Dispute identifier
      */
     function resolveDispute(uint256 disputeId) external nonReentrant {
+        require(disputeId > 0 && disputeId <= disputeCounter, "Dispute not found");
         Dispute storage dispute = disputes[disputeId];
         require(!dispute.resolved, "Already resolved");
 
@@ -319,9 +330,12 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         if (block.timestamp > dispute.registeredAt + MAX_DISPUTE_DURATION) {
             dispute.resolved = true;
             dispute.state = DisputeState.Resolved;
-            // Return challenger deposit without penalty - timeout not their fault
-            chessToken.safeTransfer(dispute.challenger, challengeDeposit);
-            activeChallenges[dispute.challenger]--;
+            if (dispute.challenger != address(0)) {
+                _releaseRoundPanel(disputeId);
+                // Return challenger deposit without penalty - timeout not their fault
+                _refundChallengeDeposit(disputeId);
+                activeChallenges[dispute.challenger]--;
+            }
             emit DisputeResolved(disputeId, Vote.None, 0, 0);
             return;
         }
@@ -367,6 +381,7 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
 
         // Update arbitrator reputations
         _updateArbitratorReputations(disputeId);
+        _releaseRoundPanel(disputeId);
 
         emit DisputeResolved(disputeId, dispute.finalDecision, dispute.legitVotes, dispute.cheatVotes);
     }
@@ -435,45 +450,56 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         // Slash cheater's bond (burned)
         bondingManager.slashBond(dispute.gameId, dispute.accusedPlayer);
 
-        // Return challenge deposit + reward to challenger (using SafeERC20)
-        uint256 challengerReward = challengeDeposit + (challengeDeposit / 2); // 150% back
+        uint256 depositAmount = _consumeChallengeDeposit(disputeId);
         uint256 balance = chessToken.balanceOf(address(this));
-        if (balance >= challengerReward) {
-            chessToken.safeTransfer(dispute.challenger, challengerReward);
-            emit RewardDistributed(disputeId, dispute.challenger, challengerReward);
-        } else if (balance > 0) {
-            // Transfer whatever is available
-            chessToken.safeTransfer(dispute.challenger, balance);
-            emit RewardDistributed(disputeId, dispute.challenger, balance);
-        }
+        uint256 unreservedBalance = balance - totalEscrowedDeposits;
+        require(unreservedBalance >= depositAmount, "Escrow invariant violated");
+
+        // The deposit is always returned. The optional 50% bonus can only use
+        // explicitly pre-funded, unreserved tokens.
+        uint256 availableBonus = unreservedBalance - depositAmount;
+        uint256 maxBonus = depositAmount / 2;
+        uint256 bonus = availableBonus < maxBonus ? availableBonus : maxBonus;
+        uint256 challengerReward = depositAmount + bonus;
+
+        chessToken.safeTransfer(dispute.challenger, challengerReward);
+        emit RewardDistributed(disputeId, dispute.challenger, challengerReward);
     }
 
     function _handleLegitDecision(uint256 disputeId) internal {
         Dispute storage dispute = disputes[disputeId];
 
+        uint256 depositAmount = _consumeChallengeDeposit(disputeId);
+
         // Challenger loses deposit
         // 50% to accused (compensation) - using SafeERC20
-        uint256 accusedCompensation = challengeDeposit / 2;
+        uint256 accusedCompensation = depositAmount / 2;
         chessToken.safeTransfer(dispute.accusedPlayer, accusedCompensation);
         emit RewardDistributed(disputeId, dispute.accusedPlayer, accusedCompensation);
 
         // 50% burned (deflationary)
-        uint256 remaining = challengeDeposit - accusedCompensation;
+        uint256 remaining = depositAmount - accusedCompensation;
         chessToken.burn(remaining);
     }
 
     function _escalate(uint256 disputeId) internal {
         Dispute storage dispute = disputes[disputeId];
+        _penalizeNonReveals(disputeId);
         dispute.escalationLevel++;
 
         if (dispute.escalationLevel >= 3) {
             // Max escalation reached - return deposits, no penalty (using SafeERC20)
             dispute.resolved = true;
             dispute.state = DisputeState.Resolved;
-            chessToken.safeTransfer(dispute.challenger, challengeDeposit);
+            _releaseRoundPanel(disputeId);
+            _refundChallengeDeposit(disputeId);
             activeChallenges[dispute.challenger]--;
+            emit DisputeResolved(disputeId, Vote.None, dispute.legitVotes, dispute.cheatVotes);
             return;
         }
+
+        _clearRoundVotes(disputeId);
+        _releaseRoundPanel(disputeId);
 
         // Reset for new round with more arbitrators
         dispute.state = DisputeState.Challenged;
@@ -495,6 +521,45 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         dispute.requiredQuorum = _calculateRequiredQuorum(newArbitrators.length);
 
         emit DisputeEscalated(disputeId, dispute.escalationLevel);
+    }
+
+    function _consumeChallengeDeposit(uint256 disputeId) internal returns (uint256 amount) {
+        amount = disputeDeposits[disputeId];
+        require(amount > 0, "No reserved deposit");
+
+        delete disputeDeposits[disputeId];
+        totalEscrowedDeposits -= amount;
+        emit ChallengeDepositReleased(disputeId, amount);
+    }
+
+    function _refundChallengeDeposit(uint256 disputeId) internal {
+        uint256 amount = _consumeChallengeDeposit(disputeId);
+        chessToken.safeTransfer(disputes[disputeId].challenger, amount);
+    }
+
+    function _clearRoundVotes(uint256 disputeId) internal {
+        address[] storage selected = disputes[disputeId].selectedArbitrators;
+        for (uint256 i = 0; i < selected.length;) {
+            delete votes[disputeId][selected[i]];
+            unchecked { ++i; }
+        }
+    }
+
+    function _penalizeNonReveals(uint256 disputeId) internal {
+        address[] storage selected = disputes[disputeId].selectedArbitrators;
+        for (uint256 i = 0; i < selected.length;) {
+            if (!votes[disputeId][selected[i]].revealed) {
+                arbitratorRegistry.updateReputation(selected[i], false);
+            }
+            unchecked { ++i; }
+        }
+    }
+
+    function _releaseRoundPanel(uint256 disputeId) internal {
+        address[] storage selected = disputes[disputeId].selectedArbitrators;
+        if (selected.length > 0) {
+            arbitratorRegistry.releaseArbitrators(disputeId, selected);
+        }
     }
 
     function _calculateRequiredQuorum(uint256 selectedCount) internal view returns (uint256) {

@@ -23,6 +23,7 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
 
     bytes32 public constant GAME_MANAGER_ROLE = keccak256("GAME_MANAGER_ROLE");
     bytes32 public constant DISPUTE_MANAGER_ROLE = keccak256("DISPUTE_MANAGER_ROLE");
+    bytes32 public constant ORACLE_ROLE = keccak256("ORACLE_ROLE");
 
     ChessToken public immutable chessToken;
 
@@ -83,7 +84,7 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
     event GameContractAuthorized(address indexed gameContract);
 
     constructor(address _chessToken, uint256 _initialPrice) {
-        require(_chessToken != address(0), "Invalid token address");
+        require(_chessToken.code.length > 0, "Token must be contract");
         require(_initialPrice > 0, "Invalid price");
 
         chessToken = ChessToken(_chessToken);
@@ -92,6 +93,7 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
         priceLastUpdated = block.timestamp;
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(ORACLE_ROLE, msg.sender);
     }
 
     /**
@@ -99,6 +101,7 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
      * @param _chessFactory Address of the ChessFactory
      */
     function setChessFactory(address _chessFactory) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_chessFactory == address(0) || _chessFactory.code.length > 0, "Factory must be contract");
         emit ChessFactoryUpdated(chessFactory, _chessFactory);
         chessFactory = _chessFactory;
     }
@@ -109,7 +112,7 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
      */
     function authorizeGameContract(address gameContract) external {
         require(msg.sender == chessFactory, "Only factory");
-        require(gameContract != address(0), "Invalid game contract");
+        require(gameContract.code.length > 0, "Game must be contract");
 
         _grantRole(GAME_MANAGER_ROLE, gameContract);
         emit GameContractAuthorized(gameContract);
@@ -175,6 +178,7 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
     function calculateRequiredBond(uint256 stake) public view returns (uint256 chessRequired, uint256 ethRequired) {
         // Ensure price is above minimum floor to prevent manipulation
         require(chessEthPrice >= MIN_PRICE, "Price below minimum floor");
+        require(block.timestamp <= priceLastUpdated + TWAP_PERIOD, "Price is stale");
 
         ethRequired = stake * ethMultiplier;
 
@@ -224,6 +228,12 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
      * @param stake Game stake
      */
     function _lockBondForPlayer(uint256 gameId, address player, uint256 stake) internal {
+        require(player != address(0), "Invalid player");
+        require(stake > 0, "Invalid stake");
+
+        GameBond storage existingBond = gameBonds[gameId][player];
+        require(existingBond.player == address(0), "Bond already locked");
+
         (uint256 chessRequired, uint256 ethRequired) = calculateRequiredBond(stake);
 
         UserBond storage bond = bonds[player];
@@ -257,6 +267,7 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
         onlyRole(GAME_MANAGER_ROLE)
     {
         GameBond storage gameBond = gameBonds[gameId][player];
+        require(gameBond.player == player, "Bond not found");
         require(!gameBond.released && !gameBond.slashed, "Bond already processed");
 
         UserBond storage bond = bonds[player];
@@ -278,6 +289,7 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
         onlyRole(DISPUTE_MANAGER_ROLE)
     {
         GameBond storage gameBond = gameBonds[gameId][cheater];
+        require(gameBond.player == cheater, "Bond not found");
         require(!gameBond.released && !gameBond.slashed, "Bond already processed");
 
         UserBond storage bond = bonds[cheater];
@@ -312,7 +324,7 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
      * @notice Update TWAP price (simplified - in production use oracle)
      * @param newPrice New CHESS/ETH price
      */
-    function updatePrice(uint256 newPrice) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function updatePrice(uint256 newPrice) external onlyRole(ORACLE_ROLE) {
         require(newPrice >= MIN_PRICE, "Price below minimum floor");
 
         // Circuit breaker check
@@ -391,6 +403,7 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
      * @param treasury Treasury address
      */
     function withdrawSlashedEth(address treasury) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(treasury != address(0), "Invalid treasury");
         uint256 slashedEth = address(this).balance - totalEthBonded;
         require(slashedEth > 0, "No slashed ETH");
 

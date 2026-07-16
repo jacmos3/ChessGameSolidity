@@ -40,4 +40,41 @@ contract("ChessFactory", (accounts) => {
       assert.notEqual(game, "0x0000000000000000000000000000000000000000", "Contract address should not be zero");
     });
   });
+
+  it("should reject an EOA as ChessCore implementation", async () => {
+    let deploymentFailed = false;
+    try {
+      await ChessFactory.new(accounts[1]);
+    } catch (error) {
+      deploymentFailed = true;
+    }
+    assert.isTrue(deploymentFailed, "Factory deployment should reject an EOA implementation");
+
+    try {
+      await chessFactory.setImplementation(accounts[1], { from: accounts[0] });
+      assert.fail("Should have reverted");
+    } catch (error) {
+      assert.include(error.message, "revert");
+    }
+  });
+
+  it("should reject contract dependencies that point to EOAs", async () => {
+    for (const setter of ["setBondingManager", "setDisputeDAO", "setPlayerRating", "setRewardPool"]) {
+      try {
+        await chessFactory[setter](accounts[1], { from: accounts[0] });
+        assert.fail(`${setter} should have reverted`);
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+    }
+  });
+
+  it("should not enable disputes without a bonding manager", async () => {
+    try {
+      await chessFactory.setDisputeDAO(chessCoreImpl.address, { from: accounts[0] });
+      assert.fail("Should have reverted");
+    } catch (error) {
+      assert.include(error.message, "revert");
+    }
+  });
 });

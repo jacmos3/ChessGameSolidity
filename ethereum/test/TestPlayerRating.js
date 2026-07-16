@@ -273,10 +273,11 @@ contract("PlayerRating - ELO System", accounts => {
 
     describe("Admin Functions", () => {
         it("should allow admin to set chess factory", async () => {
-            const newFactory = accounts[9];
-            await rating.setChessFactory(newFactory, { from: admin });
+            const chessCoreImpl = await ChessCore.new({ from: admin });
+            const newFactory = await ChessFactory.new(chessCoreImpl.address, { from: admin });
+            await rating.setChessFactory(newFactory.address, { from: admin });
             const setFactory = await rating.chessFactory();
-            assert.equal(setFactory, newFactory, "Chess factory should be updated");
+            assert.equal(setFactory, newFactory.address, "Chess factory should be updated");
         });
 
         it("should not allow non-admin to set chess factory", async () => {

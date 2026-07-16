@@ -306,6 +306,32 @@ contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
       assert.equal(actualIncrease.toString(), expectedPrize.toString());
     });
 
+    it("should not finalize while an unprocessed bond cannot be released", async () => {
+      await chessCore.resign({ from: whitePlayer });
+      await advanceTime(CHALLENGE_WINDOW + 1);
+
+      const gameManagerRole = await bondingManager.GAME_MANAGER_ROLE();
+      await bondingManager.revokeRole(gameManagerRole, chessCore.address, { from: admin });
+
+      try {
+        await chessCore.claimPrize({ from: blackPlayer });
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+
+      assert.isTrue(await chessCore.bondsLocked(), "A failed release must remain retryable");
+
+      await bondingManager.grantRole(gameManagerRole, chessCore.address, { from: admin });
+      await chessCore.claimPrize({ from: blackPlayer });
+
+      const whiteGameBond = await bondingManager.gameBonds(gameId, whitePlayer);
+      const blackGameBond = await bondingManager.gameBonds(gameId, blackPlayer);
+      assert.isFalse(await chessCore.bondsLocked());
+      assert.isTrue(whiteGameBond.released);
+      assert.isTrue(blackGameBond.released);
+    });
+
     it("should mark game as registered for dispute", async () => {
       // Not registered before
       const registeredBefore = await chessCore.gameRegisteredForDispute();
@@ -427,6 +453,7 @@ contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
       );
 
       await advanceTime(7 * 24 * 60 * 60 + 1);
+      await bondingManager.updatePrice(initialPrice, { from: admin });
 
       await chessFactory.createChessGame(2, 0, {
         from: whitePlayer,
