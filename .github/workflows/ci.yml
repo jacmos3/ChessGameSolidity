@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ethereum/package-lock.json
+      - run: npm ci --ignore-scripts
+        working-directory: ethereum
+      - run: npm run test:ci
+        working-directory: ethereum
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            ethereum/package-lock.json
+            frontend/package-lock.json
+      - run: npm ci --ignore-scripts
+        working-directory: ethereum
+      - run: npm run compile
+        working-directory: ethereum
+      - run: npm ci --ignore-scripts
+        working-directory: frontend
+      - run: npm audit --audit-level=high
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - name: Verify generated ABIs are committed
+        run: git diff --exit-code -- frontend/src/lib/contracts/abi

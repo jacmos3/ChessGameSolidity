@@ -20,7 +20,6 @@
 
  require('dotenv').config();
  const mnemonic = process.env["MNEMONIC"];
- const infuraProjectId = process.env["INFURA_PROJECT_ID"];
  const localRpcHost = process.env["LOCAL_RPC_HOST"] || "127.0.0.1";
  const localRpcPort = Number(process.env["LOCAL_RPC_PORT"] || "7545");
  const localRpcGas = Number(process.env["LOCAL_RPC_GAS"] || "25000000");
@@ -61,11 +60,6 @@ module.exports = {
       gas: localRpcGas,
      },
     //
-     goerli: {
-       provider: () => new HDWalletProvider(mnemonic, `https://goerli.infura.io/v3/${infuraProjectId}`),
-       network_id: 5,       // Goerli's id
-       chain_id: 5
-     },
      base_sepolia: {
        provider: () => publicProvider(baseSepoliaRpcUrl, "BASE_SEPOLIA"),
        network_id: 84532,

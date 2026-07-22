@@ -1,9 +1,15 @@
 {
   "name": "solidity-chess-workspace",
   "private": true,
+  "engines": {
+    "node": ">=20.19 <23"
+  },
   "scripts": {
     "dev:local": "node scripts/dev-local.mjs",
     "sync:local-env": "node scripts/write-frontend-local-env.mjs",
-    "smoke:local": "cd ethereum && npx truffle exec scripts/smoke-local.js"
+    "smoke:local": "cd ethereum && npx truffle exec scripts/smoke-local.js",
+    "test:contracts": "npm --prefix ethereum run test:ci",
+    "build:frontend": "npm --prefix frontend run build",
+    "ci": "npm run test:contracts && npm run build:frontend"
   }
 }

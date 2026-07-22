@@ -1,5 +1,5 @@
 {
-    "name": "ethereumChessGame",
+    "name": "mychess-onchain-contracts",
     "version": "1.0.0",
     "description": "",
     "main": "truffle-config.js",
@@ -7,24 +7,28 @@
         "test": "test"
     },
     "scripts": {
-        "compile": "truffle compile",
+        "compile": "node scripts/compile-contracts.js",
+        "check:size": "node scripts/check-contract-size.js",
         "test": "truffle test",
+        "test:batches": "node scripts/test-batches.js",
+        "test:ci": "npm run compile && npm run check:size && npm run test:batches",
         "verify:handoff": "truffle exec scripts/verify-governance-handoff.js"
     },
     "keywords": [],
     "author": "",
-    "license": "ISC",
+    "license": "MIT",
+    "engines": {
+        "node": ">=20.19 <23"
+    },
     "dependencies": {
         "@openzeppelin/contracts": "^5.0.0",
         "@truffle/hdwallet-provider": "^2.1.15",
-        "dotenv": "^17.2.3"
+        "dotenv": "^17.2.3",
+        "solc": "0.8.24"
     },
     "devDependencies": {
         "eth-gas-reporter": "^0.2.27",
         "ganache": "^7.9.2",
-        "hardhat": "^3.1.2",
-        "sol-merger": "^4.4.2",
-        "truffle": "^5.11.5",
-        "truffle-flattener": "^1.6.0"
+        "truffle": "^5.11.5"
     }
 }

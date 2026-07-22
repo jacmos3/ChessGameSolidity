@@ -53,11 +53,11 @@ contract("ChessCore - Game Mechanics", (accounts) => {
 
   // Helper to create a fresh game (without joining as black)
   // gameMode: 0=Tournament, 1=Friendly (debugCreative only works in Friendly mode)
-  async function createGame(gameMode = 0) {
+  async function createGame(gameMode = 0, timeoutPreset = 2) {
     const chessCoreImpl = await ChessCore.new();
     chessFactory = await ChessFactory.new(chessCoreImpl.address);
     // TimeoutPreset: 0=Finney, 1=Buterin, 2=Nakamoto
-    await chessFactory.createChessGame(2, gameMode, {
+    await chessFactory.createChessGame(timeoutPreset, gameMode, {
       from: whitePlayer,
       value: betAmount
     });
@@ -67,8 +67,8 @@ contract("ChessCore - Game Mechanics", (accounts) => {
   }
 
   // Helper to create a game and join as black
-  async function createAndJoinGame(gameMode = 0) {
-    await createGame(gameMode);
+  async function createAndJoinGame(gameMode = 0, timeoutPreset = 2) {
+    await createGame(gameMode, timeoutPreset);
     await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
   }
 
@@ -211,6 +211,53 @@ contract("ChessCore - Game Mechanics", (accounts) => {
       } catch (error) {
         assert.include(error.message, "revert");
       }
+    });
+  });
+
+  describe("Timestamp-based move timeouts", () => {
+    beforeEach(async () => {
+      await createAndJoinGame(0, 0); // Finney: 1 hour
+    });
+
+    it("uses chain-independent timeout durations in seconds", async () => {
+      const duration = await chessCore.timeoutSeconds();
+      const status = await chessCore.getTimeoutStatus();
+
+      assert.equal(duration.toNumber(), 60 * 60, "Finney should be one hour");
+      assert.isAtMost(
+        Math.abs(status.whiteSecondsRemaining.toNumber() - 60 * 60),
+        1,
+        "White should receive a one-hour move deadline"
+      );
+      assert.equal(status.blackSecondsRemaining.toNumber(), 0, "Only the active clock should run");
+    });
+
+    it("rejects premature timeout claims and resolves after the deadline", async () => {
+      try {
+        await chessCore.claimVictoryByTimeout({ from: blackPlayer });
+        assert.fail("Should reject a timeout claim before the deadline");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+
+      await advanceTime(60 * 60 + 1);
+      await chessCore.claimVictoryByTimeout({ from: blackPlayer });
+
+      const gameState = await chessCore.getGameState();
+      assert.equal(gameState.toNumber(), GameState.BlackWins, "Black should win after white times out");
+    });
+
+    it("starts a fresh deadline for the next player after every move", async () => {
+      await advanceTime(30 * 60);
+      await chessCore.makeMove(6, 4, 4, 4, { from: whitePlayer });
+
+      const status = await chessCore.getTimeoutStatus();
+      assert.equal(status.whiteSecondsRemaining.toNumber(), 0, "White's clock should stop after moving");
+      assert.isAtMost(
+        Math.abs(status.blackSecondsRemaining.toNumber() - 60 * 60),
+        1,
+        "Black should receive a fresh one-hour deadline"
+      );
     });
   });
 

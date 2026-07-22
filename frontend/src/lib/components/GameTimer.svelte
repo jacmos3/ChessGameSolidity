@@ -1,28 +1,62 @@
 <script>
-	export let whiteBlocksRemaining = 0;
-	export let blackBlocksRemaining = 0;
+	import { onMount } from 'svelte';
+
+	export let whiteSecondsRemaining = 0;
+	export let blackSecondsRemaining = 0;
 	export let currentPlayerIsWhite = true;
 	export let isActive = true;
-	export let timeoutBlocks = 300; // Default, should be passed from contract
+	export let timeoutSeconds = 3600;
 
-	// Current player's blocks remaining
-	$: currentBlocks = currentPlayerIsWhite ? whiteBlocksRemaining : blackBlocksRemaining;
+	let displayedSeconds = 0;
+	let lastSyncKey = '';
 
-	// Progress percentage (blocks remaining / total timeout blocks)
-	$: progress = timeoutBlocks > 0 ? Math.min(100, Math.max(0, (currentBlocks / timeoutBlocks) * 100)) : 0;
+	$: sourceSeconds = currentPlayerIsWhite ? whiteSecondsRemaining : blackSecondsRemaining;
+	$: {
+		const syncKey = `${currentPlayerIsWhite}:${sourceSeconds}`;
+		if (syncKey !== lastSyncKey) {
+			lastSyncKey = syncKey;
+			displayedSeconds = sourceSeconds;
+		}
+	}
 
-	// Color based on blocks remaining
-	function getColor(blocks) {
-		if (blocks <= 10) return { text: 'text-red-500', bar: 'bg-red-500' };
-		if (blocks <= 50) return { text: 'text-orange-500', bar: 'bg-orange-500' };
-		if (blocks <= 100) return { text: 'text-yellow-500', bar: 'bg-yellow-500' };
+	$: progress = timeoutSeconds > 0
+		? Math.min(100, Math.max(0, (displayedSeconds / timeoutSeconds) * 100))
+		: 0;
+
+	function getColor(percentage) {
+		if (percentage <= 5) return { text: 'text-red-500', bar: 'bg-red-500' };
+		if (percentage <= 15) return { text: 'text-orange-500', bar: 'bg-orange-500' };
+		if (percentage <= 30) return { text: 'text-yellow-500', bar: 'bg-yellow-500' };
 		return { text: 'text-chess-accent', bar: 'bg-chess-accent' };
 	}
 
-	$: colors = getColor(currentBlocks);
+	function formatDuration(totalSeconds) {
+		if (totalSeconds <= 0) return 'Expired';
+
+		const days = Math.floor(totalSeconds / 86400);
+		const hours = Math.floor((totalSeconds % 86400) / 3600);
+		const minutes = Math.floor((totalSeconds % 3600) / 60);
+		const seconds = totalSeconds % 60;
+
+		if (days > 0) return `${days}d ${hours}h`;
+		if (hours > 0) return `${hours}h ${minutes}m`;
+		return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
+	}
+
+	$: colors = getColor(progress);
+
+	onMount(() => {
+		const timer = window.setInterval(() => {
+			if (isActive && displayedSeconds > 0) {
+				displayedSeconds -= 1;
+			}
+		}, 1000);
+
+		return () => window.clearInterval(timer);
+	});
 </script>
 
-{#if isActive && (whiteBlocksRemaining > 0 || blackBlocksRemaining > 0)}
+{#if isActive}
 	<div class="bg-chess-darker rounded-lg p-3">
 		<!-- Current turn indicator -->
 		<div class="flex items-center justify-between mb-2">
@@ -35,11 +69,11 @@
 			<div class="w-2 h-2 rounded-full bg-chess-accent animate-pulse"></div>
 		</div>
 
-		<!-- Blocks remaining -->
+		<!-- Time remaining -->
 		<div class="flex items-center justify-between mb-2">
 			<span class="text-xs text-chess-gray uppercase tracking-wider">Time remaining</span>
 			<span class="text-lg font-mono font-bold {colors.text}">
-				{currentBlocks} <span class="text-xs font-normal text-chess-gray">blocks</span>
+				{formatDuration(displayedSeconds)}
 			</span>
 		</div>
 
@@ -52,9 +86,9 @@
 		</div>
 
 		<!-- Warning message -->
-		{#if currentBlocks <= 10 && currentBlocks > 0}
+		{#if displayedSeconds <= 300}
 			<p class="text-xs text-red-500 text-center mt-2 animate-pulse">
-				Low time! Opponent can claim timeout soon.
+				{displayedSeconds > 0 ? 'Low time! Opponent can claim timeout soon.' : 'Move deadline expired.'}
 			</p>
 		{/if}
 	</div>

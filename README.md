@@ -3,8 +3,8 @@
 MyChess.onchain is a decentralized chess platform with on-chain game state, hybrid ETH + CHESS bonding, commit-reveal dispute resolution, ratings, rewards, and token-governed protocol controls. The repository and some historical documents still use the original name, Solidity Chess.
 
 ![Solidity](https://img.shields.io/badge/Solidity-0.8.24-blue)
-![Frontend](https://img.shields.io/badge/Frontend-SvelteKit-orange)
-![Contract Tests](https://img.shields.io/badge/Contract%20Tests-357-informational)
+![Frontend](https://img.shields.io/badge/Frontend-SvelteKit%202-orange)
+![Contract Tests](https://img.shields.io/badge/Contract%20Tests-360-informational)
 
 ## Overview
 
@@ -13,7 +13,7 @@ This repo contains:
 - `ethereum/`: canonical Solidity sources, Truffle migrations, deployment scripts, and contract tests
 - `frontend/`: SvelteKit client, built as a static app for IPFS-style deployment
 - `docs/`: historical protocol, UX, and mitigation notes; some documents predate the current Base-focused architecture
-- `deploy-app/`: legacy browser deployment helper; it is not the canonical production deployment path
+- `legacy/`: unsupported historical deployment helpers, flattened contracts, and standalone scripts
 
 At a high level, the system does four things:
 
@@ -24,20 +24,25 @@ At a high level, the system does four things:
 
 ## Current Status
 
-- The contract suite defines `357` test cases across `16` Truffle test files. For long local runs, use a dedicated Ganache process and restart it between large batches if the provider degrades.
+- The contract suite defines `360` test cases across `16` Truffle test files. `npm run test:ci` executes them in four isolated Ganache batches.
 - `ChessCore` uses EIP-1167 clones. Heavy rule evaluation lives in one `ChessRulesEngine` deployed by the implementation and shared by the clones through the implementation's immutable reference.
 - The frontend is configured for static/IPFS deployment and now lazy-loads ABI-only artifacts.
+- Solidity compilation is pinned to `solc 0.8.24`, generates validated Truffle-compatible artifacts, and enforces the EIP-170 bytecode limit.
+- GitHub Actions recompiles, checks bytecode size, runs all contract tests, audits high-severity frontend dependencies, builds the static app, and checks generated ABI drift.
 - The supported deployment path is `ethereum/migrations/2_deploy_chess_system.js`; public Base deployments can transfer protocol control to `ChessTimelock` and remove deployer privileges.
 - The system is still not formally audited.
+
+The repository is suitable for source publication, local use, and a clearly labelled Base Sepolia beta. It is not approved for a permissionless production launch with material user funds.
 
 Important limitations:
 
 - arbitrator selection is still pseudo-random on-chain, not VRF-backed
 - ratings use a bounded linear approximation of the Elo expected-score curve; `PlayerRating.getTopPlayers()` is a pagination helper, not a sorted on-chain leaderboard
 - faucet eligibility and the CHESS/ETH price feed still depend on trusted, separately rotatable off-chain signers
+- Truffle 5 and `@truffle/hdwallet-provider` retain known npm advisories in their deprecated dependency trees; replace or isolate this deployment toolchain before handling a production mnemonic
 - game state, moves, stakes, disputes, and ratings are public blockchain data; the protocol does not provide player privacy
-- timeout presets are block-count based and their wall-clock duration changes with the target chain's block time
-- `ethereum/flattened/` and the browser deploy flow are legacy snapshots and must not be treated as authoritative for the current contracts
+- timeout presets use timestamp deadlines: `Finney` is 1 hour, `Buterin` is 7 hours, and `Nakamoto` is 7 days
+- `legacy/` is retained for historical reference only and must not be used to build or deploy the protocol
 
 ## Architecture
 
@@ -68,7 +73,7 @@ ChessToken --> ChessGovernor --> ChessTimelock --> protocol administration
 - on-chain piece movement, king-safety, check, mate, and stalemate evaluation through `ChessCore` + `ChessRulesEngine`
 - special moves: castling, en passant, promotion
 - check, checkmate, stalemate, threefold repetition, 50-move rule, 75-move automatic draw
-- three timeout presets: `Finney`, `Buterin`, `Nakamoto`
+- three chain-independent timeout presets: `Finney` (1 hour), `Buterin` (7 hours), `Nakamoto` (7 days)
 - `Friendly` mode rejects moves that leave the mover's king in check and allows custom pre-game positions
 - `Tournament` mode treats a self-checking move as an immediate loss instead of reverting the transaction
 - unjoined game cancellation after timeout
@@ -131,13 +136,13 @@ The frontend recognizes:
 - `84532`: Base Sepolia
 - `8453`: Base mainnet
 
-`truffle-config.js` still contains a legacy Goerli profile, but Goerli is not part of the supported frontend or deployment workflow. The migration has configuration branches for additional networks, but no Mainnet, Arbitrum, or Optimism Truffle profiles are currently shipped. Historical documents that mention Sepolia, Holesky, or Linea are not authoritative for current deployment.
+No Goerli, Ethereum Mainnet, Arbitrum, or Optimism Truffle profile is shipped. Historical documents that mention Goerli, Sepolia, Holesky, Linea, or other networks are not authoritative for the current Base-focused deployment.
 
 ## Getting Started
 
 ### Prerequisites
 
-- Node.js LTS
+- Node.js 20.19+ or 22.12+ (below Node 23)
 - npm
 - Ganache or another local EVM RPC for local development
 - MetaMask or another injected EVM wallet for frontend testing
@@ -149,10 +154,10 @@ git clone https://github.com/jacmos3/ChessGameSolidity.git
 cd ChessGameSolidity
 
 cd ethereum
-npm install
+npm ci
 
 cd ../frontend
-npm install
+npm ci
 
 cd ..
 ```
@@ -167,12 +172,13 @@ From the repo root:
 npm run dev:local
 ```
 
-This does four things in order:
+This does five things in order:
 
 1. starts or reuses a local Ganache RPC on `127.0.0.1:8545`
-2. runs `truffle migrate --reset`
-3. writes `frontend/.env.local` from `ethereum/deployments/latest-development.json`
-4. starts the frontend dev server
+2. compiles deterministic Truffle-compatible artifacts with the pinned compiler
+3. runs `truffle migrate --reset`
+4. writes `frontend/.env.local` from `ethereum/deployments/latest-development.json`
+5. starts the frontend dev server
 
 You can override the ports with:
 
@@ -207,6 +213,7 @@ npx ganache --server.host 127.0.0.1 --server.port 8545 --wallet.totalAccounts 20
 
 ```bash
 cd ethereum
+npm run compile
 LOCAL_RPC_PORT=8545 npx truffle migrate --reset
 ```
 
@@ -228,6 +235,7 @@ ORACLE_UPDATER=
 
 ```bash
 cd ethereum
+npm run compile
 npx truffle migrate --network base_sepolia --reset
 ```
 
@@ -251,7 +259,7 @@ Post-deployment operations are required:
 
 Deployment address files under `ethereum/deployments/` are local operational output and are intentionally not committed.
 
-> **Deployment warning:** `deploy-app/` and `ethereum/flattened/` predate the latest role wiring, signer model, governance handoff, and contract interfaces. Do not use them for a production deployment without regenerating and auditing the complete flow. The Truffle migration above is the canonical path.
+> **Deployment warning:** everything under `legacy/` predates the latest role wiring, signer model, governance handoff, timeout semantics, and contract interfaces. It is unsupported. The pinned compiler and Truffle migration above are the only canonical path.
 
 ### 3. Configure frontend addresses
 
@@ -296,20 +304,20 @@ Open the URL shown by Vite, typically `http://127.0.0.1:3000/`.
 
 ### Contract Suite
 
-The suite currently contains `357` test cases in `16` files. Run it against a dedicated local Ganache instance:
+The suite currently contains `360` test cases in `16` files. The canonical command compiles, checks every deployed bytecode against EIP-170, and runs four test batches against fresh Ganache instances:
 
 ```bash
 cd ethereum
-LOCAL_RPC_PORT=8545 npm test
+npm run test:ci
 ```
 
-With gas reporting:
+For an ad hoc monolithic run against an already running Ganache instance:
 
 ```bash
-LOCAL_RPC_PORT=8545 REPORT_GAS=true npm test
+LOCAL_RPC_PORT=8545 npm test -- --compile-none
 ```
 
-The full suite creates a large amount of chain state. If Ganache's provider becomes unstable during a monolithic run, restart Ganache and execute the test files in smaller batches rather than treating connection errors as contract failures.
+With gas reporting, set `REPORT_GAS=true` on that monolithic command. The isolated `test:ci` runner is preferred because the full suite creates enough chain state to destabilize a single long-lived provider.
 
 ### Frontend Build
 
@@ -318,7 +326,7 @@ cd frontend
 npm run build
 ```
 
-The prebuild hook refreshes ABI-only artifacts from the latest Truffle compilation.
+The prebuild hook refreshes ABI-only artifacts from the latest pinned Solidity compilation.
 
 ## Project Structure
 
@@ -327,8 +335,9 @@ The prebuild hook refreshes ABI-only artifacts from the latest Truffle compilati
 ├── README.md
 ├── LICENSE.md
 ├── package.json
+├── .github/workflows/ci.yml         # reproducible contract and frontend checks
 ├── scripts/                         # local orchestration and env generation
-├── deploy-app/                      # legacy browser deployment helper
+├── legacy/                          # unsupported historical snapshots
 ├── docs/                            # historical/reference documents
 │   ├── ANTI_CHEATING_TOKENOMICS.md
 │   ├── USER_GUIDE.md
@@ -348,9 +357,8 @@ The prebuild hook refreshes ABI-only artifacts from the latest Truffle compilati
 │   │   ├── Rating/
 │   │   └── Token/
 │   ├── deployments/                 # ignored local deployment outputs
-│   ├── flattened/                   # legacy Remix snapshots, currently stale
 │   ├── migrations/                  # canonical deployment flow
-│   ├── scripts/                     # smoke and handoff verification
+│   ├── scripts/                     # compiler, size check, test runner, smoke and handoff verification
 │   └── test/                        # 16 Truffle test files
 └── frontend/
     ├── scripts/
@@ -366,7 +374,7 @@ The prebuild hook refreshes ABI-only artifacts from the latest Truffle compilati
     └── static/
 ```
 
-When documentation conflicts, treat the Solidity sources and Truffle migration as authoritative, followed by this README. In particular, `docs/USER_GUIDE.md`, the flattened Remix guide, and the browser deploy helper still contain older branding, networks, interfaces, or role wiring.
+When documentation conflicts, treat the Solidity sources and Truffle migration as authoritative, followed by this README. In particular, `docs/USER_GUIDE.md` and everything under `legacy/` may contain older branding, networks, interfaces, or role wiring.
 
 ## Core Contract Flows
 
@@ -444,11 +452,11 @@ An authorization cannot be replayed for another beneficiary, chain, or `RewardPo
 
 ## Frontend Stack
 
-- SvelteKit `1.30.4`
-- Svelte `4.2.8`
-- Vite `4.5.2`
-- Tailwind CSS `3.4.0`
-- ethers.js `5.7.2`
+- SvelteKit `2.70.1`
+- Svelte `5.56.7` in legacy component mode
+- Vite `8.1.5`
+- Tailwind CSS `3.4.x`
+- ethers.js `5.8.0`
 - chess.js `1.0.0-beta.8`
 - `@sveltejs/adapter-static` for IPFS-compatible static builds
 
@@ -469,12 +477,13 @@ Implemented protections include:
 Known limitations:
 
 - no formal external audit yet
+- the Truffle deployment stack contains deprecated transitive dependencies with unresolved npm advisories; do not treat a clean contract test run as a supply-chain audit
 - arbitrator selection is not VRF-backed
 - the price updater and faucet signer remain trusted operational roles
 - all gameplay and dispute data is public on-chain
 - public frontend addresses are build-time environment configuration, not discovered from an on-chain registry
 - reward and faucet balances require explicit operational funding
-- legacy docs, flattened sources, and the browser deploy helper are not synchronized automatically
+- historical material under `legacy/` is intentionally unsupported and not synchronized
 
 ## Contributing
 
@@ -486,4 +495,4 @@ Known limitations:
 
 ## License
 
-The repository ships the MIT license in [`LICENSE.md`](LICENSE.md), and Solidity sources use `SPDX-License-Identifier: MIT`. `ethereum/package.json` still declares `ISC`; align that manifest before a formal package release to remove the remaining metadata inconsistency.
+The repository ships the MIT license in [`LICENSE.md`](LICENSE.md), Solidity sources use `SPDX-License-Identifier: MIT`, and the contract package declares the same license.

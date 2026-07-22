@@ -709,10 +709,10 @@
 						{#if data.timeout}
 							<div class="mb-4">
 								<GameTimer
-									whiteBlocksRemaining={data.timeout.whiteBlocksRemaining}
-									blackBlocksRemaining={data.timeout.blackBlocksRemaining}
+									whiteSecondsRemaining={data.timeout.whiteSecondsRemaining}
+									blackSecondsRemaining={data.timeout.blackSecondsRemaining}
 									currentPlayerIsWhite={data.timeout.currentPlayerIsWhite}
-									timeoutBlocks={data.timeout.timeoutBlocks}
+									timeoutSeconds={data.timeout.timeoutSeconds}
 									isActive={data.stateInfo.isActive}
 								/>
 							</div>

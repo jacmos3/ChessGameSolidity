@@ -47,10 +47,10 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     enum GameState { NotStarted, InProgress, Draw, WhiteWins, BlackWins }
 
     // ========== CONSTANTS ==========
-    // Timeout presets (based on ~12 sec/block on Ethereum)
-    uint48 public constant FINNEY_BLOCKS = 300;      // ~1 hour (Hal Finney - fast)
-    uint48 public constant BUTERIN_BLOCKS = 2100;    // ~7 hours (Vitalik Buterin - medium)
-    uint48 public constant NAKAMOTO_BLOCKS = 50400;  // ~7 days (Satoshi Nakamoto - slow)
+    // Timestamp-based presets behave consistently across L1 and L2 block times.
+    uint48 public constant FINNEY_TIMEOUT = 1 hours;
+    uint48 public constant BUTERIN_TIMEOUT = 7 hours;
+    uint48 public constant NAKAMOTO_TIMEOUT = 7 days;
     uint48 public constant CANCEL_UNJOINED_TIMEOUT = 1 days;
 
     // ========== STORAGE LAYOUT OPTIMIZED FOR GAS ==========
@@ -74,10 +74,10 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     ChessRulesEngine private immutable rulesEngine;
 
     // Slot 7: PACKED - timeout tracking + state flags (32 bytes total)
-    // uint48 max = 281 trillion blocks, far exceeds any realistic blockchain lifetime
-    uint48 public whiteLastMoveBlock;      // 6 bytes
-    uint48 public blackLastMoveBlock;      // 6 bytes
-    uint48 public timeoutBlocks;           // 6 bytes
+    // uint48 timestamps and durations cover far beyond any realistic protocol lifetime.
+    uint48 public whiteMoveDeadline;       // 6 bytes
+    uint48 public blackMoveDeadline;       // 6 bytes
+    uint48 public timeoutSeconds;          // 6 bytes
     GameState private gameState;           // 1 byte
     GameMode public gameMode;              // 1 byte
     bool public bondsLocked;               // 1 byte
@@ -200,11 +200,11 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
 
         // Set timeout based on preset
         if (_preset == TimeoutPreset.Finney) {
-            timeoutBlocks = FINNEY_BLOCKS;
+            timeoutSeconds = FINNEY_TIMEOUT;
         } else if (_preset == TimeoutPreset.Buterin) {
-            timeoutBlocks = BUTERIN_BLOCKS;
+            timeoutSeconds = BUTERIN_TIMEOUT;
         } else {
-            timeoutBlocks = NAKAMOTO_BLOCKS;
+            timeoutSeconds = NAKAMOTO_TIMEOUT;
         }
 
         // Record initial position for threefold repetition
@@ -239,8 +239,8 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         blackPlayer = msg.sender;
         gameState = GameState.InProgress;
 
-        // Start white's clock (white moves first)
-        whiteLastMoveBlock = uint48(block.number);
+        // Start white's clock (white moves first).
+        whiteMoveDeadline = uint48(block.timestamp) + timeoutSeconds;
 
         // NOTE: Initial position already recorded in initialize()
         // No need to record again here - was causing duplicate entries
@@ -667,11 +667,11 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         if (msg.sender == currentPlayer) revert NotYourTurn();
 
         // Check if current player (opponent) has exceeded their time
-        uint256 opponentLastMove = (currentPlayer == whitePlayer)
-            ? whiteLastMoveBlock
-            : blackLastMoveBlock;
+        uint256 opponentDeadline = (currentPlayer == whitePlayer)
+            ? whiteMoveDeadline
+            : blackMoveDeadline;
 
-        if (block.number < opponentLastMove + timeoutBlocks) revert NotTimedOut();
+        if (block.timestamp < opponentDeadline) revert NotTimedOut();
 
         wasTimeout = true;  // Track for reward penalty (loser timed out)
 
@@ -887,12 +887,12 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
             leavesKingInCheck
         );
 
-        // Update opponent's clock (they now need to move)
+        // Set the opponent's deadline (they now need to move).
         // currentPlayer is still the player who just moved
         if (currentPlayer == whitePlayer) {
-            blackLastMoveBlock = uint48(block.number);
+            blackMoveDeadline = uint48(block.timestamp) + timeoutSeconds;
         } else {
-            whiteLastMoveBlock = uint48(block.number);
+            whiteMoveDeadline = uint48(block.timestamp) + timeoutSeconds;
         }
 
         // Update 50-move rule counter
@@ -1076,12 +1076,12 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     }
 
     /// @notice Get timeout status for both players
-    /// @return whiteBlocksRemaining Blocks remaining before white times out (0 if not their turn)
-    /// @return blackBlocksRemaining Blocks remaining before black times out (0 if not their turn)
+    /// @return whiteSecondsRemaining Seconds remaining before white times out (0 if not their turn)
+    /// @return blackSecondsRemaining Seconds remaining before black times out (0 if not their turn)
     /// @return currentPlayerIsWhite True if it's white's turn
     function getTimeoutStatus() external view returns (
-        uint256 whiteBlocksRemaining,
-        uint256 blackBlocksRemaining,
+        uint256 whiteSecondsRemaining,
+        uint256 blackSecondsRemaining,
         bool currentPlayerIsWhite
     ) {
         currentPlayerIsWhite = (currentPlayer == whitePlayer);
@@ -1091,13 +1091,11 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         }
 
         if (currentPlayerIsWhite) {
-            uint256 elapsed = block.number - whiteLastMoveBlock;
-            whiteBlocksRemaining = elapsed >= timeoutBlocks ? 0 : timeoutBlocks - elapsed;
-            blackBlocksRemaining = 0;
+            whiteSecondsRemaining = block.timestamp >= whiteMoveDeadline ? 0 : whiteMoveDeadline - block.timestamp;
+            blackSecondsRemaining = 0;
         } else {
-            uint256 elapsed = block.number - blackLastMoveBlock;
-            blackBlocksRemaining = elapsed >= timeoutBlocks ? 0 : timeoutBlocks - elapsed;
-            whiteBlocksRemaining = 0;
+            blackSecondsRemaining = block.timestamp >= blackMoveDeadline ? 0 : blackMoveDeadline - block.timestamp;
+            whiteSecondsRemaining = 0;
         }
     }
 }

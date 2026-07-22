@@ -186,6 +186,14 @@ async function migrateContracts() {
   );
 }
 
+async function compileContracts() {
+  console.log("Compiling contracts");
+  await runCommand(npmCmd, ["run", "compile"], {
+    cwd: ethereumDir,
+    label: "compile"
+  });
+}
+
 async function writeFrontendEnv() {
   console.log("Writing frontend local env");
   await runCommand(nodeCmd, [path.join(rootDir, "scripts", "write-frontend-local-env.mjs")], {
@@ -229,6 +237,7 @@ process.on("SIGTERM", () => shutdown(0));
 
 try {
   const startedGanache = await startGanacheIfNeeded();
+  await compileContracts();
   await migrateContracts();
   await writeFrontendEnv();
   await startFrontend();

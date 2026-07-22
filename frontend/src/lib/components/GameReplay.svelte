@@ -200,23 +200,23 @@
 			<div class="flex-1 overflow-y-auto text-sm font-mono">
 				{#each moveHistory as move, i}
 					{#if move.isWhite}
-						<button
-							class="flex gap-2 py-1 px-2 w-full text-left rounded hover:bg-chess-accent/10 transition-colors
-								{currentMoveIndex === i ? 'bg-chess-accent/20' : ''}
-								{currentMoveIndex === i + 1 && !moveHistory[i + 1]?.isWhite ? '' : ''}"
-							on:click={() => goToMove(i)}
-						>
+						<div class="flex gap-2 py-1 px-2 w-full text-left rounded hover:bg-chess-accent/10 transition-colors">
 							<span class="text-chess-gray w-6 flex-shrink-0">{move.moveNumber}.</span>
-							<span class="w-14 flex-shrink-0 {currentMoveIndex === i ? 'text-chess-accent' : ''}">{move.notation}</span>
+							<button
+								class="w-14 flex-shrink-0 text-left {currentMoveIndex === i ? 'text-chess-accent' : ''}"
+								on:click={() => goToMove(i)}
+							>
+								{move.notation}
+							</button>
 							{#if moveHistory[i + 1] && !moveHistory[i + 1].isWhite}
 								<button
-									class="w-14 flex-shrink-0 {currentMoveIndex === i + 1 ? 'text-chess-accent' : ''}"
-									on:click|stopPropagation={() => goToMove(i + 1)}
+									class="w-14 flex-shrink-0 text-left {currentMoveIndex === i + 1 ? 'text-chess-accent' : ''}"
+									on:click={() => goToMove(i + 1)}
 								>
 									{moveHistory[i + 1].notation}
 								</button>
 							{/if}
-						</button>
+						</div>
 					{/if}
 				{/each}
 			</div>

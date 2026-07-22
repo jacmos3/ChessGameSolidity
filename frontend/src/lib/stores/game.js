@@ -352,7 +352,7 @@ function createActiveGameStore() {
 				const chessCoreAbi = await getChessCoreAbi();
 				const game = new ethers.Contract(address, chessCoreAbi, $wallet.signer);
 
-				const [players, currentPlayer, state, betting, boardState, timeoutStatus, drawOfferStatus, timeoutBlocks, gameMode, gameId, canCancelUnjoinedGame, cancelUnjoinedRemaining] = await Promise.all([
+				const [players, currentPlayer, state, betting, boardState, timeoutStatus, drawOfferStatus, timeoutSeconds, gameMode, gameId, canCancelUnjoinedGame, cancelUnjoinedRemaining] = await Promise.all([
 					game.getPlayers(),
 					game.currentPlayer(),
 					game.getGameState(),
@@ -360,7 +360,7 @@ function createActiveGameStore() {
 					game.getBoardState(), // Single call instead of 64!
 					game.getTimeoutStatus().catch(() => null), // May not exist on older contracts
 					game.getDrawOfferStatus().catch(() => null), // May not exist on older contracts
-					game.timeoutBlocks().catch(() => 300), // Default to 300 blocks
+					game.timeoutSeconds().catch(() => 3600), // Default to one hour
 					game.gameMode().catch(() => 0), // Default to Tournament if not available
 					game.gameId().catch(() => 0),
 					game.canCancelUnjoinedGame($wallet.account || ethers.constants.AddressZero).catch(() => false),
@@ -425,10 +425,10 @@ function createActiveGameStore() {
 				let timeout = null;
 				if (timeoutStatus) {
 					timeout = {
-						whiteBlocksRemaining: Number(timeoutStatus.whiteBlocksRemaining),
-						blackBlocksRemaining: Number(timeoutStatus.blackBlocksRemaining),
+						whiteSecondsRemaining: Number(timeoutStatus.whiteSecondsRemaining),
+						blackSecondsRemaining: Number(timeoutStatus.blackSecondsRemaining),
 						currentPlayerIsWhite: timeoutStatus.currentPlayerIsWhite,
-						timeoutBlocks: Number(timeoutBlocks)
+						timeoutSeconds: Number(timeoutSeconds)
 					};
 				}
 

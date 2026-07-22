@@ -330,6 +330,11 @@ module.exports = async function (deployer, network, accounts) {
     config: config
   };
 
+  if (process.env.SKIP_DEPLOYMENT_OUTPUT === "true") {
+    console.log("Deployment file output skipped for this run.\n");
+    return;
+  }
+
   const fs = require('fs');
   const path = require('path');
   const deploymentsDir = path.join(__dirname, '..', 'deployments');
@@ -365,20 +370,6 @@ function getNetworkConfig(network, accounts) {
       initialChessPrice: web3.utils.toWei("0.001", "ether"), // 1 CHESS = 0.001 ETH
     },
 
-    // Goerli testnet
-    goerli: {
-      teamWallet: process.env.TEAM_WALLET || null,
-      treasury: process.env.TREASURY_WALLET || null,
-      initialChessPrice: web3.utils.toWei("0.0001", "ether"),
-    },
-
-    // Sepolia testnet
-    sepolia: {
-      teamWallet: process.env.TEAM_WALLET || null,
-      treasury: process.env.TREASURY_WALLET || null,
-      initialChessPrice: web3.utils.toWei("0.0001", "ether"),
-    },
-
     // Base Sepolia testnet
     base_sepolia: {
       teamWallet: process.env.TEAM_WALLET || null,
@@ -391,33 +382,15 @@ function getNetworkConfig(network, accounts) {
       teamWallet: process.env.TEAM_WALLET,
       treasury: process.env.TREASURY_WALLET,
       initialChessPrice: web3.utils.toWei("0.001", "ether"),
-    },
-
-    // Mainnet
-    mainnet: {
-      teamWallet: process.env.TEAM_WALLET,
-      treasury: process.env.TREASURY_WALLET,
-      initialChessPrice: web3.utils.toWei("0.001", "ether"),
-    },
-
-    // Arbitrum
-    arbitrum: {
-      teamWallet: process.env.TEAM_WALLET,
-      treasury: process.env.TREASURY_WALLET,
-      initialChessPrice: web3.utils.toWei("0.001", "ether"),
-    },
-
-    // Optimism
-    optimism: {
-      teamWallet: process.env.TEAM_WALLET,
-      treasury: process.env.TREASURY_WALLET,
-      initialChessPrice: web3.utils.toWei("0.001", "ether"),
     }
   };
 
-  const config = configs[network] || configs.development;
+  const config = configs[network];
+  if (!config) {
+    throw new Error(`Unsupported deployment network: ${network}`);
+  }
 
-  const productionNetworks = ["mainnet", "base", "arbitrum", "optimism"];
+  const productionNetworks = ["base"];
   config.handoffGovernance = productionNetworks.includes(network) || process.env.GOVERNANCE_HANDOFF === "true";
 
   const isDevelopment = network === "development" || network === "test";
