@@ -3,7 +3,7 @@ import { wallet, contractAddress } from './wallet.js';
 import { ethers } from 'ethers';
 import { loadContractAbi } from '../contracts/loadAbi.js';
 
-// Game states mapping
+// Game states mapping — matches getGameState() (1-indexed), not the raw GameState enum
 export const GAME_STATES = {
 	1: { text: 'Waiting', color: 'blue', canJoin: true, isActive: false },
 	2: { text: 'In Progress', color: 'success', canJoin: false, isActive: true },
@@ -13,14 +13,111 @@ export const GAME_STATES = {
 	6: { text: 'Cancelled', color: 'gray', canJoin: false, isActive: false }
 };
 
+// GameStateChanged emits the Solidity enum (NotStarted=0 … BlackWins=4)
+const RAW_GAME_STATE_TO_UI = {
+	0: 1,
+	1: 2,
+	2: 3,
+	3: 4,
+	4: 5
+};
+
+function mapRawGameState(rawState) {
+	const raw = Number(rawState);
+	return RAW_GAME_STATE_TO_UI[raw] ?? raw;
+}
+
+function collectErrorBlob(err) {
+	const parts = [];
+	let current = err;
+	for (let i = 0; i < 6 && current; i++) {
+		if (typeof current.message === 'string') parts.push(current.message);
+		if (typeof current.data === 'string') parts.push(current.data);
+		if (typeof current.error?.data === 'string') parts.push(current.error.data);
+		if (typeof current.error?.data?.data === 'string') parts.push(current.error.data.data);
+		current = current.error;
+	}
+	return parts.join(' ');
+}
+
+function isCustomError(err, signature) {
+	const selector = ethers.utils.id(signature).slice(0, 10);
+	const blob = collectErrorBlob(err);
+	return blob.includes(selector) || blob.includes(selector.slice(2));
+}
+
+function signedPromotionPiece(movingPiece, promotionPiece) {
+	const promo = Math.abs(Number(promotionPiece));
+	if (!promo) return Number(movingPiece);
+	return Number(movingPiece) < 0 ? -promo : promo;
+}
+
 const getChessFactoryAbi = () => loadContractAbi('ChessFactory');
 const getChessCoreAbi = () => loadContractAbi('ChessCore');
+const LOBBY_PAGE_SIZE = 50;
+
+async function fetchRecentGameAddresses(factory, alreadyLoaded = 0) {
+	if (typeof factory.getDeployedChessGameCount === 'function') {
+		const count = Number(await factory.getDeployedChessGameCount());
+		const remaining = count - alreadyLoaded;
+		if (remaining <= 0) {
+			return { addresses: [], hasMore: false };
+		}
+		const take = Math.min(LOBBY_PAGE_SIZE, remaining);
+		const offset = remaining - take;
+		const page = await factory.getDeployedChessGamesPage(offset, take);
+		return {
+			addresses: [...page].reverse(),
+			hasMore: offset > 0
+		};
+	}
+
+	const all = await factory.getDeployedChessGames();
+	const newestFirst = [...all].reverse();
+	return {
+		addresses: newestFirst.slice(alreadyLoaded, alreadyLoaded + LOBBY_PAGE_SIZE),
+		hasMore: newestFirst.length > alreadyLoaded + LOBBY_PAGE_SIZE
+	};
+}
+
+async function loadGameSummaries(addresses, chessCoreAbi, signer, account) {
+	const summaries = await Promise.all(addresses.map(async (addr) => {
+		try {
+			const game = new ethers.Contract(addr, chessCoreAbi, signer);
+			const [players, currentPlayer, state, betting] = await Promise.all([
+				game.getPlayers(),
+				game.currentPlayer(),
+				game.getGameState(),
+				game.betting()
+			]);
+
+			return {
+				address: addr,
+				whitePlayer: players[0],
+				blackPlayer: players[1],
+				currentPlayer,
+				isMyTurn: currentPlayer?.toLowerCase?.() === account?.toLowerCase(),
+				state: Number(state),
+				stateInfo: GAME_STATES[Number(state)] || GAME_STATES[1],
+				betting: ethers.utils.formatEther(betting),
+				image: ''
+			};
+		} catch (err) {
+			console.error(`Error loading game ${addr}:`, err);
+			return null;
+		}
+	}));
+
+	return summaries.filter(Boolean);
+}
 
 // Games list store
 function createGamesStore() {
 	const { subscribe, set, update } = writable({
 		games: [],
 		loading: false,
+		loadingMore: false,
+		hasMore: false,
 		error: null
 	});
 
@@ -46,48 +143,57 @@ function createGamesStore() {
 					$wallet.signer
 				);
 
-				const gameAddresses = await factory.getDeployedChessGames();
-				const games = [];
+				const { addresses, hasMore } = await fetchRecentGameAddresses(factory, 0);
+				const games = await loadGameSummaries(
+					addresses,
+					chessCoreAbi,
+					$wallet.signer,
+					$wallet.account
+				);
 
-				for (const addr of gameAddresses) {
-					try {
-						const game = new ethers.Contract(addr, chessCoreAbi, $wallet.signer);
-
-						const [players, currentPlayer, state, betting, svgData] = await Promise.all([
-							game.getPlayers(),
-							game.currentPlayer(),
-							game.getGameState(),
-							game.betting(),
-							game.printChessBoardLayoutSVG().catch(() => null)
-						]);
-
-						let image = '';
-						if (svgData) {
-							try {
-								const json = JSON.parse(atob(svgData.split(',')[1]));
-								image = json.image;
-							} catch {}
-						}
-
-						games.push({
-							address: addr,
-							whitePlayer: players[0],
-							blackPlayer: players[1],
-							currentPlayer,
-							isMyTurn: currentPlayer?.toLowerCase?.() === $wallet.account?.toLowerCase(),
-							state: Number(state),
-							stateInfo: GAME_STATES[Number(state)] || GAME_STATES[1],
-							betting: ethers.utils.formatEther(betting),
-							image
-						});
-					} catch (err) {
-						console.error(`Error loading game ${addr}:`, err);
-					}
-				}
-
-				set({ games, loading: false, error: null });
+				set({ games, loading: false, loadingMore: false, hasMore, error: null });
 			} catch (err) {
-				update(s => ({ ...s, loading: false, error: err.message }));
+				update(s => ({ ...s, loading: false, loadingMore: false, error: err.message }));
+			}
+		},
+
+		async loadMore() {
+			const $wallet = get(wallet);
+			const $contractAddress = get(contractAddress);
+			const current = get({ subscribe });
+
+			if (!$wallet.signer || !$contractAddress || current.loadingMore || !current.hasMore) return;
+
+			update(s => ({ ...s, loadingMore: true, error: null }));
+
+			try {
+				const [factoryAbi, chessCoreAbi] = await Promise.all([
+					getChessFactoryAbi(),
+					getChessCoreAbi()
+				]);
+				const factory = new ethers.Contract(
+					$contractAddress,
+					factoryAbi,
+					$wallet.signer
+				);
+
+				const { addresses, hasMore } = await fetchRecentGameAddresses(factory, current.games.length);
+				const moreGames = await loadGameSummaries(
+					addresses,
+					chessCoreAbi,
+					$wallet.signer,
+					$wallet.account
+				);
+				const seen = new Set(current.games.map(game => game.address.toLowerCase()));
+
+				update(s => ({
+					...s,
+					games: [...s.games, ...moreGames.filter(game => !seen.has(game.address.toLowerCase()))],
+					loadingMore: false,
+					hasMore
+				}));
+			} catch (err) {
+				update(s => ({ ...s, loadingMore: false, error: err.message }));
 			}
 		},
 
@@ -206,7 +312,7 @@ function createActiveGameStore() {
 			// (pawn reaching the last rank). Otherwise use the actual piece.
 			const isPawn = Math.abs(pieceValue) === 1;
 			const isPromotion = isPawn && (Number(toRow) === 0 || Number(toRow) === 7);
-			const finalPiece = isPromotion ? promoValue : pieceValue;
+			const finalPiece = isPromotion ? signedPromotionPiece(pieceValue, promoValue) : pieceValue;
 
 			// Apply move
 			newBoard[Number(toRow)][Number(toCol)] = finalPiece;
@@ -293,11 +399,35 @@ function createActiveGameStore() {
 				}
 			};
 		});
+
+		refreshDrawRules();
+	}
+
+	async function refreshDrawRules() {
+		if (!currentGameContract) return;
+		try {
+			const status = await currentGameContract.getDrawRuleStatus();
+			update(s => {
+				if (!s.data) return s;
+				return {
+					...s,
+					data: {
+						...s.data,
+						drawRules: {
+							halfMoves: Number(status.halfMoves ?? status[0] ?? 0),
+							maxRepetitions: Number(status.maxRepetitions ?? status[1] ?? 0)
+						}
+					}
+				};
+			});
+		} catch {
+			// Older games may not expose draw-rule views.
+		}
 	}
 
 	// Handle game state changes
 	function handleGameStateChanged(newState) {
-		const stateNum = Number(newState);
+		const stateNum = mapRawGameState(newState);
 		update(s => {
 			if (!s.data || !currentGameContract) return s;
 			return {
@@ -307,6 +437,21 @@ function createActiveGameStore() {
 					state: stateNum,
 					stateInfo: GAME_STATES[stateNum] || GAME_STATES[1],
 					drawOfferedBy: null // Clear draw offer on state change
+				}
+			};
+		});
+	}
+
+	function handleDrawAccepted() {
+		update(s => {
+			if (!s.data || !currentGameContract) return s;
+			return {
+				...s,
+				data: {
+					...s.data,
+					state: 3,
+					stateInfo: GAME_STATES[3],
+					drawOfferedBy: null
 				}
 			};
 		});
@@ -352,7 +497,7 @@ function createActiveGameStore() {
 				const chessCoreAbi = await getChessCoreAbi();
 				const game = new ethers.Contract(address, chessCoreAbi, $wallet.signer);
 
-				const [players, currentPlayer, state, betting, boardState, timeoutStatus, drawOfferStatus, timeoutSeconds, gameMode, gameId, canCancelUnjoinedGame, cancelUnjoinedRemaining] = await Promise.all([
+				const [players, currentPlayer, state, betting, boardState, timeoutStatus, drawOfferStatus, timeoutSeconds, gameMode, gameId, canCancelUnjoinedGame, cancelUnjoinedRemaining, drawRuleStatus] = await Promise.all([
 					game.getPlayers(),
 					game.currentPlayer(),
 					game.getGameState(),
@@ -364,7 +509,8 @@ function createActiveGameStore() {
 					game.gameMode().catch(() => 0), // Default to Tournament if not available
 					game.gameId().catch(() => 0),
 					game.canCancelUnjoinedGame($wallet.account || ethers.constants.AddressZero).catch(() => false),
-					game.getCancelUnjoinedRemaining().catch(() => 0)
+					game.getCancelUnjoinedRemaining().catch(() => 0),
+					game.getDrawRuleStatus().catch(() => null)
 				]);
 
 				// Convert board state from contract format
@@ -456,6 +602,10 @@ function createActiveGameStore() {
 						moveHistory,
 						timeout,
 						drawOfferedBy,
+						drawRules: {
+							halfMoves: Number(drawRuleStatus?.halfMoves ?? drawRuleStatus?.[0] ?? 0),
+							maxRepetitions: Number(drawRuleStatus?.maxRepetitions ?? drawRuleStatus?.[1] ?? 0)
+						},
 						gameMode: Number(gameMode), // 0=Tournament, 1=Friendly
 						canCancelUnjoinedGame: Boolean(canCancelUnjoinedGame),
 						cancelUnjoinedRemaining: Number(cancelUnjoinedRemaining)
@@ -477,7 +627,7 @@ function createActiveGameStore() {
 				// Listen for draw offer events
 				drawOfferedListener = handleDrawOffered;
 				drawDeclinedListener = handleDrawDeclined;
-				drawAcceptedListener = handleGameStateChanged;
+				drawAcceptedListener = handleDrawAccepted;
 				game.on('DrawOffered', drawOfferedListener);
 				game.on('DrawOfferDeclined', drawDeclinedListener);
 				game.on('DrawAccepted', drawAcceptedListener);
@@ -535,7 +685,7 @@ function createActiveGameStore() {
 			if ($state.data) {
 				update(s => {
 					const newBoard = s.data.board.map(row => [...row]);
-					const movedPiece = promotionPiece !== 0 ? promotionPiece : piece;
+					const movedPiece = promotionPiece !== 0 ? signedPromotionPiece(piece, promotionPiece) : piece;
 					newBoard[toRow][toCol] = movedPiece;
 					newBoard[fromRow][fromCol] = 0;
 
@@ -618,9 +768,11 @@ function createActiveGameStore() {
 
 			const chessCoreAbi = await getChessCoreAbi();
 			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
-			const tx = await game.joinGameAsBlack({
-				value: ethers.utils.parseEther($state.data.betting.toString())
-			});
+			const value = ethers.utils.parseEther($state.data.betting.toString());
+			const customized = await game.boardCustomized().catch(() => false);
+			const tx = customized
+				? await game.joinGameAsBlackConfirmingBoard(await game.getBoardSetupHash(), { value })
+				: await game.joinGameAsBlack({ value });
 			await tx.wait();
 		},
 
@@ -649,6 +801,20 @@ function createActiveGameStore() {
 			const chessCoreAbi = await getChessCoreAbi();
 			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
 			const tx = await game.resign();
+			await tx.wait();
+		},
+
+		async claimVictoryByTimeout() {
+			const $wallet = get(wallet);
+			const $state = get({ subscribe });
+
+			if (!$wallet.signer || !$state.address) {
+				throw new Error('No game loaded');
+			}
+
+			const chessCoreAbi = await getChessCoreAbi();
+			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
+			const tx = await game.claimVictoryByTimeout();
 			await tx.wait();
 		},
 
@@ -726,6 +892,34 @@ function createActiveGameStore() {
 			}));
 		},
 
+		async claimDrawByRepetition() {
+			const $wallet = get(wallet);
+			const $state = get({ subscribe });
+
+			if (!$wallet.signer || !$state.address) {
+				throw new Error('No game loaded');
+			}
+
+			const chessCoreAbi = await getChessCoreAbi();
+			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
+			const tx = await game.claimDrawByRepetition();
+			await tx.wait();
+		},
+
+		async claimDrawByFiftyMoveRule() {
+			const $wallet = get(wallet);
+			const $state = get({ subscribe });
+
+			if (!$wallet.signer || !$state.address) {
+				throw new Error('No game loaded');
+			}
+
+			const chessCoreAbi = await getChessCoreAbi();
+			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
+			const tx = await game.claimDrawByFiftyMoveRule();
+			await tx.wait();
+		},
+
 		async claimPrize() {
 			const $wallet = get(wallet);
 			const $state = get({ subscribe });
@@ -737,12 +931,18 @@ function createActiveGameStore() {
 			const chessCoreAbi = await getChessCoreAbi();
 			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
 
+			const pending = await game.pendingPrize($wallet.account);
+			if (pending.gt(0)) {
+				const tx = await game.withdrawPrize();
+				await tx.wait();
+				return;
+			}
+
 			try {
 				const finalizeTx = await game.finalizePrizes();
 				await finalizeTx.wait();
 			} catch (err) {
-				const message = err?.message || '';
-				if (!message.includes('Already finalized')) {
+				if (!isCustomError(err, 'PrizeAlreadyClaimed()')) {
 					throw err;
 				}
 			}

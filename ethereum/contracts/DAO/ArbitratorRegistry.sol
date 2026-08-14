@@ -100,10 +100,13 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
         require(chessToken.transferFrom(msg.sender, address(this), amount), "Transfer failed");
 
         if (!wasActive) {
-            // New or reactivated arbitrator
+            // Keep a degraded score so removal cannot be undone with a 1-wei restake.
+            require(arb.reputation == 0 || arb.reputation >= MIN_REPUTATION, "Reputation too low");
+            if (arb.reputation == 0) {
+                arb.reputation = INITIAL_REPUTATION;
+            }
             arb.stakedAt = block.timestamp;
             arb.votingPowerActiveAt = block.timestamp + VOTING_POWER_DELAY;
-            arb.reputation = INITIAL_REPUTATION;
             arb.weekStartTime = block.timestamp;
             arb.isActive = true;
             totalArbitrators++;
@@ -198,24 +201,42 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
         address player2,
         uint256 count
     ) external onlyRole(DISPUTE_MANAGER_ROLE) returns (address[] memory selected) {
+        return _selectArbitrators(disputeId, player1, player2, address(0), count);
+    }
+
+    function selectArbitrators(
+        uint256 disputeId,
+        address player1,
+        address player2,
+        address extraExcluded,
+        uint256 count
+    ) external onlyRole(DISPUTE_MANAGER_ROLE) returns (address[] memory selected) {
+        return _selectArbitrators(disputeId, player1, player2, extraExcluded, count);
+    }
+
+    function _selectArbitrators(
+        uint256 disputeId,
+        address player1,
+        address player2,
+        address extraExcluded,
+        uint256 count
+    ) internal returns (address[] memory selected) {
         require(count > 0, "Count must be > 0");
 
         uint256 totalSelected = count * 3; // From all 3 tiers
         selected = new address[](totalSelected);
         uint256 selectedCount = 0;
 
-        // Select from each tier
         selectedCount = _selectFromTier(
-            tier1Arbitrators, disputeId, player1, player2, count, selected, selectedCount, 1
+            tier1Arbitrators, disputeId, player1, player2, extraExcluded, count, selected, selectedCount, 1
         );
         selectedCount = _selectFromTier(
-            tier2Arbitrators, disputeId, player1, player2, count, selected, selectedCount, 2
+            tier2Arbitrators, disputeId, player1, player2, extraExcluded, count, selected, selectedCount, 2
         );
         selectedCount = _selectFromTier(
-            tier3Arbitrators, disputeId, player1, player2, count, selected, selectedCount, 3
+            tier3Arbitrators, disputeId, player1, player2, extraExcluded, count, selected, selectedCount, 3
         );
 
-        // Resize array if we couldn't fill all slots
         if (selectedCount < totalSelected) {
             address[] memory resized = new address[](selectedCount);
             for (uint256 i = 0; i < selectedCount; i++) {
@@ -223,8 +244,6 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
             }
             return resized;
         }
-
-        return selected;
     }
 
     /**
@@ -332,13 +351,31 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
      * @notice Check if arbitrator should be excluded from a dispute
      */
     function shouldExclude(address arbitrator, address player1, address player2) public view returns (bool) {
-        // Exclude if arbitrator is one of the players
-        if (arbitrator == player1 || arbitrator == player2) return true;
+        return _shouldExclude(arbitrator, player1, player2, address(0));
+    }
 
-        // Exclude if played against either player in last 30 days
+    function shouldExclude(
+        address arbitrator,
+        address player1,
+        address player2,
+        address extra
+    ) public view returns (bool) {
+        return _shouldExclude(arbitrator, player1, player2, extra);
+    }
+
+    function _shouldExclude(
+        address arbitrator,
+        address player1,
+        address player2,
+        address extra
+    ) internal view returns (bool) {
+        if (arbitrator == player1 || arbitrator == player2) return true;
+        if (extra != address(0) && arbitrator == extra) return true;
+
         uint256 thirtyDaysAgo = block.timestamp - 30 days;
         if (lastGameWith[arbitrator][player1] > thirtyDaysAgo) return true;
         if (lastGameWith[arbitrator][player2] > thirtyDaysAgo) return true;
+        if (extra != address(0) && lastGameWith[arbitrator][extra] > thirtyDaysAgo) return true;
 
         return false;
     }
@@ -413,6 +450,7 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
         uint256 disputeId,
         address player1,
         address player2,
+        address extraExcluded,
         uint256 count,
         address[] memory selected,
         uint256 startIndex,
@@ -421,14 +459,14 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
         if (pool.length == 0) return startIndex;
 
         uint256 selectedFromTier = 0;
-        uint256 scanStart = _selectionSeed(disputeId, player1, player2, salt) % pool.length;
+        uint256 scanStart = _selectionSeed(disputeId, player1, player2, extraExcluded, salt) % pool.length;
         uint256 scanned = 0;
 
         while (selectedFromTier < count && scanned < pool.length) {
             address candidate = pool[(scanStart + scanned) % pool.length];
             scanned++;
 
-            if (shouldExclude(candidate, player1, player2)) continue;
+            if (_shouldExclude(candidate, player1, player2, extraExcluded)) continue;
             if (!canVote(candidate)) continue;
             if (disputeAssignments[disputeId][candidate]) continue;
             if (_isAlreadySelected(selected, startIndex + selectedFromTier, candidate)) continue;
@@ -460,6 +498,7 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
         uint256 disputeId,
         address player1,
         address player2,
+        address extraExcluded,
         uint256 salt
     ) internal view returns (uint256) {
         return uint256(
@@ -468,6 +507,7 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
                     disputeId,
                     player1,
                     player2,
+                    extraExcluded,
                     salt,
                     block.prevrandao,
                     totalStaked,

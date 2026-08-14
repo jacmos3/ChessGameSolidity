@@ -293,6 +293,27 @@ contract("ArbitratorRegistry", (accounts) => {
       const info = await arbitratorRegistry.getArbitratorInfo(arbitrator1);
       assert.isFalse(info.isActive);
     });
+
+    it("should not reset a low reputation with a tiny restake", async () => {
+      for (let i = 0; i < 51; i++) {
+        try {
+          await arbitratorRegistry.updateReputation(arbitrator1, false, { from: disputeManager });
+        } catch (e) {
+          break;
+        }
+      }
+
+      try {
+        await arbitratorRegistry.stake(web3.utils.toWei("1", "wei"), { from: arbitrator1 });
+        assert.fail("Should have reverted");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+
+      const info = await arbitratorRegistry.getArbitratorInfo(arbitrator1);
+      assert.isFalse(info.isActive);
+      assert.isTrue(web3.utils.toBN(info.reputation).lt(web3.utils.toBN("50")));
+    });
   });
 
   describe("Game Recording & Exclusion", () => {
@@ -322,6 +343,16 @@ contract("ArbitratorRegistry", (accounts) => {
     it("should not exclude unrelated arbitrators", async () => {
       const shouldExclude = await arbitratorRegistry.shouldExclude(arbitrator1, player1, player2);
       assert.isFalse(shouldExclude);
+    });
+
+    it("should exclude an extra address such as the challenger", async () => {
+      const shouldExclude = await arbitratorRegistry.shouldExclude(
+        arbitrator1,
+        player1,
+        player2,
+        arbitrator1
+      );
+      assert.isTrue(shouldExclude);
     });
   });
 
@@ -457,6 +488,24 @@ contract("ArbitratorRegistry", (accounts) => {
       const assignmentsAfterRelease = await arbitratorRegistry.activeAssignments(arbitrator1);
       assert.equal(assignmentsAfterRelease.toString(), "0");
       await arbitratorRegistry.unstake(TIER1_STAKE, { from: arbitrator1 });
+    });
+
+    it("should omit an extra excluded address from the selected panel", async () => {
+      await advanceTime(7 * 24 * 60 * 60 + 1);
+
+      const selected = await arbitratorRegistry.selectArbitrators.call(
+        8,
+        player1,
+        player2,
+        arbitrator3,
+        5,
+        { from: disputeManager }
+      );
+
+      const selectedSet = new Set(selected.map((address) => address.toLowerCase()));
+      assert.isFalse(selectedSet.has(arbitrator3.toLowerCase()), "Challenger must not sit on the panel");
+      assert.isTrue(selectedSet.has(arbitrator1.toLowerCase()));
+      assert.isTrue(selectedSet.has(arbitrator2.toLowerCase()));
     });
   });
 

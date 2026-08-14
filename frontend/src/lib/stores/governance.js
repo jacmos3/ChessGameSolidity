@@ -434,8 +434,8 @@ export function formatTimelockDelay(seconds) {
 }
 
 export function formatBlocks(blocks) {
-	// Assuming ~12 seconds per block
-	const seconds = blocks * 12;
+	// Base / Base Sepolia produce ~2 second blocks
+	const seconds = blocks * 2;
 	if (seconds < 3600) {
 		return `~${Math.floor(seconds / 60)} min`;
 	} else if (seconds < 86400) {

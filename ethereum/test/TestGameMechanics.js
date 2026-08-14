@@ -66,10 +66,23 @@ contract("ChessCore - Game Mechanics", (accounts) => {
     chessCore = await ChessCore.at(chessCoreAddress);
   }
 
+  async function joinAsBlack(value = betAmount) {
+    const customized = await chessCore.boardCustomized();
+    if (customized) {
+      const boardHash = await chessCore.getBoardSetupHash();
+      await chessCore.joinGameAsBlackConfirmingBoard(boardHash, {
+        from: blackPlayer,
+        value
+      });
+      return;
+    }
+    await chessCore.joinGameAsBlack({ from: blackPlayer, value });
+  }
+
   // Helper to create a game and join as black
   async function createAndJoinGame(gameMode = 0, timeoutPreset = 2) {
     await createGame(gameMode, timeoutPreset);
-    await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+    await joinAsBlack(betAmount);
   }
 
   // ============================================
@@ -86,7 +99,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
     });
 
     it("should transition to InProgress when black joins", async () => {
-      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+      await joinAsBlack(betAmount);
       const gameState = await chessCore.getGameState();
       assert.equal(gameState.toNumber(), GameState.InProgress, "Game should be InProgress");
     });
@@ -110,7 +123,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
     });
 
     it("should not allow second player to join as black", async () => {
-      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+      await joinAsBlack(betAmount);
       try {
         await chessCore.joinGameAsBlack({ from: thirdPlayer, value: betAmount });
         assert.fail("Should have thrown an error");
@@ -120,14 +133,14 @@ contract("ChessCore - Game Mechanics", (accounts) => {
     });
 
     it("should have correct contract balance after both players join", async () => {
-      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+      await joinAsBlack(betAmount);
       const balance = await web3.eth.getBalance(chessCore.address);
       const expectedBalance = BigInt(betAmount) * 2n;
       assert.equal(balance.toString(), expectedBalance.toString(), "Contract should hold both bets");
     });
 
     it("should set white as current player initially", async () => {
-      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+      await joinAsBlack(betAmount);
       const currentPlayer = await chessCore.currentPlayer();
       assert.equal(currentPlayer, whitePlayer, "White should be current player");
     });
@@ -181,7 +194,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
     });
 
     it("should reject cancellation after black has already joined", async () => {
-      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+      await joinAsBlack(betAmount);
       await advanceTime(24 * 60 * 60 + 1);
 
       try {
@@ -206,7 +219,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
       await chessCore.cancelUnjoinedGame({ from: whitePlayer });
 
       try {
-        await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+        await joinAsBlack(betAmount);
         assert.fail("Should have reverted");
       } catch (error) {
         assert.include(error.message, "revert");
@@ -299,11 +312,40 @@ contract("ChessCore - Game Mechanics", (accounts) => {
       await chessCore.debugCreative(3, 4, QUEEN, { from: whitePlayer }); // White queen at e5
       await chessCore.debugCreative(0, 4, -KING, { from: whitePlayer }); // Move black king to e8 for clarity
 
-      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+      await joinAsBlack(betAmount);
 
       // Black tries to move a piece that would leave king in check
       const gameState = await chessCore.getGameState();
       assert.equal(gameState.toNumber(), GameState.InProgress, "Game should continue");
+    });
+
+    it("should reject an unconfirmed join after the board is customized", async () => {
+      await chessCore.debugCreative(3, 4, QUEEN, { from: whitePlayer });
+
+      try {
+        await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+        assert.fail("Should have reverted an unconfirmed custom-board join");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+
+      try {
+        await chessCore.joinGameAsBlackConfirmingBoard(
+          web3.utils.keccak256("wrong-board"),
+          { from: blackPlayer, value: betAmount }
+        );
+        assert.fail("Should have reverted a mismatched board hash");
+      } catch (error) {
+        assert.include(error.message, "revert");
+      }
+
+      const boardHash = await chessCore.getBoardSetupHash();
+      await chessCore.joinGameAsBlackConfirmingBoard(boardHash, {
+        from: blackPlayer,
+        value: betAmount
+      });
+      const gameState = await chessCore.getGameState();
+      assert.equal(gameState.toNumber(), GameState.InProgress, "Confirmed custom board should start");
     });
   });
 
@@ -429,7 +471,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
       await chessCore.debugCreative(7, 4, KING, { from: whitePlayer });   // White king at e1
       await chessCore.debugCreative(3, 4, KNIGHT, { from: whitePlayer }); // White knight at e5
 
-      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+      await joinAsBlack(betAmount);
 
       // Knight delivers smothered mate: Ne5->f7#
       await chessCore.makeMove(3, 4, 1, 5, { from: whitePlayer }); // Ne5->f7#
@@ -454,7 +496,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
       await chessCore.debugCreative(7, 4, KING, { from: whitePlayer });   // White king at e1
       await chessCore.debugCreative(7, 0, ROOK, { from: whitePlayer });   // White rook at a1
 
-      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+      await joinAsBlack(betAmount);
 
       // White delivers back rank mate: Ra1->a8#
       await chessCore.makeMove(7, 0, 0, 0, { from: whitePlayer });
@@ -476,7 +518,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
       await chessCore.debugCreative(7, 4, KING, { from: whitePlayer });   // White king at e1
       await chessCore.debugCreative(7, 0, ROOK, { from: whitePlayer });   // White rook at a1
 
-      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+      await joinAsBlack(betAmount);
 
       // Rook gives check but king can escape
       await chessCore.makeMove(7, 0, 0, 0, { from: whitePlayer }); // Ra1->a8+
@@ -498,7 +540,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
       await chessCore.debugCreative(7, 4, KING, { from: whitePlayer });   // White king at e1
       await chessCore.debugCreative(3, 0, ROOK, { from: whitePlayer });   // White rook at a5
 
-      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+      await joinAsBlack(betAmount);
 
       // Rook gives check but can be captured by black rook
       await chessCore.makeMove(3, 0, 0, 0, { from: whitePlayer }); // Ra5xa8+
@@ -520,7 +562,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
       await chessCore.debugCreative(7, 0, KING, { from: whitePlayer });   // White king at a1
       await chessCore.debugCreative(7, 4, ROOK, { from: whitePlayer });   // White rook at e1
 
-      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+      await joinAsBlack(betAmount);
 
       // Rook gives check - black can block with rook
       await chessCore.makeMove(7, 4, 0, 4, { from: whitePlayer }); // Re1->e8+
@@ -626,7 +668,7 @@ contract("ChessCore - Game Mechanics", (accounts) => {
       await chessCore.debugCreative(2, 2, KING, { from: whitePlayer });  // White king at c6
       await chessCore.debugCreative(3, 2, QUEEN, { from: whitePlayer }); // White queen at c5
 
-      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+      await joinAsBlack(betAmount);
 
       await chessCore.makeMove(3, 2, 2, 1, { from: whitePlayer }); // Qc5 -> b6, stalemate
 

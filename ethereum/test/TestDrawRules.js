@@ -149,5 +149,53 @@ contract("ChessCore - Draw Rules", accounts => {
                 assert(error.message.includes("revert"), "Expected revert error");
             }
         });
+
+        it("should not let acceptDraw overwrite a resignation", async () => {
+            await game.offerDraw({ from: white });
+            await game.resign({ from: white });
+
+            try {
+                await game.acceptDraw({ from: black });
+                assert.fail("Should have thrown error");
+            } catch (error) {
+                assert(error.message.includes("revert"), "Expected revert error");
+            }
+
+            const gameState = await game.getGameState();
+            assert.equal(gameState.toNumber(), 5, "Black win from resign must stand");
+        });
+
+        it("should not let acceptDraw overwrite a timeout win", async () => {
+            await game.offerDraw({ from: white });
+
+            await new Promise((resolve, reject) => {
+                web3.currentProvider.send({
+                    jsonrpc: "2.0",
+                    method: "evm_increaseTime",
+                    params: [60 * 60 + 1],
+                    id: Date.now()
+                }, (err) => {
+                    if (err) return reject(err);
+                    web3.currentProvider.send({
+                        jsonrpc: "2.0",
+                        method: "evm_mine",
+                        params: [],
+                        id: Date.now() + 1
+                    }, (err2) => (err2 ? reject(err2) : resolve()));
+                });
+            });
+
+            await game.claimVictoryByTimeout({ from: black });
+
+            try {
+                await game.acceptDraw({ from: white });
+                assert.fail("Should have thrown error");
+            } catch (error) {
+                assert(error.message.includes("revert"), "Expected revert error");
+            }
+
+            const gameState = await game.getGameState();
+            assert.equal(gameState.toNumber(), 5, "Black win from timeout must stand");
+        });
     });
 });

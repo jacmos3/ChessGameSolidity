@@ -65,12 +65,19 @@
 		}
 	}
 
+	let timeoutRemaining = 0;
+	let lastTimeoutSyncKey = '';
+
 	onMount(() => {
 		activeGame.load(address);
 		preloadAllSounds();
+		const timer = window.setInterval(() => {
+			if (timeoutRemaining > 0) timeoutRemaining -= 1;
+		}, 1000);
 		return () => {
 			activeGame.clear();
 			if (errorTimeout) clearTimeout(errorTimeout);
+			window.clearInterval(timer);
 		};
 	});
 
@@ -158,6 +165,26 @@
 	$: isMyDrawOffer = hasDrawOffer && data?.drawOfferedBy?.toLowerCase() === $wallet.account?.toLowerCase();
 	$: isOpponentDrawOffer = hasDrawOffer && !isMyDrawOffer && data?.playerRole !== 'spectator';
 	$: canOfferDraw = data?.stateInfo.isActive && data?.playerRole !== 'spectator' && !hasDrawOffer;
+	$: canClaimRepetition = !!data?.stateInfo.isActive &&
+		data?.playerRole !== 'spectator' &&
+		(data?.drawRules?.maxRepetitions ?? 0) >= 3;
+	$: canClaimFiftyMove = !!data?.stateInfo.isActive &&
+		data?.playerRole !== 'spectator' &&
+		(data?.drawRules?.halfMoves ?? 0) >= 100;
+	$: if (data?.timeout) {
+		const sourceSeconds = data.timeout.currentPlayerIsWhite
+			? data.timeout.whiteSecondsRemaining
+			: data.timeout.blackSecondsRemaining;
+		const syncKey = `${data.timeout.currentPlayerIsWhite}:${sourceSeconds}`;
+		if (syncKey !== lastTimeoutSyncKey) {
+			lastTimeoutSyncKey = syncKey;
+			timeoutRemaining = sourceSeconds;
+		}
+	}
+	$: canClaimTimeout = !!data?.stateInfo.isActive &&
+		data?.playerRole !== 'spectator' &&
+		!data?.isMyTurn &&
+		timeoutRemaining === 0;
 
 	// Move history from contract events
 	$: moveHistory = data?.moveHistory || [];
@@ -251,11 +278,9 @@
 		showPromotionModal = false;
 		if (!promotionMoveData) return;
 
-		const { from, to, piece } = promotionMoveData;
-		// For black pieces, use negative value
-		const actualValue = piece < 0 ? -promotionValue : promotionValue;
-
-		await executeMove(from, to, actualValue);
+		const { from, to } = promotionMoveData;
+		// Contract applies the moving side's sign; always send the positive piece id.
+		await executeMove(from, to, Math.abs(promotionValue));
 		promotionMoveData = null;
 	}
 
@@ -318,6 +343,22 @@
 			await activeGame.load(address);
 		} catch (err) {
 			console.error('Resign error:', err);
+			setError(parseError(err));
+		}
+
+		actionLoading = false;
+	}
+
+	async function handleClaimTimeout() {
+		actionLoading = true;
+		actionError = null;
+
+		try {
+			await activeGame.claimVictoryByTimeout();
+			actionSuccess = 'Timeout claimed';
+			await activeGame.load(address);
+		} catch (err) {
+			console.error('Timeout claim error:', err);
 			setError(parseError(err));
 		}
 
@@ -411,6 +452,38 @@
 			actionSuccess = 'Draw offer cancelled';
 		} catch (err) {
 			console.error('Cancel draw offer error:', err);
+			setError(parseError(err));
+		}
+
+		actionLoading = false;
+	}
+
+	async function handleClaimRepetition() {
+		actionLoading = true;
+		actionError = null;
+
+		try {
+			await activeGame.claimDrawByRepetition();
+			actionSuccess = 'Draw claimed by repetition';
+			await activeGame.load(address);
+		} catch (err) {
+			console.error('Repetition draw error:', err);
+			setError(parseError(err));
+		}
+
+		actionLoading = false;
+	}
+
+	async function handleClaimFiftyMove() {
+		actionLoading = true;
+		actionError = null;
+
+		try {
+			await activeGame.claimDrawByFiftyMoveRule();
+			actionSuccess = 'Draw claimed by 50-move rule';
+			await activeGame.load(address);
+		} catch (err) {
+			console.error('Fifty-move draw error:', err);
 			setError(parseError(err));
 		}
 
@@ -663,9 +736,24 @@
 								Resign
 							</button>
 						{/if}
+						{#if canClaimTimeout}
+							<button class="btn btn-primary" on:click={handleClaimTimeout} disabled={actionLoading}>
+								Claim Timeout
+							</button>
+						{/if}
 						{#if canOfferDraw}
 							<button class="btn btn-secondary" on:click={handleOfferDraw} disabled={actionLoading}>
 								🤝 Draw
+							</button>
+						{/if}
+						{#if canClaimRepetition}
+							<button class="btn btn-secondary" on:click={handleClaimRepetition} disabled={actionLoading}>
+								Claim 3-fold
+							</button>
+						{/if}
+						{#if canClaimFiftyMove}
+							<button class="btn btn-secondary" on:click={handleClaimFiftyMove} disabled={actionLoading}>
+								Claim 50-move
 							</button>
 						{/if}
 						{#if canClaim}
@@ -794,6 +882,16 @@
 								</button>
 							{/if}
 
+							{#if canClaimTimeout}
+								<button
+									class="btn btn-primary w-full"
+									on:click={handleClaimTimeout}
+									disabled={actionLoading}
+								>
+									Claim Timeout
+								</button>
+							{/if}
+
 							{#if canOfferDraw}
 								<button
 									class="btn btn-secondary w-full"
@@ -801,6 +899,26 @@
 									disabled={actionLoading}
 								>
 									🤝 Offer Draw
+								</button>
+							{/if}
+
+							{#if canClaimRepetition}
+								<button
+									class="btn btn-secondary w-full"
+									on:click={handleClaimRepetition}
+									disabled={actionLoading}
+								>
+									Claim Threefold Draw
+								</button>
+							{/if}
+
+							{#if canClaimFiftyMove}
+								<button
+									class="btn btn-secondary w-full"
+									on:click={handleClaimFiftyMove}
+									disabled={actionLoading}
+								>
+									Claim 50-Move Draw
 								</button>
 							{/if}
 

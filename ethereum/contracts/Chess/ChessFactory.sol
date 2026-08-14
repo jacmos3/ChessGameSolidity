@@ -181,6 +181,31 @@ contract ChessFactory {
         return deployedChessGames;
     }
 
+    function getDeployedChessGameCount() public view returns (uint256) {
+        return deployedChessGames.length;
+    }
+
+    /// @notice Paginated slice of deployed games (oldest-first). Cap keeps the view callable.
+    function getDeployedChessGamesPage(uint256 offset, uint256 limit) public view returns (address[] memory page) {
+        require(limit > 0 && limit <= 100, "Invalid page size");
+
+        uint256 total = deployedChessGames.length;
+        if (offset >= total) {
+            return new address[](0);
+        }
+
+        uint256 end = offset + limit;
+        if (end > total) {
+            end = total;
+        }
+
+        page = new address[](end - offset);
+        for (uint256 i = 0; i < page.length;) {
+            page[i] = deployedChessGames[offset + i];
+            unchecked { ++i; }
+        }
+    }
+
     function _isContractOrZero(address candidate) internal view returns (bool) {
         return candidate == address(0) || candidate.code.length > 0;
     }

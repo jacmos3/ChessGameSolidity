@@ -3,10 +3,18 @@ import { wallet, contractAddress } from './wallet.js';
 import { ethers } from 'ethers';
 import { loadContractAbi } from '../contracts/loadAbi.js';
 
+const RATING_ADDRESSES = {
+	1337: import.meta.env.VITE_PLAYER_RATING_LOCAL || '',
+	5777: import.meta.env.VITE_PLAYER_RATING_LOCAL || '',
+	84532: import.meta.env.VITE_PLAYER_RATING_BASE_SEPOLIA || '',
+	8453: import.meta.env.VITE_PLAYER_RATING_BASE || ''
+};
+
 const getChessFactoryAbi = () => loadContractAbi('ChessFactory');
 const getChessCoreAbi = () => loadContractAbi('ChessCore');
+const getPlayerRatingAbi = () => loadContractAbi('PlayerRating');
+const LEADERBOARD_SAMPLE = 50;
 
-// Leaderboard store
 function createLeaderboardStore() {
 	const { subscribe, set, update } = writable({
 		players: [],
@@ -27,135 +35,25 @@ function createLeaderboardStore() {
 			update(s => ({ ...s, loading: true, error: null }));
 
 			try {
-				const [factoryAbi, chessCoreAbi] = await Promise.all([
-					getChessFactoryAbi(),
-					getChessCoreAbi()
-				]);
-				const factory = new ethers.Contract(
-					$contractAddress,
-					factoryAbi,
-					$wallet.signer
-				);
-
-				const gameAddresses = await factory.getDeployedChessGames();
-
-				// Stats per player: { address: { wins: 0, losses: 0, draws: 0, totalBet: 0 }}
-				const playerStats = new Map();
-
-				// Helper to ensure player exists in map
-				const ensurePlayer = (addr) => {
-					if (!addr || addr === '0x0000000000000000000000000000000000000000') return null;
-					const key = addr.toLowerCase();
-					if (!playerStats.has(key)) {
-						playerStats.set(key, {
-							address: addr,
-							wins: 0,
-							losses: 0,
-							draws: 0,
-							totalBet: ethers.BigNumber.from(0),
-							gamesPlayed: 0
-						});
-					}
-					return playerStats.get(key);
-				};
-
-				// Fetch all game states in parallel (batches of 10)
-				const batchSize = 10;
-				for (let i = 0; i < gameAddresses.length; i += batchSize) {
-					const batch = gameAddresses.slice(i, i + batchSize);
-
-					const results = await Promise.all(
-						batch.map(async (addr) => {
-							try {
-								const game = new ethers.Contract(addr, chessCoreAbi, $wallet.provider);
-								const [players, state, betting] = await Promise.all([
-									game.getPlayers(),
-									game.getGameState(),
-									game.betting()
-								]);
-								return { players, state: Number(state), betting };
-							} catch {
-								return null;
-							}
-						})
-					);
-
-					// Process results
-					for (const result of results) {
-						if (!result) continue;
-
-						const { players, state, betting } = result;
-						const whitePlayer = players[0];
-						const blackPlayer = players[1];
-
-						// Skip games that haven't started, are still in progress, or were cancelled
-						if (state < 3 || state > 5) continue;
-
-						const white = ensurePlayer(whitePlayer);
-						const black = ensurePlayer(blackPlayer);
-
-						// Update stats based on game state
-						// State 3 = Draw, 4 = WhiteWins, 5 = BlackWins
-						if (state === 3) { // Draw
-							if (white) {
-								white.draws++;
-								white.gamesPlayed++;
-								white.totalBet = white.totalBet.add(betting);
-							}
-							if (black) {
-								black.draws++;
-								black.gamesPlayed++;
-								black.totalBet = black.totalBet.add(betting);
-							}
-						} else if (state === 4) { // White wins
-							if (white) {
-								white.wins++;
-								white.gamesPlayed++;
-								white.totalBet = white.totalBet.add(betting);
-							}
-							if (black) {
-								black.losses++;
-								black.gamesPlayed++;
-								black.totalBet = black.totalBet.add(betting);
-							}
-						} else if (state === 5) { // Black wins
-							if (white) {
-								white.losses++;
-								white.gamesPlayed++;
-								white.totalBet = white.totalBet.add(betting);
-							}
-							if (black) {
-								black.wins++;
-								black.gamesPlayed++;
-								black.totalBet = black.totalBet.add(betting);
-							}
-						}
-					}
+				const ratingAddress = RATING_ADDRESSES[$wallet.chainId];
+				if (ratingAddress) {
+					const players = await fetchFromRating($wallet.signer, ratingAddress);
+					set({
+						players,
+						loading: false,
+						error: null,
+						lastUpdated: new Date()
+					});
+					return;
 				}
 
-				// Convert to array and sort by wins (then by win ratio)
-				const players = Array.from(playerStats.values())
-					.map(p => ({
-						...p,
-						totalBetEth: ethers.utils.formatEther(p.totalBet),
-						winRatio: p.gamesPlayed > 0 ? (p.wins / p.gamesPlayed * 100).toFixed(1) : '0.0'
-					}))
-					.filter(p => p.gamesPlayed > 0) // Only show players with finished games
-					.sort((a, b) => {
-						// Sort by wins first
-						if (b.wins !== a.wins) return b.wins - a.wins;
-						// Then by win ratio
-						return parseFloat(b.winRatio) - parseFloat(a.winRatio);
-					})
-					.slice(0, 20); // Top 20
-
+				const players = await fetchFromRecentGames($wallet, $contractAddress);
 				set({
 					players,
 					loading: false,
 					error: null,
 					lastUpdated: new Date()
 				});
-
 			} catch (err) {
 				console.error('Leaderboard fetch error:', err);
 				update(s => ({ ...s, loading: false, error: err.message }));
@@ -166,6 +64,128 @@ function createLeaderboardStore() {
 			set({ players: [], loading: false, error: null, lastUpdated: null });
 		}
 	};
+}
+
+async function fetchFromRating(signer, ratingAddress) {
+	const playerRatingAbi = await getPlayerRatingAbi();
+	const contract = new ethers.Contract(ratingAddress, playerRatingAbi, signer);
+	const [count, page] = await Promise.all([
+		contract.getRankedPlayerCount(),
+		contract.getTopPlayers(0, LEADERBOARD_SAMPLE)
+	]);
+
+	if (Number(count) === 0) return [];
+
+	const addresses = page.addresses || page[0] || [];
+	const stats = await Promise.all(addresses.map(async (address) => {
+		try {
+			const player = await contract.getPlayerStats(address);
+			const gamesPlayed = Number(player.gamesPlayed);
+			if (gamesPlayed === 0) return null;
+			const wins = Number(player.wins);
+			const losses = Number(player.losses);
+			return {
+				address,
+				wins,
+				losses,
+				draws: Number(player.draws),
+				gamesPlayed,
+				rating: Number(player.rating),
+				winRatio: ((wins / gamesPlayed) * 100).toFixed(1)
+			};
+		} catch {
+			return null;
+		}
+	}));
+
+	return stats
+		.filter(Boolean)
+		.sort((a, b) => {
+			if (b.rating !== a.rating) return b.rating - a.rating;
+			if (b.wins !== a.wins) return b.wins - a.wins;
+			return parseFloat(b.winRatio) - parseFloat(a.winRatio);
+		})
+		.slice(0, 20);
+}
+
+async function fetchFromRecentGames($wallet, factoryAddress) {
+	const [factoryAbi, chessCoreAbi] = await Promise.all([
+		getChessFactoryAbi(),
+		getChessCoreAbi()
+	]);
+	const factory = new ethers.Contract(factoryAddress, factoryAbi, $wallet.signer);
+
+	let gameAddresses = [];
+	if (typeof factory.getDeployedChessGameCount === 'function') {
+		const count = Number(await factory.getDeployedChessGameCount());
+		const take = Math.min(LEADERBOARD_SAMPLE, count);
+		const offset = count - take;
+		const page = take > 0 ? await factory.getDeployedChessGamesPage(offset, take) : [];
+		gameAddresses = [...page];
+	} else {
+		const all = await factory.getDeployedChessGames();
+		gameAddresses = all.slice(Math.max(0, all.length - LEADERBOARD_SAMPLE));
+	}
+
+	const playerStats = new Map();
+	const ensurePlayer = (addr) => {
+		if (!addr || addr === ethers.constants.AddressZero) return null;
+		const key = addr.toLowerCase();
+		if (!playerStats.has(key)) {
+			playerStats.set(key, {
+				address: addr,
+				wins: 0,
+				losses: 0,
+				draws: 0,
+				gamesPlayed: 0
+			});
+		}
+		return playerStats.get(key);
+	};
+
+	for (let i = 0; i < gameAddresses.length; i += 10) {
+		const batch = gameAddresses.slice(i, i + 10);
+		const results = await Promise.all(batch.map(async (addr) => {
+			try {
+				const game = new ethers.Contract(addr, chessCoreAbi, $wallet.provider);
+				const [players, state] = await Promise.all([
+					game.getPlayers(),
+					game.getGameState()
+				]);
+				return { players, state: Number(state) };
+			} catch {
+				return null;
+			}
+		}));
+
+		for (const result of results) {
+			if (!result || result.state < 3 || result.state > 5) continue;
+			const white = ensurePlayer(result.players[0]);
+			const black = ensurePlayer(result.players[1]);
+			if (result.state === 3) {
+				if (white) { white.draws++; white.gamesPlayed++; }
+				if (black) { black.draws++; black.gamesPlayed++; }
+			} else if (result.state === 4) {
+				if (white) { white.wins++; white.gamesPlayed++; }
+				if (black) { black.losses++; black.gamesPlayed++; }
+			} else if (result.state === 5) {
+				if (white) { white.losses++; white.gamesPlayed++; }
+				if (black) { black.wins++; black.gamesPlayed++; }
+			}
+		}
+	}
+
+	return Array.from(playerStats.values())
+		.filter(p => p.gamesPlayed > 0)
+		.map(p => ({
+			...p,
+			winRatio: ((p.wins / p.gamesPlayed) * 100).toFixed(1)
+		}))
+		.sort((a, b) => {
+			if (b.wins !== a.wins) return b.wins - a.wins;
+			return parseFloat(b.winRatio) - parseFloat(a.winRatio);
+		})
+		.slice(0, 20);
 }
 
 export const leaderboard = createLeaderboardStore();

@@ -40,6 +40,19 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
     chessCore = await ChessCore.at(chessCoreAddress);
   }
 
+  async function joinAsBlack(value = betAmount) {
+    const customized = await chessCore.boardCustomized();
+    if (customized) {
+      const boardHash = await chessCore.getBoardSetupHash();
+      await chessCore.joinGameAsBlackConfirmingBoard(boardHash, {
+        from: blackPlayer,
+        value
+      });
+      return;
+    }
+    await chessCore.joinGameAsBlack({ from: blackPlayer, value });
+  }
+
   describe("En Passant", () => {
     beforeEach(async () => {
       await createGame();
@@ -148,7 +161,7 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
       await chessCore.debugCreative(1, 0, PAWN, { from: whitePlayer });  // Place white pawn at a7
 
       // Now join the game
-      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+      await joinAsBlack(betAmount);
 
       // White moves the pawn from a7 to a8 (row 1 -> row 0)
       await chessCore.makeMove(1, 0, 0, 0, { from: whitePlayer });
@@ -163,7 +176,7 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
       await chessCore.debugCreative(0, 0, EMPTY, { from: whitePlayer });
       await chessCore.debugCreative(1, 0, PAWN, { from: whitePlayer });
 
-      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+      await joinAsBlack(betAmount);
 
       // Promote to knight
       await chessCore.makeMoveWithPromotion(1, 0, 0, 0, KNIGHT, { from: whitePlayer });
@@ -176,7 +189,7 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
       await chessCore.debugCreative(0, 0, EMPTY, { from: whitePlayer });
       await chessCore.debugCreative(1, 0, PAWN, { from: whitePlayer });
 
-      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+      await joinAsBlack(betAmount);
 
       await chessCore.makeMoveWithPromotion(1, 0, 0, 0, ROOK, { from: whitePlayer });
 
@@ -188,7 +201,7 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
       await chessCore.debugCreative(0, 0, EMPTY, { from: whitePlayer });
       await chessCore.debugCreative(1, 0, PAWN, { from: whitePlayer });
 
-      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+      await joinAsBlack(betAmount);
 
       await chessCore.makeMoveWithPromotion(1, 0, 0, 0, BISHOP, { from: whitePlayer });
 
@@ -201,7 +214,7 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
       await chessCore.debugCreative(6, 4, -PAWN, { from: whitePlayer });
       await chessCore.debugCreative(7, 4, EMPTY, { from: whitePlayer }); // Clear e1
 
-      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+      await joinAsBlack(betAmount);
 
       // First white makes a move
       await chessCore.makeMove(6, 0, 5, 0, { from: whitePlayer });
@@ -218,7 +231,7 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
       await chessCore.debugCreative(1, 4, PAWN, { from: whitePlayer });
       await chessCore.debugCreative(0, 4, EMPTY, { from: whitePlayer });
 
-      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+      await joinAsBlack(betAmount);
 
       try {
         await chessCore.makeMoveWithPromotion(1, 4, 0, 4, KING, { from: whitePlayer });
@@ -232,7 +245,7 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
       await chessCore.debugCreative(1, 4, PAWN, { from: whitePlayer });
       await chessCore.debugCreative(0, 4, EMPTY, { from: whitePlayer });
 
-      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+      await joinAsBlack(betAmount);
 
       try {
         await chessCore.makeMoveWithPromotion(1, 4, 0, 4, PAWN, { from: whitePlayer });
@@ -247,7 +260,7 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
       await chessCore.debugCreative(1, 4, PAWN, { from: whitePlayer }); // White pawn at e7
       await chessCore.debugCreative(0, 5, -ROOK, { from: whitePlayer }); // Black rook at f8
 
-      await chessCore.joinGameAsBlack({ from: blackPlayer, value: betAmount });
+      await joinAsBlack(betAmount);
 
       // White captures and promotes: e7->f8
       await chessCore.makeMoveWithPromotion(1, 4, 0, 5, QUEEN, { from: whitePlayer });

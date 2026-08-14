@@ -15,9 +15,9 @@
 
 	// Timeout presets matching contract constants (named after crypto pioneers)
 	const timeoutOptions = [
-		{ value: 0, name: 'Finney', blocks: 300, time: '~1 ora', description: 'Partite veloci' },
-		{ value: 1, name: 'Buterin', blocks: 2100, time: '~7 ore', description: 'Ritmo moderato' },
-		{ value: 2, name: 'Nakamoto', blocks: 50400, time: '~7 giorni', description: 'Partite rilassate' }
+		{ value: 0, name: 'Finney', time: '~1 ora', description: 'Partite veloci' },
+		{ value: 1, name: 'Buterin', time: '~7 ore', description: 'Ritmo moderato' },
+		{ value: 2, name: 'Nakamoto', time: '~7 giorni', description: 'Partite rilassate' }
 	];
 
 	// Game mode options
@@ -159,8 +159,7 @@
 					{/each}
 				</div>
 				<p class="text-xs text-chess-gray mt-2">
-					{timeoutOptions[timeoutPreset].description} -
-					{timeoutOptions[timeoutPreset].blocks} blocchi per mossa
+					{timeoutOptions[timeoutPreset].description} — {timeoutOptions[timeoutPreset].time} per mossa
 				</p>
 			</div>
 

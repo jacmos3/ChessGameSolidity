@@ -50,8 +50,8 @@ contract ChessGovernor is
     )
         Governor("Chess Governor")
         GovernorSettings(
-            7200,       // 1 day voting delay (7200 blocks @ 12s/block)
-            36000,      // 5 days voting period (36000 blocks @ 12s/block)
+            43200,      // 1 day voting delay (43200 blocks @ ~2s Base)
+            216000,     // 5 days voting period (216000 blocks @ ~2s Base)
             100000e18   // 100,000 CHESS proposal threshold
         )
         GovernorVotes(_token)

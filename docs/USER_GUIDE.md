@@ -189,7 +189,9 @@ You can withdraw any bond that isn't locked in active games:
 | Offer Draw | Click "Offer Draw" |
 | Accept Draw | Click "Accept" when opponent offers |
 | Decline Draw | Click "Decline" or make a move |
-| Claim Victory by Timeout | Click "Claim Victory" when opponent times out |
+| Claim Victory by Timeout | Click "Claim Timeout" when opponent times out |
+| Claim Threefold Draw | Click "Claim Threefold Draw" when a position has occurred 3 times |
+| Claim 50-Move Draw | Click "Claim 50-Move Draw" after 50 moves without a pawn move or capture |
 
 ### Claiming Your Prize
 

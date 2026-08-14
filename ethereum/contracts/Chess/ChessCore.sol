@@ -40,6 +40,8 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     error FriendlyOnly();
     error CancelTimeoutNotReached();
     error InvalidPromotionPiece();
+    error CustomBoardUnconfirmed();
+    error BoardHashMismatch();
 
     // ========== ENUMS (must be declared before state variables) ==========
     enum TimeoutPreset { Finney, Buterin, Nakamoto }
@@ -96,6 +98,7 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
 
     // Slot 8: creation metadata
     uint48 public createdAt;
+    bool public boardCustomized;
 
     // Structured events for frontend
     event MoveMade(
@@ -223,7 +226,26 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         currentPlayer = (currentPlayer == whitePlayer) ? blackPlayer : whitePlayer;
     }
 
-   function joinGameAsBlack() public payable {
+    /// @notice Join as Black on a standard starting position.
+    /// @dev Custom Friendly setups must use joinGameAsBlackConfirmingBoard.
+    function joinGameAsBlack() public payable {
+        if (boardCustomized) revert CustomBoardUnconfirmed();
+        _joinGameAsBlack();
+    }
+
+    /// @notice Join as Black after confirming the exact board being accepted.
+    /// @dev Prevents White from frontrunning a stake join with debugCreative().
+    function joinGameAsBlackConfirmingBoard(bytes32 expectedBoardHash) public payable {
+        if (expectedBoardHash != getBoardSetupHash()) revert BoardHashMismatch();
+        _joinGameAsBlack();
+    }
+
+    function getBoardSetupHash() public view returns (bytes32) {
+        int8[BOARD_SIZE][BOARD_SIZE] memory snapshot = board;
+        return keccak256(abi.encode(snapshot));
+    }
+
+    function _joinGameAsBlack() internal {
         if (cancelled) revert CancelledGame();
         if (gameState != GameState.NotStarted) revert GameAlreadyStarted();
         if (msg.sender == whitePlayer) revert AlreadyWhitePlayer();
@@ -241,9 +263,6 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
 
         // Start white's clock (white moves first).
         whiteMoveDeadline = uint48(block.timestamp) + timeoutSeconds;
-
-        // NOTE: Initial position already recorded in initialize()
-        // No need to record again here - was causing duplicate entries
 
         emit GameStarted(whitePlayer, blackPlayer, betting);
         emit GameStateChanged(GameState.InProgress);
@@ -578,6 +597,8 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
             winner = whitePlayer;
         }
 
+        drawOfferedBy = address(0);
+
         // Register for dispute system and distribute rewards
         _registerGameForDispute();
 
@@ -596,6 +617,7 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     /// @notice Accept a draw offer from the opponent
     function acceptDraw() external {
         if (msg.sender != whitePlayer && msg.sender != blackPlayer) revert NotAPlayer();
+        if (gameState != GameState.InProgress) revert GameNotInProgress();
         if (drawOfferedBy == address(0) || drawOfferedBy == msg.sender) revert NoDrawOffer();
         gameState = GameState.Draw;
         drawOfferedBy = address(0);
@@ -640,6 +662,7 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         if (positionCount[posHash] < 3) revert PositionNotRepeated();
 
         gameState = GameState.Draw;
+        drawOfferedBy = address(0);
         _registerGameForDispute();
 
         emit DrawByRepetition(msg.sender);
@@ -654,6 +677,7 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         if (halfMoveClock < 100) revert FiftyMoveRuleNotReached(); // 100 half-moves = 50 full moves
 
         gameState = GameState.Draw;
+        drawOfferedBy = address(0);
         _registerGameForDispute();
 
         emit DrawByFiftyMoveRule(msg.sender);
@@ -683,6 +707,8 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         } else {
             gameState = GameState.BlackWins;
         }
+
+        drawOfferedBy = address(0);
 
         // Register for dispute system and distribute rewards
         _registerGameForDispute();
@@ -1007,6 +1033,7 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         if (gameState != GameState.NotStarted) revert GameAlreadyStarted();
         if (x >= BOARD_SIZE || y >= BOARD_SIZE) revert InvalidCoordinates();
 
+        boardCustomized = true;
         board[x][y] = piece;
         // Update king position cache if placing a king
         if (piece == KING) {

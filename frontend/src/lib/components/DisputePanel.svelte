@@ -80,7 +80,9 @@
 		}
 
 		if (d.state === DisputeState.Challenged) {
-			return now <= d.commitDeadline ? 'commit' : 'reveal';
+			if (now <= d.commitDeadline) return 'commit';
+			if (now <= d.revealDeadline) return 'reveal';
+			return 'resolve';
 		}
 
 		if (d.state === DisputeState.Revealing) {
@@ -131,6 +133,8 @@
 		if (d.state === DisputeState.Challenged) {
 			const now = Math.floor(Date.now() / 1000);
 			const commitActive = now <= d.commitDeadline;
+			const revealActive = !commitActive && now <= d.revealDeadline;
+			const canResolve = now > d.revealDeadline;
 
 			return [
 				{ label: 'Challenge', status: 'complete', detail: 'Panel selected' },
@@ -141,10 +145,16 @@
 				},
 				{
 					label: 'Reveal',
-					status: commitActive ? 'upcoming' : 'active',
-					detail: commitActive ? 'Starts after commit' : formatTimeRemaining(d.revealDeadline)
+					status: commitActive ? 'upcoming' : (revealActive ? 'active' : 'complete'),
+					detail: commitActive
+						? 'Starts after commit'
+						: (revealActive ? formatTimeRemaining(d.revealDeadline) : 'Reveal closed')
 				},
-				{ label: 'Resolve', status: 'upcoming', detail: 'Final decision after reveal' }
+				{
+					label: 'Resolve',
+					status: canResolve ? 'active' : 'upcoming',
+					detail: canResolve ? 'Ready to resolve' : 'Final decision after reveal'
+				}
 			];
 		}
 
@@ -590,7 +600,7 @@
 						</div>
 					{/if}
 
-					{#if disputeData.state === DisputeState.Revealing && currentPhase === 'resolve'}
+					{#if (disputeData.state === DisputeState.Revealing || disputeData.state === DisputeState.Challenged) && currentPhase === 'resolve'}
 						<button
 							class="btn btn-secondary w-full"
 							on:click={handleResolve}

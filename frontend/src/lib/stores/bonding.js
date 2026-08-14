@@ -330,7 +330,7 @@ function createBondingStore() {
 			);
 
 			const amountWei = ethers.utils.parseEther(amount.toString());
-			const tx = await bondingManager.withdrawChess(amountWei);
+			const tx = await bondingManager.withdrawBond(amountWei, 0);
 			await tx.wait();
 
 			// Refresh data
@@ -359,7 +359,7 @@ function createBondingStore() {
 			);
 
 			const amountWei = ethers.utils.parseEther(amount.toString());
-			const tx = await bondingManager.withdrawEth(amountWei);
+			const tx = await bondingManager.withdrawBond(0, amountWei);
 			await tx.wait();
 
 			// Refresh data

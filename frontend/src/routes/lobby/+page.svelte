@@ -237,6 +237,18 @@
 					</a>
 				{/each}
 			</div>
+
+			{#if $games.hasMore}
+				<div class="flex justify-center mt-8">
+					<button
+						class="btn btn-secondary"
+						on:click={() => games.loadMore()}
+						disabled={$games.loadingMore}
+					>
+						{$games.loadingMore ? 'Loading...' : 'Load older games'}
+					</button>
+				</div>
+			{/if}
 		{/if}
 	</div>
 </section>

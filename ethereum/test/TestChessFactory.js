@@ -41,6 +41,19 @@ contract("ChessFactory", (accounts) => {
     });
   });
 
+  it("should paginate deployed chess games", async () => {
+    const count = await chessFactory.getDeployedChessGameCount();
+    const allGames = await chessFactory.getDeployedChessGames();
+    assert.equal(count.toNumber(), allGames.length);
+
+    const firstPage = await chessFactory.getDeployedChessGamesPage(0, 1);
+    assert.equal(firstPage.length, 1);
+    assert.equal(firstPage[0], allGames[0]);
+
+    const emptyPage = await chessFactory.getDeployedChessGamesPage(allGames.length, 1);
+    assert.equal(emptyPage.length, 0);
+  });
+
   it("should reject an EOA as ChessCore implementation", async () => {
     let deploymentFailed = false;
     try {

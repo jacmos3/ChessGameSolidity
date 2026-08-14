@@ -247,6 +247,7 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
             disputeId,
             accusedPlayer,
             dispute.otherPlayer,
+            msg.sender,
             5
         );
         dispute.selectedArbitrators = arbitrators;
@@ -515,6 +516,7 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
             disputeId,
             dispute.accusedPlayer,
             dispute.otherPlayer,
+            dispute.challenger,
             newCount
         );
         dispute.selectedArbitrators = newArbitrators;

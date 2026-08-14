@@ -315,9 +315,17 @@
 								<td class="py-2">Accept Draw</td>
 								<td class="py-2">Click "Accept" when opponent offers</td>
 							</tr>
-							<tr>
+							<tr class="border-b border-chess-dark">
 								<td class="py-2">Claim Timeout Victory</td>
-								<td class="py-2">Click "Claim Victory" when opponent times out</td>
+								<td class="py-2">Click "Claim Timeout" when opponent times out</td>
+							</tr>
+							<tr class="border-b border-chess-dark">
+								<td class="py-2">Claim Threefold Draw</td>
+								<td class="py-2">Click "Claim Threefold Draw" when a position repeats 3 times</td>
+							</tr>
+							<tr>
+								<td class="py-2">Claim 50-Move Draw</td>
+								<td class="py-2">Click "Claim 50-Move Draw" after 50 moves without pawn or capture</td>
 							</tr>
 						</tbody>
 					</table>
