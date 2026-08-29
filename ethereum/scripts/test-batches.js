@@ -105,6 +105,11 @@ async function main() {
       LOCAL_RPC_HOST: "127.0.0.1",
       LOCAL_RPC_PORT: String(port),
       SKIP_DEPLOYMENT_OUTPUT: "true",
+      GOVERNANCE_HANDOFF: "false",
+      TEAM_WALLET: "",
+      TREASURY_WALLET: "",
+      FAUCET_SIGNER: "",
+      ORACLE_UPDATER: "",
     };
     console.log(`\n=== Contract test batch ${index + 1}/${batches.length} (port ${port}) ===`);
 

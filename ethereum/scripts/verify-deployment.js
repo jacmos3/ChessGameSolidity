@@ -26,11 +26,6 @@ async function assertContract(address, label) {
   if (await web3.eth.getCode(address) === "0x") throw new Error(`${label}: no deployed bytecode at ${address}`);
 }
 
-async function assertEoa(address, label) {
-  if (!web3.utils.isAddress(address) || address === ZERO_ADDRESS) throw new Error(`${label}: invalid address ${address}`);
-  if (await web3.eth.getCode(address) !== "0x") throw new Error(`${label}: expected an EOA at ${address}`);
-}
-
 async function assertHasRole(contract, role, account, label) {
   if (!(await contract.hasRole(role, account))) throw new Error(`${label}: required role is missing`);
 }
@@ -110,7 +105,6 @@ module.exports = async function verifyDeployment(callback) {
       "RewardPool"
     ];
     for (const name of requiredContracts) await assertContract(contracts[name], name);
-    await assertEoa(config.faucetSigner, "Faucet signer");
 
     const instances = {
       chessToken: await ChessToken.at(contracts.ChessToken),

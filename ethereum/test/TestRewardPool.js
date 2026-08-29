@@ -1,6 +1,7 @@
 const ChessToken = artifacts.require("ChessToken");
 const PlayerRating = artifacts.require("PlayerRating");
 const RewardPool = artifacts.require("RewardPool");
+const MockERC1271Signer = artifacts.require("MockERC1271Signer");
 
 contract("RewardPool", (accounts) => {
   const admin = accounts[0];
@@ -45,6 +46,30 @@ contract("RewardPool", (accounts) => {
   });
 
   it("rejects an authorization produced by an untrusted signer", async () => {
+    const signature = await signFaucetAuthorization(claimant, unauthorizedSigner);
+
+    try {
+      await rewardPool.claimFaucet(signature, { from: claimant });
+      assert.fail("Should have reverted");
+    } catch (error) {
+      assert.include(error.message, "revert");
+    }
+  });
+
+  it("accepts an authorization from an ERC-1271 contract wallet", async () => {
+    const contractSigner = await MockERC1271Signer.new(admin, { from: admin });
+    await rewardPool.setFaucetSigner(contractSigner.address, { from: admin });
+    const signature = await signFaucetAuthorization(claimant, admin);
+
+    await rewardPool.claimFaucet(signature, { from: claimant });
+
+    const balance = await chessToken.balanceOf(claimant);
+    assert.equal(balance.toString(), web3.utils.toWei("5", "ether"));
+  });
+
+  it("rejects an invalid ERC-1271 contract-wallet authorization", async () => {
+    const contractSigner = await MockERC1271Signer.new(admin, { from: admin });
+    await rewardPool.setFaucetSigner(contractSigner.address, { from: admin });
     const signature = await signFaucetAuthorization(claimant, unauthorizedSigner);
 
     try {
