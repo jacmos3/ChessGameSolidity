@@ -126,6 +126,11 @@ async function main() {
     await run(executable("truffle"), ["migrate", "--reset", "--compile-none"], env);
     await run(
       executable("truffle"),
+      ["exec", "scripts/verify-deployment.js"],
+      env
+    );
+    await run(
+      executable("truffle"),
       ["exec", "scripts/verify-governance-handoff.js"],
       env
     );
