@@ -5,8 +5,8 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+import "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import "../Rating/PlayerRating.sol";
 
 /// @title RewardPool - Play-to-Earn reward system for Chess
@@ -172,8 +172,11 @@ contract RewardPool is Ownable, ReentrancyGuard {
         require(faucetPool >= FAUCET_AMOUNT, "Faucet pool empty");
 
         bytes32 digest = keccak256(abi.encodePacked(address(this), block.chainid, msg.sender));
-        address recovered = ECDSA.recover(MessageHashUtils.toEthSignedMessageHash(digest), authorization);
-        require(recovered == faucetSigner, "Invalid faucet authorization");
+        bytes32 signedDigest = MessageHashUtils.toEthSignedMessageHash(digest);
+        require(
+            SignatureChecker.isValidSignatureNow(faucetSigner, signedDigest, authorization),
+            "Invalid faucet authorization"
+        );
 
         hasClaimed[msg.sender] = true;
         faucetPool -= FAUCET_AMOUNT;

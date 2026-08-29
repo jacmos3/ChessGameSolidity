@@ -243,7 +243,7 @@ npx truffle migrate --network base_sepolia --reset
 npm run verify:deployment -- --network base_sepolia
 ```
 
-`FAUCET_SIGNER` authorizes eligible faucet beneficiaries. `ORACLE_UPDATER` receives only `ORACLE_ROLE` and must submit a fresh CHESS/ETH price at least once every seven days; stale prices block bond calculation and new bonded games.
+`FAUCET_SIGNER` authorizes eligible faucet beneficiaries and may be either an EOA or an ERC-1271 contract wallet. `ORACLE_UPDATER` receives only `ORACLE_ROLE` and must submit a fresh CHESS/ETH price at least once every seven days; stale prices block bond calculation and new bonded games.
 
 The preflight compiles the canonical sources, enforces EIP-170, derives only the public deployer address, verifies the RPC chain, checks the deployer's native balance, and validates operational addresses. It never prints the mnemonic or sends a transaction. The post-deployment verifier reads `deployments/latest-<network>.json` and fails on missing bytecode, incorrect links, missing roles, or unexpected ownership.
 
@@ -310,7 +310,7 @@ Open the URL shown by Vite, typically `http://127.0.0.1:3000/`.
 
 ### Contract Suite
 
-The suite currently contains `372` contract test cases in `18` files plus deployment-script unit tests. The canonical command compiles, checks every deployed bytecode against EIP-170, runs the deployment-script tests, runs four contract-test batches against fresh Ganache instances, and exercises the real deployment migration plus both post-deployment verifiers with governance handoff enabled:
+The suite currently contains `374` contract test cases in `18` files plus deployment-script unit tests. The canonical command compiles, checks every deployed bytecode against EIP-170, runs the deployment-script tests, runs four contract-test batches against fresh Ganache instances, and exercises the real deployment migration plus both post-deployment verifiers with governance handoff enabled:
 
 ```bash
 cd ethereum
@@ -485,7 +485,7 @@ Implemented protections include:
 - dispute max duration cap
 - bond locking and slashing
 - stale-price rejection and a dedicated, revocable oracle role
-- signer-bound faucet authorizations without `tx.origin`
+- signer-bound faucet authorizations for EOAs and ERC-1271 contract wallets without `tx.origin`
 - production governance handoff with deployer privilege removal
 - custom errors for lower revert overhead
 
@@ -495,7 +495,6 @@ Known limitations:
 - the Truffle deployment stack contains deprecated transitive dependencies with unresolved npm advisories; do not treat a clean contract test run as a supply-chain audit
 - arbitrator selection is not VRF-backed
 - the price updater and faucet signer remain trusted operational roles
-- faucet authorizations currently require an EOA/ECDSA signer; ERC-1271 contract wallets are not supported
 - all gameplay and dispute data is public on-chain
 - public frontend addresses are build-time environment configuration, not discovered from an on-chain registry
 - reward and faucet balances require explicit operational funding

@@ -153,22 +153,17 @@ async function run() {
     warnings.push("FAUCET_SIGNER and ORACLE_UPDATER are the same address; operational duties are not isolated");
   }
 
-  const [chainIdHex, balanceHex, gasPriceHex, blockNumberHex, faucetSignerCode] = await Promise.all([
+  const [chainIdHex, balanceHex, gasPriceHex, blockNumberHex] = await Promise.all([
     rpcCall(config.rpcUrl, "eth_chainId"),
     rpcCall(config.rpcUrl, "eth_getBalance", [deployer, "latest"]),
     rpcCall(config.rpcUrl, "eth_gasPrice"),
-    rpcCall(config.rpcUrl, "eth_blockNumber"),
-    rpcCall(config.rpcUrl, "eth_getCode", [config.faucetSigner, "latest"])
+    rpcCall(config.rpcUrl, "eth_blockNumber")
   ]);
 
   const chainId = Number(BigInt(chainIdHex));
   if (chainId !== config.network.chainId) {
     throw new Error(`RPC chain mismatch: expected ${config.network.chainId}, got ${chainId}`);
   }
-  if (faucetSignerCode !== "0x" && faucetSignerCode !== "0x0") {
-    throw new Error("FAUCET_SIGNER must be an EOA because RewardPool verifies ECDSA signatures directly");
-  }
-
   const balance = BigInt(balanceHex);
   if (balance === 0n) throw new Error("The deployer has no native ETH for gas");
   if (balance < 10n ** 16n) warnings.push("Deployer balance is below 0.01 ETH; it may be insufficient for the full migration");
