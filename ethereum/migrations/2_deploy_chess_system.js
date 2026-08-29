@@ -96,7 +96,9 @@ module.exports = async function (deployer, network, accounts) {
   await deployer.link(ChessMediaLibrary, ChessCore);
   await deployer.deploy(ChessCore, { from: admin, gas: 25000000 });
   const chessCoreImpl = await ChessCore.deployed();
+  const chessRulesEngineAddress = await chessCoreImpl.rulesEngine();
   console.log(`  ChessCore implementation deployed at: ${chessCoreImpl.address}`);
+  console.log(`  ChessRulesEngine deployed at: ${chessRulesEngineAddress}`);
 
   // 5.2 Deploy ChessFactory with implementation address
   await deployer.deploy(ChessFactory, chessCoreImpl.address, { from: admin });
@@ -300,6 +302,8 @@ module.exports = async function (deployer, network, accounts) {
   console.log(`BondingManager:     ${bondingManager.address}`);
   console.log(`ArbitratorRegistry: ${arbitratorRegistry.address}`);
   console.log(`DisputeDAO:         ${disputeDAO.address}`);
+  console.log(`ChessMediaLibrary:  ${chessMediaLibrary.address}`);
+  console.log(`ChessRulesEngine:   ${chessRulesEngineAddress}`);
   console.log(`ChessCoreImpl:      ${chessCoreImpl.address}`);
   console.log(`ChessFactory:       ${chessFactory.address}`);
   console.log(`ChessNFT:           ${chessNFTAddress}`);
@@ -319,6 +323,8 @@ module.exports = async function (deployer, network, accounts) {
       BondingManager: bondingManager.address,
       ArbitratorRegistry: arbitratorRegistry.address,
       DisputeDAO: disputeDAO.address,
+      ChessMediaLibrary: chessMediaLibrary.address,
+      ChessRulesEngine: chessRulesEngineAddress,
       ChessCoreImplementation: chessCoreImpl.address,
       ChessFactory: chessFactory.address,
       ChessNFT: chessNFTAddress,

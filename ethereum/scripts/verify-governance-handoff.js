@@ -1,5 +1,4 @@
-const fs = require("fs");
-const path = require("path");
+const { loadDeployment } = require("./deployment-output");
 
 const ChessToken = artifacts.require("ChessToken");
 const BondingManager = artifacts.require("BondingManager");
@@ -31,13 +30,7 @@ async function assertAdminTransferred(contract, deployer, timelock, label) {
 
 module.exports = async function verifyGovernanceHandoff(callback) {
   try {
-    const deploymentPath = process.env.DEPLOYMENT_FILE || path.join(
-      __dirname,
-      "..",
-      "deployments",
-      "latest-development.json"
-    );
-    const deployment = JSON.parse(fs.readFileSync(deploymentPath, "utf8"));
+    const { deployment } = loadDeployment();
     const { admin: deployer, contracts, config } = deployment;
     const timelockAddress = contracts.ChessTimelock;
 

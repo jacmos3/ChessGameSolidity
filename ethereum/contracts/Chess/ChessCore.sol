@@ -73,7 +73,7 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
 
     // Slot 6
     RewardPool public rewardPool;          // 20 bytes
-    ChessRulesEngine private immutable rulesEngine;
+    ChessRulesEngine public immutable rulesEngine;
 
     // Slot 7: PACKED - timeout tracking + state flags (32 bytes total)
     // uint48 timestamps and durations cover far beyond any realistic protocol lifetime.
