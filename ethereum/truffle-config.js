@@ -25,14 +25,35 @@
  const localRpcGas = Number(process.env["LOCAL_RPC_GAS"] || "25000000");
  const baseSepoliaRpcUrl = process.env["BASE_SEPOLIA_RPC_URL"];
  const baseRpcUrl = process.env["BASE_RPC_URL"];
+ const { parseBaseMaxPriorityFeePerGas } = require('./scripts/base-fee-config');
+ const baseMaxPriorityFeePerGas = parseBaseMaxPriorityFeePerGas();
  
  const HDWalletProvider = require('@truffle/hdwallet-provider');
+ const Web3 = require('web3');
+
+ const publicChainIds = {
+   BASE_SEPOLIA: 84532,
+   BASE: 8453
+ };
 
  const publicProvider = (rpcUrl, networkName) => {
    if (!mnemonic || !rpcUrl) {
      throw new Error(`MNEMONIC and ${networkName}_RPC_URL are required for ${networkName}`);
    }
-   return new HDWalletProvider(mnemonic, rpcUrl);
+   const provider = new Web3.providers.HttpProvider(rpcUrl, {
+     keepAlive: true,
+     timeout: 120000
+   });
+   if (typeof provider.sendAsync !== 'function') {
+     provider.sendAsync = provider.send.bind(provider);
+   }
+   return new HDWalletProvider({
+     mnemonic: { phrase: mnemonic },
+     provider,
+     chainId: publicChainIds[networkName],
+     numberOfAddresses: 1,
+     pollingInterval: 8000
+   });
  };
 
 module.exports = {
@@ -64,6 +85,7 @@ module.exports = {
        provider: () => publicProvider(baseSepoliaRpcUrl, "BASE_SEPOLIA"),
        network_id: 84532,
        chain_id: 84532,
+       maxPriorityFeePerGas: baseMaxPriorityFeePerGas,
        confirmations: 2,
        timeoutBlocks: 200,
        skipDryRun: true
@@ -72,6 +94,7 @@ module.exports = {
        provider: () => publicProvider(baseRpcUrl, "BASE"),
        network_id: 8453,
        chain_id: 8453,
+       maxPriorityFeePerGas: baseMaxPriorityFeePerGas,
        confirmations: 2,
        timeoutBlocks: 200,
        skipDryRun: false

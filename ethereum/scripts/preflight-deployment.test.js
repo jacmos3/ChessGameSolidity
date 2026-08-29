@@ -47,6 +47,14 @@ test("environment validation selects only the requested RPC", () => {
   assert.equal(config.network.chainId, 84532);
   assert.equal(config.rpcUrl, VALID_ENV.BASE_SEPOLIA_RPC_URL);
   assert.equal(config.handoffGovernance, true);
+  assert.equal(config.maxPriorityFeePerGas, 1_000_000);
+});
+
+test("environment validation rejects an invalid Base priority fee", () => {
+  assert.throws(
+    () => validateEnvironment({ ...VALID_ENV, BASE_MAX_PRIORITY_FEE_PER_GAS_WEI: "2.5" }, "base_sepolia"),
+    /positive integer/
+  );
 });
 
 test("environment validation reports all missing required variables", () => {
