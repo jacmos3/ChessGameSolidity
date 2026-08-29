@@ -227,6 +227,7 @@ Truffle includes `base_sepolia` and `base` network profiles. Configure these var
 MNEMONIC=
 BASE_SEPOLIA_RPC_URL=
 BASE_RPC_URL=
+BASE_MAX_PRIORITY_FEE_PER_GAS_WEI=1000000
 TEAM_WALLET=
 TREASURY_WALLET=
 FAUCET_SIGNER=
@@ -243,7 +244,7 @@ npx truffle migrate --network base_sepolia --reset
 npm run verify:deployment -- --network base_sepolia
 ```
 
-`FAUCET_SIGNER` authorizes eligible faucet beneficiaries and may be either an EOA or an ERC-1271 contract wallet. `ORACLE_UPDATER` receives only `ORACLE_ROLE` and must submit a fresh CHESS/ETH price at least once every seven days; stale prices block bond calculation and new bonded games.
+`BASE_MAX_PRIORITY_FEE_PER_GAS_WEI` defaults to `1000000` (`0.001 gwei`) so Truffle does not apply its Ethereum-oriented `2.5 gwei` fallback; Truffle derives the EIP-1559 max fee from the live Base fee. `FAUCET_SIGNER` authorizes eligible faucet beneficiaries and may be either an EOA or an ERC-1271 contract wallet. `ORACLE_UPDATER` receives only `ORACLE_ROLE` and must submit a fresh CHESS/ETH price at least once every seven days; stale prices block bond calculation and new bonded games.
 
 The preflight compiles the canonical sources, enforces EIP-170, derives only the public deployer address, verifies the RPC chain, checks the deployer's native balance, and validates operational addresses. It never prints the mnemonic or sends a transaction. The post-deployment verifier reads `deployments/latest-<network>.json` and fails on missing bytecode, incorrect links, missing roles, or unexpected ownership.
 

@@ -1,6 +1,7 @@
 const path = require("path");
 const dotenv = require("dotenv");
 const HDWalletProvider = require("@truffle/hdwallet-provider");
+const { parseBaseMaxPriorityFeePerGas } = require("./base-fee-config");
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const VALID_MNEMONIC_LENGTHS = new Set([12, 15, 18, 21, 24]);
@@ -123,7 +124,8 @@ function validateEnvironment(env, networkName) {
     teamWallet: env.TEAM_WALLET,
     treasuryWallet: env.TREASURY_WALLET,
     faucetSigner: env.FAUCET_SIGNER,
-    oracleUpdater: env.ORACLE_UPDATER
+    oracleUpdater: env.ORACLE_UPDATER,
+    maxPriorityFeePerGas: parseBaseMaxPriorityFeePerGas(env)
   };
 }
 
@@ -174,6 +176,7 @@ async function run() {
   console.log(`  Deployer: ${deployer}`);
   console.log(`  Deployer balance: ${formatUnits(balance, 18)} ETH`);
   console.log(`  Gas price: ${formatUnits(BigInt(gasPriceHex), 9)} gwei`);
+  console.log(`  Max priority fee: ${formatUnits(BigInt(config.maxPriorityFeePerGas), 9)} gwei`);
   console.log(`  Governance handoff: ${config.handoffGovernance ? "enabled" : "disabled"}`);
   console.log(`  Team wallet: ${config.teamWallet}`);
   console.log(`  Treasury wallet: ${config.treasuryWallet}`);

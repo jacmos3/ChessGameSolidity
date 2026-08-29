@@ -11,6 +11,9 @@ const ChessTimelock = artifacts.require("ChessTimelock");
 const ChessGovernor = artifacts.require("ChessGovernor");
 const PlayerRating = artifacts.require("PlayerRating");
 
+// Current linked bytecode estimates at roughly 6.5M gas on Base.
+const CHESS_CORE_DEPLOY_GAS = 8_000_000;
+
 module.exports = async function (deployer, network, accounts) {
   const admin = accounts[0];
 
@@ -94,7 +97,7 @@ module.exports = async function (deployer, network, accounts) {
 
   // 5.2 Link library to ChessCore and deploy implementation
   await deployer.link(ChessMediaLibrary, ChessCore);
-  await deployer.deploy(ChessCore, { from: admin, gas: 25000000 });
+  await deployer.deploy(ChessCore, { from: admin, gas: CHESS_CORE_DEPLOY_GAS });
   const chessCoreImpl = await ChessCore.deployed();
   const chessRulesEngineAddress = await chessCoreImpl.rulesEngine();
   console.log(`  ChessCore implementation deployed at: ${chessCoreImpl.address}`);
