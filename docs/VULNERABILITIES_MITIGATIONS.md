@@ -1,5 +1,7 @@
 # Vulnerabilita e Mitigazioni - Sistema Anti-Cheating
 
+> **Historical threat-model document:** examples and proposed mitigations below are not proof that every mechanism is implemented. Use the Solidity contracts and root README for current behavior and residual risks.
+
 ## Analisi delle Vulnerabilita
 
 ### Critiche (Potrebbero rompere il sistema)

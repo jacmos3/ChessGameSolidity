@@ -1,13 +1,8 @@
 <script>
-	import { onMount } from 'svelte';
 	import { wallet, truncateAddress } from '$lib/stores/wallet.js';
 	import {
 		governance,
 		governanceAvailable,
-		ProposalState,
-		VoteType,
-		getProposalStateLabel,
-		getProposalStateColor,
 		formatTimelockDelay,
 		formatBlocks
 	} from '$lib/stores/governance.js';
@@ -17,12 +12,6 @@
 	let processing = false;
 	let error = null;
 	let success = null;
-
-	onMount(async () => {
-		if ($wallet.connected && $governanceAvailable) {
-			await governance.fetchParams();
-		}
-	});
 
 	$: if ($wallet.connected && $governanceAvailable) {
 		governance.fetchParams();
@@ -187,9 +176,9 @@
 						<h4 class="font-medium mb-2">How Governance Works</h4>
 						<ul class="text-chess-gray space-y-1 list-disc list-inside">
 							<li>Hold CHESS tokens and delegate to activate voting</li>
-							<li>Create proposals if you have {parseFloat($governance.proposalThreshold).toFixed(0)}+ CHESS</li>
-							<li>Vote on active proposals (For/Against/Abstain)</li>
-							<li>Successful proposals are queued in timelock</li>
+							<li>Create proposals with compatible governance tooling after reaching {parseFloat($governance.proposalThreshold).toFixed(0)} CHESS</li>
+							<li>Vote, queue, and execute through the Governor contract or an external governance interface</li>
+							<li>Successful proposals must pass through the timelock</li>
 							<li>After {formatTimelockDelay($governance.timelockDelay)}, anyone can execute</li>
 						</ul>
 					</div>
@@ -197,12 +186,14 @@
 					<div>
 						<h4 class="font-medium mb-2">Governable Parameters</h4>
 						<ul class="text-chess-gray space-y-1 list-disc list-inside">
-							<li>Bond ratios (CHESS and ETH multipliers)</li>
-							<li>Challenge deposit amount</li>
-							<li>Voting periods and quorum</li>
-							<li>Platform fee percentage</li>
-							<li>Arbitrator tier thresholds</li>
+							<li>Bond multipliers, minimum bond value, pause state, and oracle role</li>
+							<li>Challenge and voting periods, deposit, quorum, and supermajority</li>
+							<li>Factory implementation and module addresses for future games</li>
+							<li>Reward pool configuration, token minting, and administrative roles</li>
 						</ul>
+						<p class="text-xs text-chess-gray/70 mt-2">
+							Arbitrator tiers and cooldowns are immutable contract constants.
+						</p>
 					</div>
 
 					<div>
@@ -291,25 +282,23 @@
 			{:else if activeTab === 'proposals'}
 				<div class="space-y-4">
 					<p class="text-sm text-chess-gray">
-						Active and recent governance proposals will appear here.
+						This static client does not currently index or discover governance proposals.
 					</p>
 
-					<!-- Placeholder for proposals list -->
 					<div class="text-center py-8">
 						<div class="text-4xl mb-4 opacity-50">*</div>
-						<p class="text-chess-gray">No active proposals</p>
+						<p class="text-chess-gray">External governance interface required</p>
 						<p class="text-chess-gray/60 text-sm mt-2">
-							Proposals can be created via the governance forum
+							Use the deployed Governor contract or a compatible governance tool to inspect, create, vote, queue, and execute proposals.
 						</p>
 					</div>
 
 					<!-- Create proposal info -->
 					{#if parseFloat($governance.votingPower) >= parseFloat($governance.proposalThreshold)}
 						<div class="bg-chess-accent/10 rounded-lg p-4 text-sm">
-							<div class="font-medium mb-2">You can create proposals!</div>
+							<div class="font-medium mb-2">Proposal threshold reached</div>
 							<p class="text-chess-gray">
-								You have enough voting power to create governance proposals.
-								Visit the governance forum to discuss and submit proposals.
+								This account has enough voting power to submit proposals through the Governor contract.
 							</p>
 						</div>
 					{:else}

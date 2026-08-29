@@ -27,5 +27,6 @@ for (const contractName of contractNames) {
 	const sourcePath = path.join(buildDir, `${contractName}.json`);
 	const outputPath = path.join(outputDir, `${contractName}.json`);
 	const artifact = JSON.parse(await readFile(sourcePath, 'utf8'));
-	await writeFile(outputPath, JSON.stringify(artifact.abi), 'utf8');
+	const abi = artifact.abi.map(({ constant: _constant, payable: _payable, ...entry }) => entry);
+	await writeFile(outputPath, JSON.stringify(abi), 'utf8');
 }

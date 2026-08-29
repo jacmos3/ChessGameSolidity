@@ -1,5 +1,7 @@
 # Solidity Chess - User Guide
 
+> **Historical guide:** this document predates parts of the current MyChess.onchain architecture. Contract source, the canonical migration, and the root README are authoritative when behavior differs.
+
 Welcome to Solidity Chess, a decentralized chess platform where you can play, earn, and participate in governance.
 
 ## Table of Contents
@@ -396,7 +398,7 @@ Proposals can change:
 ### General
 
 **Q: Is my money safe?**
-A: Funds are held in audited smart contracts. However, like all DeFi, there are risks. Only play with what you can afford to lose.
+A: Funds are held in smart contracts that have not yet received a formal external audit. Like all DeFi, there are risks. Only play with what you can afford to lose.
 
 **Q: What happens if I disconnect mid-game?**
 A: The game continues on-chain. Reconnect with the same wallet to resume. If you don't move within the time limit, your opponent can claim victory.
@@ -410,7 +412,7 @@ A: Yes! Each game is independent. Just make sure you have enough bond for all ac
 A: The hybrid bond prevents attackers from using only one asset to manipulate the system.
 
 **Q: What if CHESS price changes?**
-A: Bond requirements are calculated at game creation using a time-weighted average price (TWAP).
+A: Bond requirements use the latest CHESS/ETH price submitted by the dedicated updater. Prices older than seven days are rejected, and large changes trigger the circuit breaker. This is a trusted feed, not a DEX TWAP.
 
 **Q: Can I lose my bond if I lose fairly?**
 A: No! You only lose your bond if you're caught cheating and lose a dispute.
@@ -481,7 +483,7 @@ Here are common terms you'll encounter:
 | **Layer 2 (L2)** | Faster, cheaper networks built on top of Ethereum (Arbitrum, Optimism, Base). |
 | **MetaMask** | The most popular browser wallet for Ethereum. |
 | **Seed Phrase** | 12-24 words that recover your wallet. NEVER share these with anyone! |
-| **TWAP** | Time-Weighted Average Price - used to calculate fair token prices and prevent manipulation. |
+| **Oracle Updater** | The separately controlled account that submits the CHESS/ETH price used for bond calculations. |
 
 ---
 

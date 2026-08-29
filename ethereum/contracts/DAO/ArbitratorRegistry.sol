@@ -15,7 +15,7 @@ import "../Token/ChessToken.sol";
  * - Three-tier stake pools for decentralization
  * - Reputation system (vote with majority = +1, against = -1)
  * - Cooldown after voting to prevent collusion
- * - Random selection weighted by stake
+ * - Pseudo-random, tier-stratified selection with equal treatment inside each tier
  */
 contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
     bytes32 public constant DISPUTE_MANAGER_ROLE = keccak256("DISPUTE_MANAGER_ROLE");

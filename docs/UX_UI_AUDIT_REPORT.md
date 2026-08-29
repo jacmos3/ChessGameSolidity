@@ -1,5 +1,7 @@
 # UX/UI Audit Report - ChainMate Chess dApp
 
+> **Historical audit snapshot:** findings describe an earlier frontend and may already be resolved or no longer apply. The current SvelteKit source and root README are authoritative.
+
 ## Executive Summary
 
 L'app ha **fondamenta solide**: design system coerente, interazione fluida con la blockchain, e un'esperienza funzionale. Tuttavia, per competere a livello enterprise e attrarre una base utenti ampia, ci sono **lacune critiche** da colmare.

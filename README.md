@@ -4,7 +4,7 @@ MyChess.onchain is a decentralized chess platform with on-chain game state, hybr
 
 ![Solidity](https://img.shields.io/badge/Solidity-0.8.24-blue)
 ![Frontend](https://img.shields.io/badge/Frontend-SvelteKit%202-orange)
-![Contract Tests](https://img.shields.io/badge/Contract%20Tests-360-informational)
+![Contract Tests](https://img.shields.io/badge/Contract%20Tests-372-informational)
 
 ## Overview
 
@@ -24,11 +24,11 @@ At a high level, the system does four things:
 
 ## Current Status
 
-- The contract suite defines `360` test cases across `16` Truffle test files. `npm run test:ci` executes them in four isolated Ganache batches.
+- The contract suite defines `372` test cases across `18` Truffle test files. `npm run test:ci` executes them in four isolated Ganache batches and then verifies a fresh governance-handoff migration.
 - `ChessCore` uses EIP-1167 clones. Heavy rule evaluation lives in one `ChessRulesEngine` deployed by the implementation and shared by the clones through the implementation's immutable reference.
 - The frontend is configured for static/IPFS deployment and now lazy-loads ABI-only artifacts.
 - Solidity compilation is pinned to `solc 0.8.24`, generates validated Truffle-compatible artifacts, and enforces the EIP-170 bytecode limit.
-- GitHub Actions recompiles, checks bytecode size, runs all contract tests, audits high-severity frontend dependencies, builds the static app, and checks generated ABI drift.
+- GitHub Actions recompiles, checks bytecode size, runs all contract and frontend utility tests, audits high-severity frontend dependencies, builds the static app, and checks generated ABI drift.
 - The supported deployment path is `ethereum/migrations/2_deploy_chess_system.js`; public Base deployments can transfer protocol control to `ChessTimelock` and remove deployer privileges.
 - The system is still not formally audited.
 
@@ -304,7 +304,7 @@ Open the URL shown by Vite, typically `http://127.0.0.1:3000/`.
 
 ### Contract Suite
 
-The suite currently contains `360` test cases in `16` files. The canonical command compiles, checks every deployed bytecode against EIP-170, and runs four test batches against fresh Ganache instances:
+The suite currently contains `372` test cases in `18` files. The canonical command compiles, checks every deployed bytecode against EIP-170, runs four test batches against fresh Ganache instances, and exercises the real deployment migration with governance handoff enabled:
 
 ```bash
 cd ethereum
@@ -320,6 +320,15 @@ LOCAL_RPC_PORT=8545 npm test -- --compile-none
 With gas reporting, set `REPORT_GAS=true` on that monolithic command. The isolated `test:ci` runner is preferred because the full suite creates enough chain state to destabilize a single long-lived provider.
 
 ### Frontend Build
+
+Run the frontend utility tests with Node's built-in test runner:
+
+```bash
+cd frontend
+npm test
+```
+
+Then build the static application:
 
 ```bash
 cd frontend
@@ -359,7 +368,7 @@ The prebuild hook refreshes ABI-only artifacts from the latest pinned Solidity c
 │   ├── deployments/                 # ignored local deployment outputs
 │   ├── migrations/                  # canonical deployment flow
 │   ├── scripts/                     # compiler, size check, test runner, smoke and handoff verification
-│   └── test/                        # 16 Truffle test files
+│   └── test/                        # 18 Truffle test files
 └── frontend/
     ├── scripts/
     │   └── extract-abis.mjs

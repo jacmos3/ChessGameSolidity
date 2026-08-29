@@ -35,15 +35,15 @@ library ChessMediaLibrary {
         return string(buffer);
     }
     
-    function metadata(uint256 tokenId) internal pure returns (string memory){
-        //TODO
-        tokenId = 1;
-        string memory toRet = "";
-        return toRet;
+    function metadata(uint256 tokenId) internal pure returns (string memory) {
+        return string(abi.encodePacked(
+            '{"trait_type":"Game ID","value":',
+            toString(tokenId),
+            '}'
+        ));
     }
 
-    function getCurrentBoard(int8[8][8] memory board) external pure returns (string memory) {
-        uint tokenId = 0;
+    function getCurrentBoard(int8[8][8] memory board, uint256 tokenId) external pure returns (string memory) {
         string memory result = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 400'>";
         result = string(abi.encodePacked(result, getBoardSquares()));   
         string memory black = "<g id='bp' fill='#000' font-family='arial unicode ms,Helvetica,Arial,sans-serif' font-size='40'>";
@@ -146,7 +146,7 @@ library ChessMediaLibrary {
 
         result = string(abi.encodePacked(result, white, "</g>", black, "</g>", "</svg>"));
         
-        string memory json = Base64.encode(bytes(string(abi.encodePacked('{"name": "Match #', toString(tokenId), '", "description": "This is a match", "image": "data:image/svg+xml;base64,', Base64.encode(bytes(result)), '","attributes":[',metadata(tokenId),']}'))));
+        string memory json = Base64.encode(bytes(string(abi.encodePacked('{"name":"MyChess Match #', toString(tokenId), '","description":"Live on-chain chess game","image":"data:image/svg+xml;base64,', Base64.encode(bytes(result)), '","attributes":[', metadata(tokenId), ']}'))));
         return string(abi.encodePacked('data:application/json;base64,', json));
         
     }

@@ -4,12 +4,19 @@
 	import {
 		dispute,
 		disputeAvailable,
+		getDisputeDaoAddress,
 		DisputeState,
 		Vote,
 		formatTimeRemaining,
 		getStateLabel,
 		getVoteLabel
 	} from '$lib/stores/dispute.js';
+	import {
+		createVoteCommitRecord,
+		getVoteCommitStorageKey,
+		parseVoteCommit,
+		serializeVoteCommit
+	} from '$lib/utils/voteCommit.js';
 
 	export let gameId;
 	export let whitePlayer = '';
@@ -23,9 +30,10 @@
 
 	let accusedPlayer = '';
 	let selectedVote = Vote.None;
-	let voteSalt = '';
 	let savedCommit = null;
 	let hasSavedCommit = false;
+	let commitBackup = '';
+	let restoreBackup = '';
 	let lastLoadKey = '';
 
 	onMount(async () => {
@@ -34,7 +42,7 @@
 		}
 	});
 
-	$: if ($wallet.connected && $disputeAvailable && gameId) {
+	$: if ($wallet.connected && $disputeAvailable && gameId !== undefined && gameId !== null) {
 		refreshPanel();
 	}
 
@@ -62,14 +70,114 @@
 	}
 
 	function syncSavedCommit() {
-		if (typeof localStorage === 'undefined' || !disputeData?.id) {
+		if (typeof window === 'undefined' || !disputeData?.id || !$wallet.account || !$wallet.chainId) {
 			savedCommit = null;
 			hasSavedCommit = false;
+			commitBackup = '';
 			return;
 		}
 
-		savedCommit = JSON.parse(localStorage.getItem(`vote_commit_${disputeData.id}`) || 'null');
-		hasSavedCommit = Boolean(savedCommit);
+		try {
+			const storage = window.localStorage;
+			const context = getCommitContext();
+			const expectedHash = disputeData.user?.commitHash || '';
+			const storageKey = getVoteCommitStorageKey(context);
+			let parsed = savedCommit
+				? parseVoteCommit(serializeVoteCommit(savedCommit), context, expectedHash)
+				: null;
+
+			if (!parsed) {
+				parsed = parseVoteCommit(storage.getItem(storageKey), context, expectedHash);
+			}
+
+			// Preserve valid commits created before storage keys were scoped by chain and account.
+			if (!parsed && expectedHash) {
+				const legacyKey = `vote_commit_${disputeData.id}`;
+				const legacyRaw = storage.getItem(legacyKey);
+				if (legacyRaw) {
+					try {
+						const legacy = JSON.parse(legacyRaw);
+						const migrated = createVoteCommitRecord({
+							context,
+							vote: legacy.vote,
+							salt: legacy.salt,
+							hash: legacy.hash,
+							createdAt: Date.now()
+						});
+						if (migrated.hash === expectedHash.toLowerCase()) {
+							parsed = migrated;
+							storage.setItem(storageKey, serializeVoteCommit(migrated));
+							storage.removeItem(legacyKey);
+						}
+					} catch {
+						// Invalid legacy records are ignored instead of breaking the dispute panel.
+					}
+				}
+			}
+
+			savedCommit = parsed;
+			hasSavedCommit = Boolean(parsed);
+			commitBackup = parsed ? serializeVoteCommit(parsed) : '';
+		} catch {
+			savedCommit = null;
+			hasSavedCommit = false;
+			commitBackup = '';
+		}
+	}
+
+	function getCommitContext() {
+		return {
+			chainId: $wallet.chainId,
+			daoAddress: getDisputeDaoAddress($wallet.chainId),
+			account: $wallet.account,
+			gameId,
+			disputeId: disputeData.id
+		};
+	}
+
+	async function copyCommitBackup() {
+		if (!commitBackup) return;
+
+		try {
+			await navigator.clipboard.writeText(commitBackup);
+			success = 'Reveal backup copied. Keep it private until your vote is revealed.';
+			error = null;
+		} catch {
+			error = 'Clipboard access failed. Select and copy the backup manually.';
+		}
+	}
+
+	function restoreCommitBackup() {
+		try {
+			const context = getCommitContext();
+			const parsed = parseVoteCommit(
+				restoreBackup.trim(),
+				context,
+				disputeData.user?.commitHash || ''
+			);
+
+			if (!parsed) {
+				error = 'This backup does not match the connected account, network, dispute, or on-chain commit.';
+				return;
+			}
+
+			let persisted = true;
+			try {
+				window.localStorage.setItem(getVoteCommitStorageKey(context), serializeVoteCommit(parsed));
+			} catch {
+				persisted = false;
+			}
+			savedCommit = parsed;
+			hasSavedCommit = true;
+			commitBackup = serializeVoteCommit(parsed);
+			restoreBackup = '';
+			error = null;
+			success = persisted
+				? 'Reveal backup restored for this dispute.'
+				: 'Backup validated, but browser storage failed. Keep this page open until reveal.';
+		} catch {
+			error = 'Unable to validate this reveal backup.';
+		}
 	}
 
 	function getPhase(d) {
@@ -244,22 +352,34 @@
 		success = null;
 
 		try {
+			const context = getCommitContext();
 			const salt = dispute.generateSalt();
-			voteSalt = salt;
-
-			const commitHash = await dispute.commitVote(disputeData.id, selectedVote, salt);
-
-			savedCommit = {
-				disputeId: disputeData.id,
+			const commitHash = await dispute.commitVote(context.disputeId, selectedVote, salt);
+			const record = createVoteCommitRecord({
+				context,
 				vote: selectedVote,
 				salt,
 				hash: commitHash
-			};
+			});
+			let persisted = true;
+			try {
+				window.localStorage.setItem(getVoteCommitStorageKey(record), serializeVoteCommit(record));
+			} catch {
+				persisted = false;
+			}
 
-			localStorage.setItem(`vote_commit_${disputeData.id}`, JSON.stringify(savedCommit));
+			savedCommit = record;
 			hasSavedCommit = true;
-			success = `Vote committed. Save this salt: ${salt.slice(0, 10)}...`;
+			commitBackup = serializeVoteCommit(record);
+			success = persisted
+				? 'Vote committed. Copy the reveal backup before leaving this page.'
+				: 'Vote committed, but browser storage failed. Copy the reveal backup now.';
 			await loadDispute();
+			if (!persisted) {
+				savedCommit = record;
+				hasSavedCommit = true;
+				commitBackup = serializeVoteCommit(record);
+			}
 		} catch (err) {
 			error = err.message || 'Failed to commit vote';
 		}
@@ -268,7 +388,7 @@
 	}
 
 	async function handleRevealVote() {
-		const saved = savedCommit || JSON.parse(localStorage.getItem(`vote_commit_${disputeData.id}`) || 'null');
+		const saved = savedCommit;
 
 		if (!saved) {
 			error = 'No saved commit found for reveal.';
@@ -281,10 +401,19 @@
 
 		try {
 			await dispute.revealVote(saved.disputeId, saved.vote, saved.salt);
-			success = 'Vote revealed successfully.';
-			localStorage.removeItem(`vote_commit_${disputeData.id}`);
+			let storageCleared = true;
+			try {
+				window.localStorage.removeItem(getVoteCommitStorageKey(saved));
+				window.localStorage.removeItem(`vote_commit_${disputeData.id}`);
+			} catch {
+				storageCleared = false;
+			}
+			success = storageCleared
+				? 'Vote revealed successfully.'
+				: 'Vote revealed successfully, but the local backup could not be removed.';
 			savedCommit = null;
 			hasSavedCommit = false;
+			commitBackup = '';
 			await loadDispute();
 		} catch (err) {
 			error = err.message || 'Failed to reveal vote';
@@ -518,6 +647,46 @@
 					{/if}
 
 					{#if isSelectedArbitrator}
+						{#if disputeData.user.hasCommitted && !disputeData.user.hasRevealed}
+							{#if hasSavedCommit}
+								<div class="mb-4 rounded-lg border border-chess-accent/30 bg-chess-accent/10 p-3 space-y-2">
+									<div class="text-sm font-medium text-chess-accent">Reveal backup</div>
+									<p class="text-xs text-chess-gray">
+										Keep this private backup until reveal. Browser storage alone is not sufficient protection against device loss or cleared data.
+									</p>
+									<textarea
+										class="input min-h-24 font-mono text-xs break-all"
+										rows="4"
+										readonly
+										value={commitBackup}
+									></textarea>
+									<button class="btn btn-secondary w-full" on:click={copyCommitBackup}>
+										Copy Reveal Backup
+									</button>
+								</div>
+							{:else}
+								<div class="mb-4 rounded-lg border border-chess-danger/30 bg-chess-danger/10 p-3 space-y-2">
+									<div class="text-sm font-medium text-chess-danger">Reveal secret missing</div>
+									<p class="text-xs text-chess-gray">
+										Paste a previously exported backup. It will be accepted only if it matches this account, network, dispute, and on-chain commitment.
+									</p>
+									<textarea
+										class="input min-h-24 font-mono text-xs"
+										rows="4"
+										bind:value={restoreBackup}
+										placeholder="Paste reveal backup JSON"
+									></textarea>
+									<button
+										class="btn btn-secondary w-full"
+										on:click={restoreCommitBackup}
+										disabled={!restoreBackup.trim()}
+									>
+										Restore Reveal Backup
+									</button>
+								</div>
+							{/if}
+						{/if}
+
 						<div class="border-t border-chess-accent/10 pt-4">
 							<h4 class="font-display text-sm mb-3 flex items-center gap-2">
 								<span class="text-chess-accent">*</span>
@@ -588,7 +757,7 @@
 										</button>
 									{:else if disputeData.user.hasCommitted}
 										<p class="text-xs text-chess-danger">
-											Commit found on-chain, but this browser has no saved salt for reveal.
+											Commit found on-chain. Restore the matching reveal backup above before the deadline.
 										</p>
 									{:else}
 										<p class="text-xs text-chess-gray">
