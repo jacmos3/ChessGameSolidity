@@ -337,7 +337,7 @@ module.exports = async function (deployer, network, accounts) {
 
   const fs = require('fs');
   const path = require('path');
-  const deploymentsDir = path.join(__dirname, '..', 'deployments');
+  const deploymentsDir = process.env.DEPLOYMENTS_DIR || path.join(__dirname, '..', 'deployments');
 
   if (!fs.existsSync(deploymentsDir)) {
     fs.mkdirSync(deploymentsDir, { recursive: true });

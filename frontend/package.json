@@ -7,6 +7,7 @@
     "node": ">=20.19 <23"
   },
   "scripts": {
+    "test": "node --test",
     "predev": "npm run sync:abis",
     "dev": "vite dev",
     "prebuild": "npm run sync:abis",

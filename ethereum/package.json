@@ -11,7 +11,8 @@
         "check:size": "node scripts/check-contract-size.js",
         "test": "truffle test",
         "test:batches": "node scripts/test-batches.js",
-        "test:ci": "npm run compile && npm run check:size && npm run test:batches",
+        "test:handoff": "node scripts/test-governance-handoff.js",
+        "test:ci": "npm run compile && npm run check:size && npm run test:batches && npm run test:handoff",
         "verify:handoff": "truffle exec scripts/verify-governance-handoff.js"
     },
     "keywords": [],

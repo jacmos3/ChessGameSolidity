@@ -25,6 +25,10 @@ const CHESS_TOKEN_ADDRESSES = {
 	8453: import.meta.env.VITE_CHESS_TOKEN_BASE || ''
 };
 
+export function getDisputeDaoAddress(chainId) {
+	return DISPUTE_DAO_ADDRESSES[chainId] || '';
+}
+
 const getDisputeDaoAbi = () => loadContractAbi('DisputeDAO');
 const getArbitratorRegistryAbi = () => loadContractAbi('ArbitratorRegistry');
 const getChessTokenAbi = () => loadContractAbi('ChessToken');
@@ -170,13 +174,13 @@ function createDisputeStore() {
 					? new ethers.Contract(registryAddress, arbitratorRegistryAbi, $wallet.signer)
 					: null;
 
-				const [disputeData, arbitrators, effectiveQuorum, voteStatus, arbitratorInfo] = await Promise.all([
+				const [disputeData, arbitrators, effectiveQuorum, voteCommit, arbitratorInfo] = await Promise.all([
 					dao.getDispute(disputeId),
 					dao.getSelectedArbitrators(disputeId),
 					dao.getEffectiveQuorum(disputeId),
 					$wallet.account
-						? dao.getVoteStatus(disputeId, $wallet.account).catch(() => [false, false, Vote.None])
-						: Promise.resolve([false, false, Vote.None]),
+						? dao.votes(disputeId, $wallet.account).catch(() => [ethers.constants.HashZero, false, Vote.None])
+						: Promise.resolve([ethers.constants.HashZero, false, Vote.None]),
 					registry && $wallet.account
 						? registry.getArbitratorInfo($wallet.account).catch(() => null)
 						: Promise.resolve(null)
@@ -188,6 +192,7 @@ function createDisputeStore() {
 				const isSelectedArbitrator = arbitrators.some(
 					arbitrator => arbitrator.toLowerCase() === $wallet.account?.toLowerCase()
 				);
+				const commitHash = voteCommit?.[0] || ethers.constants.HashZero;
 
 				const dispute = {
 					id: disputeId,
@@ -216,9 +221,10 @@ function createDisputeStore() {
 						isSelectedArbitrator,
 						isArbitrator: Boolean(arbitratorInfo?.isActive),
 						canVoteNow: Boolean(arbitratorInfo?.canVoteNow),
-						hasCommitted: Boolean(voteStatus?.[0]),
-						hasRevealed: Boolean(voteStatus?.[1]),
-						revealedVote: Number(voteStatus?.[2] ?? Vote.None)
+						hasCommitted: commitHash !== ethers.constants.HashZero,
+						hasRevealed: Boolean(voteCommit?.[1]),
+						revealedVote: Number(voteCommit?.[2] ?? Vote.None),
+						commitHash
 					}
 				};
 

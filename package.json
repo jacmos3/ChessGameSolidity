@@ -9,7 +9,8 @@
     "sync:local-env": "node scripts/write-frontend-local-env.mjs",
     "smoke:local": "cd ethereum && npx truffle exec scripts/smoke-local.js",
     "test:contracts": "npm --prefix ethereum run test:ci",
+    "test:frontend": "npm --prefix frontend test",
     "build:frontend": "npm --prefix frontend run build",
-    "ci": "npm run test:contracts && npm run build:frontend"
+    "ci": "npm run test:contracts && npm run test:frontend && npm run build:frontend"
   }
 }

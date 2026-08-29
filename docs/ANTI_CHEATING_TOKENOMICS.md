@@ -1,5 +1,7 @@
 # Anti-Cheating System & Tokenomics
 
+> **Historical design document:** this file contains exploratory tokenomics and features that are not all implemented. Use the Solidity contracts, canonical migration, and root README as the source of truth.
+
 ## Il Paradigma: "Don't Detect, Disincentivize"
 
 ```

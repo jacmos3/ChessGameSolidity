@@ -25,11 +25,12 @@ import "@openzeppelin/contracts/governance/extensions/GovernorTimelockControl.so
  * - Quorum requirements to prevent low-participation attacks
  * - Simple majority voting (For/Against/Abstain)
  *
- * Governable Parameters:
- * - BondingManager: bondRatioChess, bondRatioEth, minBondEthValue
- * - DisputeDAO: challengeWindow, commitPeriod, revealPeriod, quorum, supermajority
- * - ArbitratorRegistry: tier thresholds, cooldown periods
- * - ChessFactory: platform fee percentage
+ * Primary governable surfaces after the production handoff:
+ * - BondingManager: bond multipliers, minimum bond value, pause state, and roles
+ * - DisputeDAO: challenge/voting periods, quorum, supermajority, and deposit
+ * - ChessFactory: implementation and module addresses used by future games
+ * - RewardPool and ChessToken: owned configuration, funding, and role administration
+ * Arbitrator tier thresholds and cooldowns are intentionally immutable constants.
  */
 contract ChessGovernor is
     Governor,

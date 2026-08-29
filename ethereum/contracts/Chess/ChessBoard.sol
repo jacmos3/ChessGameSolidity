@@ -127,9 +127,8 @@ contract ChessBoard {
         return "";
     }
 
-    /// @notice Get SVG representation of the board
-    function printChessBoardLayoutSVG() external view returns (string memory) {
-        return board.getCurrentBoard();
+    function _renderBoardMetadata(uint256 tokenId) internal view returns (string memory) {
+        return board.getCurrentBoard(tokenId);
     }
 
     /// @notice Get entire board state in a single call (saves 63 RPC calls)

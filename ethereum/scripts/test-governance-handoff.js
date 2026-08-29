@@ -1,37 +1,16 @@
+const fs = require("fs");
 const net = require("net");
+const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
 
 const projectRoot = path.resolve(__dirname, "..");
-const executable = (name) => path.join(projectRoot, "node_modules", ".bin", `${name}${process.platform === "win32" ? ".cmd" : ""}`);
-const batches = [
-  [
-    "test/TestChessCore.js",
-    "test/TestChessRulesEngine.js",
-    "test/TestCheckValidation.js",
-    "test/TestDrawRules.js",
-    "test/TestEnPassantPromotion.js",
-    "test/TestPieceMovements.js",
-  ],
-  [
-    "test/TestChessFactory.js",
-    "test/TestChessNFT.js",
-    "test/TestGameMechanics.js",
-    "test/TestGameRegistration.js",
-  ],
-  [
-    "test/TestChessToken.js",
-    "test/TestBondingManager.js",
-    "test/TestPlayerRating.js",
-    "test/TestRewardPool.js",
-  ],
-  [
-    "test/TestArbitratorRegistry.js",
-    "test/TestDisputeDAO.js",
-    "test/TestIntegration.js",
-    "test/TestGovernance.js",
-  ],
-];
+const executable = (name) => path.join(
+  projectRoot,
+  "node_modules",
+  ".bin",
+  `${name}${process.platform === "win32" ? ".cmd" : ""}`
+);
 
 function reservePort() {
   return new Promise((resolve, reject) => {
@@ -73,7 +52,12 @@ function waitForPort(port, child, timeoutMs = 20_000) {
 
 function run(command, args, env) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: projectRoot, env, stdio: "inherit", shell: false });
+    const child = spawn(command, args, {
+      cwd: projectRoot,
+      env,
+      stdio: "inherit",
+      shell: false
+    });
     child.once("error", reject);
     child.once("exit", (code, signal) => {
       if (code === 0) resolve();
@@ -97,39 +81,59 @@ async function stop(child) {
   });
 }
 
+async function rpc(port, method, params = []) {
+  const response = await fetch(`http://127.0.0.1:${port}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params })
+  });
+  const payload = await response.json();
+  if (payload.error) throw new Error(payload.error.message || JSON.stringify(payload.error));
+  return payload.result;
+}
+
 async function main() {
-  for (const [index, batch] of batches.entries()) {
-    const port = await reservePort();
+  const port = await reservePort();
+  const deploymentDir = fs.mkdtempSync(path.join(os.tmpdir(), "chess-handoff-"));
+  const ganache = spawn(
+    executable("ganache"),
+    [
+      "--server.host", "127.0.0.1",
+      "--server.port", String(port),
+      "--wallet.deterministic",
+      "--wallet.totalAccounts", "20",
+      "--miner.blockGasLimit", "30000000",
+      "--logging.quiet"
+    ],
+    { cwd: projectRoot, stdio: ["ignore", "inherit", "inherit"], shell: false }
+  );
+
+  try {
+    await waitForPort(port, ganache);
+    const accounts = await rpc(port, "eth_accounts");
     const env = {
       ...process.env,
       LOCAL_RPC_HOST: "127.0.0.1",
       LOCAL_RPC_PORT: String(port),
-      SKIP_DEPLOYMENT_OUTPUT: "true",
+      GOVERNANCE_HANDOFF: "true",
+      FAUCET_SIGNER: accounts[3],
+      ORACLE_UPDATER: accounts[4],
+      DEPLOYMENTS_DIR: deploymentDir,
+      DEPLOYMENT_FILE: path.join(deploymentDir, "latest-development.json")
     };
-    console.log(`\n=== Contract test batch ${index + 1}/${batches.length} (port ${port}) ===`);
 
-    const ganache = spawn(
-      executable("ganache"),
-      [
-        "--server.host", "127.0.0.1",
-        "--server.port", String(port),
-        "--wallet.deterministic",
-        "--wallet.totalAccounts", "20",
-        "--miner.blockGasLimit", "30000000",
-        "--logging.quiet",
-      ],
-      { cwd: projectRoot, env, stdio: ["ignore", "inherit", "inherit"], shell: false }
+    console.log("\n=== Governance handoff migration ===");
+    await run(executable("truffle"), ["migrate", "--reset", "--compile-none"], env);
+    await run(
+      executable("truffle"),
+      ["exec", "scripts/verify-governance-handoff.js"],
+      env
     );
-
-    try {
-      await waitForPort(port, ganache);
-      await run(executable("truffle"), ["test", ...batch, "--compile-none"], env);
-    } finally {
-      await stop(ganache);
-    }
+    console.log("Governance handoff migration passed.");
+  } finally {
+    await stop(ganache);
+    fs.rmSync(deploymentDir, { recursive: true, force: true });
   }
-
-  console.log(`\nAll ${batches.length} contract test batches passed.`);
 }
 
 main().catch((error) => {

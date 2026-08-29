@@ -216,6 +216,11 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         positionHistory.push(initialPosition);
         maxPositionRepetitions = 1;
     }
+
+    /// @notice Return the current board and metadata for this game's NFT
+    function printChessBoardLayoutSVG() external view returns (string memory) {
+        return _renderBoardMetadata(gameId);
+    }
    
    receive() external payable {
         if (cancelled) revert CancelledGame();

@@ -10,11 +10,11 @@ import "./ChessToken.sol";
 /**
  * @title BondingManager
  * @notice Manages hybrid bonds (CHESS + ETH) for chess games
- * @dev Implements TWAP oracle, circuit breaker, and slashing mechanism
+ * @dev Uses a trusted price updater with freshness checks, a circuit breaker, and slashing
  *
  * Key Features:
  * - Hybrid bond: Both CHESS tokens and ETH required
- * - TWAP pricing to prevent flash manipulation
+ * - Dedicated oracle role with stale-price rejection
  * - Circuit breaker for extreme price movements
  * - Slashing for cheaters (burned, not redistributed)
  */
@@ -31,7 +31,7 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
     uint256 public chessMultiplier = 3;  // 3x stake in CHESS
     uint256 public ethMultiplier = 2;    // 2x stake in ETH
 
-    // TWAP Oracle (simplified - in production use Uniswap/Chainlink)
+    // Trusted updater price feed. TWAP_PERIOD is retained as a legacy ABI name; no TWAP is calculated.
     uint256 public chessEthPrice;        // CHESS price in wei (per 1 CHESS)
     uint256 public priceLastUpdated;
     uint256 public constant TWAP_PERIOD = 7 days;
@@ -182,7 +182,7 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
 
         ethRequired = stake * ethMultiplier;
 
-        // Calculate CHESS required based on TWAP price
+        // Calculate CHESS required from the latest trusted updater price.
         // chessRequired = (stake * chessMultiplier) / chessEthPrice
         // Ensure minimum floor
         uint256 chessValue = (stake * chessMultiplier * 1e18) / chessEthPrice;
@@ -321,7 +321,7 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /**
-     * @notice Update TWAP price (simplified - in production use oracle)
+     * @notice Update the trusted CHESS/ETH price used for bond calculations
      * @param newPrice New CHESS/ETH price
      */
     function updatePrice(uint256 newPrice) external onlyRole(ORACLE_ROLE) {
