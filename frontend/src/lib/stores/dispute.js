@@ -2,6 +2,7 @@ import { writable, derived, get } from 'svelte/store';
 import { wallet } from './wallet.js';
 import { ethers } from 'ethers';
 import { loadContractAbi } from '../contracts/loadAbi.js';
+import { getTransactionFeeOverrides } from '../utils/transactionFees.js';
 
 // Contract addresses per network
 const DISPUTE_DAO_ADDRESSES = {
@@ -265,14 +266,15 @@ function createDisputeStore() {
 				// Check allowance and approve if needed
 				const challengeDeposit = await dao.challengeDeposit();
 				const allowance = await token.allowance($wallet.account, daoAddress);
+				const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
 
 				if (allowance.lt(challengeDeposit)) {
-					const approveTx = await token.approve(daoAddress, challengeDeposit);
+					const approveTx = await token.approve(daoAddress, challengeDeposit, feeOverrides);
 					await approveTx.wait();
 				}
 
 				// Submit challenge
-				const tx = await dao.challenge(gameId, accusedPlayer);
+				const tx = await dao.challenge(gameId, accusedPlayer, feeOverrides);
 				await tx.wait();
 
 				update(s => ({ ...s, loading: false }));
@@ -310,7 +312,8 @@ function createDisputeStore() {
 					[vote, salt, $wallet.account]
 				);
 
-				const tx = await dao.commitVote(disputeId, commitHash);
+				const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
+				const tx = await dao.commitVote(disputeId, commitHash, feeOverrides);
 				await tx.wait();
 
 				update(s => ({ ...s, loading: false }));
@@ -342,7 +345,8 @@ function createDisputeStore() {
 				const disputeDaoAbi = await getDisputeDaoAbi();
 				const dao = new ethers.Contract(daoAddress, disputeDaoAbi, $wallet.signer);
 
-				const tx = await dao.revealVote(disputeId, vote, salt);
+				const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
+				const tx = await dao.revealVote(disputeId, vote, salt, feeOverrides);
 				await tx.wait();
 
 				update(s => ({ ...s, loading: false }));
@@ -374,7 +378,8 @@ function createDisputeStore() {
 				const disputeDaoAbi = await getDisputeDaoAbi();
 				const dao = new ethers.Contract(daoAddress, disputeDaoAbi, $wallet.signer);
 
-				const tx = await dao.resolveDispute(disputeId);
+				const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
+				const tx = await dao.resolveDispute(disputeId, feeOverrides);
 				await tx.wait();
 
 				update(s => ({ ...s, loading: false }));
@@ -405,7 +410,8 @@ function createDisputeStore() {
 			try {
 				const disputeDaoAbi = await getDisputeDaoAbi();
 				const dao = new ethers.Contract(daoAddress, disputeDaoAbi, $wallet.signer);
-				const tx = await dao.closeChallengeWindow(gameId);
+				const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
+				const tx = await dao.closeChallengeWindow(gameId, feeOverrides);
 				await tx.wait();
 
 				update(s => ({ ...s, loading: false }));
@@ -578,16 +584,17 @@ function createArbitratorStore() {
 				const token = new ethers.Contract(tokenAddress, chessTokenAbi, $wallet.signer);
 
 				const amountWei = ethers.utils.parseEther(amount.toString());
+				const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
 
 				// Check allowance
 				const allowance = await token.allowance($wallet.account, registryAddress);
 				if (allowance.lt(amountWei)) {
-					const approveTx = await token.approve(registryAddress, amountWei);
+					const approveTx = await token.approve(registryAddress, amountWei, feeOverrides);
 					await approveTx.wait();
 				}
 
 				// Stake
-				const tx = await registry.stake(amountWei);
+				const tx = await registry.stake(amountWei, feeOverrides);
 				await tx.wait();
 
 				// Refresh data
@@ -627,7 +634,8 @@ function createArbitratorStore() {
 				);
 
 				const amountWei = ethers.utils.parseEther(amount.toString());
-				const tx = await registry.unstake(amountWei);
+				const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
+				const tx = await registry.unstake(amountWei, feeOverrides);
 				await tx.wait();
 
 				// Refresh data

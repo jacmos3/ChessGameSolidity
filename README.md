@@ -283,9 +283,11 @@ VITE_ARBITRATOR_REGISTRY_LOCAL=
 VITE_CHESS_GOVERNOR_LOCAL=
 VITE_CHESS_TIMELOCK_LOCAL=
 VITE_PLAYER_RATING_LOCAL=
+VITE_BASE_MAX_PRIORITY_FEE_PER_GAS_WEI=1000000
 ```
 
 For Base Sepolia / Base, use the corresponding `..._BASE_SEPOLIA` and `..._BASE` variables.
+The frontend derives EIP-1559 max fees from the latest Base block and defaults the priority fee to `1000000` wei (`0.001 gwei`), avoiding provider fallbacks intended for Ethereum mainnet. Override `VITE_BASE_MAX_PRIORITY_FEE_PER_GAS_WEI` only when Base fee policy requires it; local Ganache transactions continue to use provider-managed fees.
 
 The current frontend does not directly load `RewardPool`; rewards are triggered by finalized games and faucet administration remains an external operational flow. Consequently there is no `VITE_REWARD_POOL_*` variable today.
 

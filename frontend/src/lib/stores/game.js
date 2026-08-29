@@ -2,6 +2,7 @@ import { writable, derived, get } from 'svelte/store';
 import { wallet, contractAddress } from './wallet.js';
 import { ethers } from 'ethers';
 import { loadContractAbi } from '../contracts/loadAbi.js';
+import { getTransactionFeeOverrides } from '../utils/transactionFees.js';
 
 // Game states mapping — matches getGameState() (1-indexed), not the raw GameState enum
 export const GAME_STATES = {
@@ -214,7 +215,9 @@ function createGamesStore() {
 
 			// TimeoutPreset: 0=Finney (~1h), 1=Buterin (~7h), 2=Nakamoto (~7d)
 			// GameMode: 0=Tournament (strict), 1=Friendly (relaxed)
+			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
 			const tx = await factory.createChessGame(timeoutPreset, gameMode, {
+				...feeOverrides,
 				value: ethers.utils.parseEther(betAmount.toString())
 			});
 
@@ -649,15 +652,23 @@ function createActiveGameStore() {
 			try {
 				const chessCoreAbi = await getChessCoreAbi();
 				const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
+				const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
 				let gasEstimate;
 
 				if (promotionPiece !== 0) {
-					gasEstimate = await game.estimateGas.makeMoveWithPromotion(fromRow, fromCol, toRow, toCol, promotionPiece);
+					gasEstimate = await game.estimateGas.makeMoveWithPromotion(
+						fromRow,
+						fromCol,
+						toRow,
+						toCol,
+						promotionPiece,
+						feeOverrides
+					);
 				} else {
-					gasEstimate = await game.estimateGas.makeMove(fromRow, fromCol, toRow, toCol);
+					gasEstimate = await game.estimateGas.makeMove(fromRow, fromCol, toRow, toCol, feeOverrides);
 				}
 
-				const gasPrice = await $wallet.provider.getGasPrice();
+				const gasPrice = feeOverrides.maxFeePerGas || await $wallet.provider.getGasPrice();
 				const gasCost = gasEstimate.mul(gasPrice);
 
 				return {
@@ -679,6 +690,7 @@ function createActiveGameStore() {
 			if (!$wallet.signer || !$state.address) {
 				throw new Error('No game loaded');
 			}
+			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
 
 			// Optimistic update - apply move immediately to UI
 			const piece = $state.data?.board[fromRow]?.[fromCol];
@@ -726,9 +738,16 @@ function createActiveGameStore() {
 				const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
 				let tx;
 				if (promotionPiece !== 0) {
-					tx = await game.makeMoveWithPromotion(fromRow, fromCol, toRow, toCol, promotionPiece);
+					tx = await game.makeMoveWithPromotion(
+						fromRow,
+						fromCol,
+						toRow,
+						toCol,
+						promotionPiece,
+						feeOverrides
+					);
 				} else {
-					tx = await game.makeMove(fromRow, fromCol, toRow, toCol);
+					tx = await game.makeMove(fromRow, fromCol, toRow, toCol, feeOverrides);
 				}
 				await tx.wait();
 			} catch (err) {
@@ -770,9 +789,11 @@ function createActiveGameStore() {
 			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
 			const value = ethers.utils.parseEther($state.data.betting.toString());
 			const customized = await game.boardCustomized().catch(() => false);
+			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
+			const overrides = { ...feeOverrides, value };
 			const tx = customized
-				? await game.joinGameAsBlackConfirmingBoard(await game.getBoardSetupHash(), { value })
-				: await game.joinGameAsBlack({ value });
+				? await game.joinGameAsBlackConfirmingBoard(await game.getBoardSetupHash(), overrides)
+				: await game.joinGameAsBlack(overrides);
 			await tx.wait();
 		},
 
@@ -786,7 +807,8 @@ function createActiveGameStore() {
 
 			const chessCoreAbi = await getChessCoreAbi();
 			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
-			const tx = await game.cancelUnjoinedGame();
+			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
+			const tx = await game.cancelUnjoinedGame(feeOverrides);
 			await tx.wait();
 		},
 
@@ -800,7 +822,8 @@ function createActiveGameStore() {
 
 			const chessCoreAbi = await getChessCoreAbi();
 			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
-			const tx = await game.resign();
+			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
+			const tx = await game.resign(feeOverrides);
 			await tx.wait();
 		},
 
@@ -814,7 +837,8 @@ function createActiveGameStore() {
 
 			const chessCoreAbi = await getChessCoreAbi();
 			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
-			const tx = await game.claimVictoryByTimeout();
+			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
+			const tx = await game.claimVictoryByTimeout(feeOverrides);
 			await tx.wait();
 		},
 
@@ -828,7 +852,8 @@ function createActiveGameStore() {
 
 			const chessCoreAbi = await getChessCoreAbi();
 			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
-			const tx = await game.offerDraw();
+			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
+			const tx = await game.offerDraw(feeOverrides);
 			await tx.wait();
 
 			// Optimistically update local state
@@ -848,7 +873,8 @@ function createActiveGameStore() {
 
 			const chessCoreAbi = await getChessCoreAbi();
 			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
-			const tx = await game.acceptDraw();
+			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
+			const tx = await game.acceptDraw(feeOverrides);
 			await tx.wait();
 		},
 
@@ -862,7 +888,8 @@ function createActiveGameStore() {
 
 			const chessCoreAbi = await getChessCoreAbi();
 			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
-			const tx = await game.declineDraw();
+			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
+			const tx = await game.declineDraw(feeOverrides);
 			await tx.wait();
 
 			// Optimistically update local state
@@ -882,7 +909,8 @@ function createActiveGameStore() {
 
 			const chessCoreAbi = await getChessCoreAbi();
 			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
-			const tx = await game.cancelDrawOffer();
+			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
+			const tx = await game.cancelDrawOffer(feeOverrides);
 			await tx.wait();
 
 			// Optimistically update local state
@@ -902,7 +930,8 @@ function createActiveGameStore() {
 
 			const chessCoreAbi = await getChessCoreAbi();
 			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
-			const tx = await game.claimDrawByRepetition();
+			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
+			const tx = await game.claimDrawByRepetition(feeOverrides);
 			await tx.wait();
 		},
 
@@ -916,7 +945,8 @@ function createActiveGameStore() {
 
 			const chessCoreAbi = await getChessCoreAbi();
 			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
-			const tx = await game.claimDrawByFiftyMoveRule();
+			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
+			const tx = await game.claimDrawByFiftyMoveRule(feeOverrides);
 			await tx.wait();
 		},
 
@@ -930,16 +960,17 @@ function createActiveGameStore() {
 
 			const chessCoreAbi = await getChessCoreAbi();
 			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
+			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
 
 			const pending = await game.pendingPrize($wallet.account);
 			if (pending.gt(0)) {
-				const tx = await game.withdrawPrize();
+				const tx = await game.withdrawPrize(feeOverrides);
 				await tx.wait();
 				return;
 			}
 
 			try {
-				const finalizeTx = await game.finalizePrizes();
+				const finalizeTx = await game.finalizePrizes(feeOverrides);
 				await finalizeTx.wait();
 			} catch (err) {
 				if (!isCustomError(err, 'PrizeAlreadyClaimed()')) {
@@ -947,7 +978,7 @@ function createActiveGameStore() {
 				}
 			}
 
-			const tx = await game.withdrawPrize();
+			const tx = await game.withdrawPrize(feeOverrides);
 			await tx.wait();
 		},
 

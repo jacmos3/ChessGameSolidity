@@ -2,6 +2,7 @@ import { writable, derived, get } from 'svelte/store';
 import { wallet } from './wallet.js';
 import { ethers } from 'ethers';
 import { loadContractAbi } from '../contracts/loadAbi.js';
+import { getTransactionFeeOverrides } from '../utils/transactionFees.js';
 
 // BondingManager contract addresses per network
 const BONDING_MANAGER_ADDRESSES = {
@@ -223,7 +224,8 @@ function createBondingStore() {
 			const maxAmount = ethers.constants.MaxUint256;
 			console.log('Sending approval transaction for MaxUint256...');
 
-			const tx = await chessToken.approve(bondingAddress, maxAmount);
+			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
+			const tx = await chessToken.approve(bondingAddress, maxAmount, feeOverrides);
 			console.log('Transaction submitted:', tx.hash);
 
 			const receipt = await tx.wait();
@@ -298,7 +300,8 @@ function createBondingStore() {
 			);
 
 			console.log('Sending deposit transaction...');
-			const tx = await bondingManager.depositBond(chessWei, { value: ethWei });
+			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
+			const tx = await bondingManager.depositBond(chessWei, { ...feeOverrides, value: ethWei });
 			console.log('Transaction submitted:', tx.hash);
 
 			await tx.wait();
@@ -330,7 +333,8 @@ function createBondingStore() {
 			);
 
 			const amountWei = ethers.utils.parseEther(amount.toString());
-			const tx = await bondingManager.withdrawBond(amountWei, 0);
+			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
+			const tx = await bondingManager.withdrawBond(amountWei, 0, feeOverrides);
 			await tx.wait();
 
 			// Refresh data
@@ -359,7 +363,8 @@ function createBondingStore() {
 			);
 
 			const amountWei = ethers.utils.parseEther(amount.toString());
-			const tx = await bondingManager.withdrawBond(0, amountWei);
+			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
+			const tx = await bondingManager.withdrawBond(0, amountWei, feeOverrides);
 			await tx.wait();
 
 			// Refresh data
@@ -388,7 +393,8 @@ function createBondingStore() {
 			);
 
 			const amountWei = ethers.utils.parseEther(amount.toString());
-			const tx = await chessToken.mintTreasury($wallet.account, amountWei);
+			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
+			const tx = await chessToken.mintTreasury($wallet.account, amountWei, feeOverrides);
 			await tx.wait();
 
 			// Refresh data

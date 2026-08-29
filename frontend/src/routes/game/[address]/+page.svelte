@@ -69,7 +69,6 @@
 	let lastTimeoutSyncKey = '';
 
 	onMount(() => {
-		activeGame.load(address);
 		preloadAllSounds();
 		const timer = window.setInterval(() => {
 			if (timeoutRemaining > 0) timeoutRemaining -= 1;
@@ -120,26 +119,27 @@
 	}
 	$: if (data?.state) previousState = data.state;
 
-	// Reload when address changes
-	$: if (address) {
-		activeGame.load(address);
-	}
+	// Reload when the wallet, network or game changes. The first wallet connection must load too.
+	let loadedContextKey = '';
+	let accountSwitchKey = 0;
+	$: {
+		const nextContextKey = $wallet.signer && $wallet.account && $wallet.chainId && address
+			? `${$wallet.chainId}:${$wallet.account.toLowerCase()}:${address.toLowerCase()}`
+			: '';
 
-	// Reload when wallet account changes (user switched accounts)
-	let previousAccount = null;
-	let accountSwitchKey = 0; // Increments on account switch to reset ChessBoard state
-	$: if ($wallet.account && $wallet.account !== previousAccount) {
-		const wasNull = previousAccount === null;
-		previousAccount = $wallet.account;
-		if (address && !wasNull) {
-			// Account switched - clear state and reload
+		if (nextContextKey !== loadedContextKey) {
+			const hadPreviousContext = loadedContextKey !== '';
+			loadedContextKey = nextContextKey;
 			gasEstimate = null;
 			actionError = null;
 			actionSuccess = null;
 			pendingMove = null;
-			activeGame.clear(); // Clear old data FIRST (sets data to null, moveHistory becomes [])
-			accountSwitchKey++; // Now increment key - component remounts with empty moveHistory
-			activeGame.load(address); // Then load fresh data
+
+			if (hadPreviousContext) {
+				activeGame.clear();
+				accountSwitchKey++;
+			}
+			if (nextContextKey) activeGame.load(address);
 		}
 	}
 
@@ -517,7 +517,27 @@
 
 <section class="py-4 px-4 min-h-[calc(100vh-8rem)]">
 	<div class="max-w-7xl mx-auto">
-		{#if $activeGame.loading && !data}
+		{#if !$wallet.connected || !$wallet.signer}
+			<div class="card max-w-md mx-auto text-center mt-12">
+				<div class="text-6xl mb-4">♞</div>
+				<h1 class="text-2xl font-display font-bold text-white mb-3">Connect your wallet</h1>
+				<p class="text-chess-gray mb-6">
+					Connect MetaMask to load this game on the selected network.
+				</p>
+				<button
+					class="btn btn-primary w-full"
+					on:click={() => wallet.connect()}
+					disabled={$wallet.connecting}
+				>
+					{$wallet.connecting ? 'Connecting...' : 'Connect Wallet'}
+				</button>
+				{#if $wallet.error}
+					<p class="text-chess-danger text-sm mt-4">{$wallet.error}</p>
+				{/if}
+				<a href="/lobby" class="inline-block text-chess-gray hover:text-white mt-5">Back to Lobby</a>
+			</div>
+
+		{:else if $activeGame.loading && !data}
 			<!-- Loading state -->
 			<div class="flex items-center justify-center py-20">
 				<div class="text-center">
