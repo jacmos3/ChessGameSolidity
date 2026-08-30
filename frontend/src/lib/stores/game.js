@@ -3,6 +3,16 @@ import { wallet, contractAddress } from './wallet.js';
 import { ethers } from 'ethers';
 import { loadContractAbi } from '../contracts/loadAbi.js';
 import { getTransactionFeeOverrides } from '../utils/transactionFees.js';
+import {
+	bindTransactionToVerifiedAccount,
+	createGenerationGuard,
+	sendBoundContractTransaction,
+	verifiedFactoryContextMatches,
+	verifiedGameContextMatches,
+	verifiedGameMutationContextMatches,
+	verifyCanonicalFactory,
+	verifyRegisteredGame
+} from '../utils/gameVerification.js';
 
 // Game states mapping — matches getGameState() (1-indexed), not the raw GameState enum
 export const GAME_STATES = {
@@ -121,6 +131,7 @@ function createGamesStore() {
 		hasMore: false,
 		error: null
 	});
+	const requestGuard = createGenerationGuard();
 
 	return {
 		subscribe,
@@ -131,6 +142,7 @@ function createGamesStore() {
 
 			if (!$wallet.signer || !$contractAddress) return;
 
+			const generation = requestGuard.begin();
 			update(s => ({ ...s, loading: true, error: null }));
 
 			try {
@@ -138,8 +150,16 @@ function createGamesStore() {
 					getChessFactoryAbi(),
 					getChessCoreAbi()
 				]);
+				const verification = await verifyCanonicalFactory({
+					provider: $wallet.provider,
+					signer: $wallet.signer,
+					account: $wallet.account,
+					chainId: $wallet.chainId,
+					factoryAddress: $contractAddress
+				});
+				if (!requestGuard.isCurrent(generation)) return;
 				const factory = new ethers.Contract(
-					$contractAddress,
+					verification.factoryAddress,
 					factoryAbi,
 					$wallet.signer
 				);
@@ -151,9 +171,11 @@ function createGamesStore() {
 					$wallet.signer,
 					$wallet.account
 				);
+				if (!requestGuard.isCurrent(generation)) return;
 
 				set({ games, loading: false, loadingMore: false, hasMore, error: null });
 			} catch (err) {
+				if (!requestGuard.isCurrent(generation)) return;
 				update(s => ({ ...s, loading: false, loadingMore: false, error: err.message }));
 			}
 		},
@@ -165,6 +187,7 @@ function createGamesStore() {
 
 			if (!$wallet.signer || !$contractAddress || current.loadingMore || !current.hasMore) return;
 
+			const generation = requestGuard.begin();
 			update(s => ({ ...s, loadingMore: true, error: null }));
 
 			try {
@@ -172,8 +195,16 @@ function createGamesStore() {
 					getChessFactoryAbi(),
 					getChessCoreAbi()
 				]);
+				const verification = await verifyCanonicalFactory({
+					provider: $wallet.provider,
+					signer: $wallet.signer,
+					account: $wallet.account,
+					chainId: $wallet.chainId,
+					factoryAddress: $contractAddress
+				});
+				if (!requestGuard.isCurrent(generation)) return;
 				const factory = new ethers.Contract(
-					$contractAddress,
+					verification.factoryAddress,
 					factoryAbi,
 					$wallet.signer
 				);
@@ -185,6 +216,7 @@ function createGamesStore() {
 					$wallet.signer,
 					$wallet.account
 				);
+				if (!requestGuard.isCurrent(generation)) return;
 				const seen = new Set(current.games.map(game => game.address.toLowerCase()));
 
 				update(s => ({
@@ -194,6 +226,7 @@ function createGamesStore() {
 					hasMore
 				}));
 			} catch (err) {
+				if (!requestGuard.isCurrent(generation)) return;
 				update(s => ({ ...s, loadingMore: false, error: err.message }));
 			}
 		},
@@ -206,19 +239,58 @@ function createGamesStore() {
 				throw new Error('Wallet not connected');
 			}
 
-			const factoryAbi = await getChessFactoryAbi();
+			const [factoryAbi, feeOverrides] = await Promise.all([
+				getChessFactoryAbi(),
+				getTransactionFeeOverrides($wallet.provider, $wallet.chainId)
+			]);
+			const verification = await verifyCanonicalFactory({
+				provider: $wallet.provider,
+				signer: $wallet.signer,
+				account: $wallet.account,
+				chainId: $wallet.chainId,
+				factoryAddress: $contractAddress
+			});
+			const currentWallet = get(wallet);
+			const currentContext = {
+				verified: true,
+				chainId: currentWallet.chainId,
+				factoryAddress: get(contractAddress),
+				account: currentWallet.account
+			};
+			if (!verifiedFactoryContextMatches(verification, currentContext)) {
+				throw new Error('Wallet or factory context changed before creating the game');
+			}
 			const factory = new ethers.Contract(
-				$contractAddress,
+				verification.factoryAddress,
 				factoryAbi,
 				$wallet.signer
 			);
 
 			// TimeoutPreset: 0=Finney (~1h), 1=Buterin (~7h), 2=Nakamoto (~7d)
 			// GameMode: 0=Tournament (strict), 1=Friendly (relaxed)
-			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
-			const tx = await factory.createChessGame(timeoutPreset, gameMode, {
-				...feeOverrides,
-				value: ethers.utils.parseEther(betAmount.toString())
+			const tx = await sendBoundContractTransaction({
+				contract: factory,
+				method: 'createChessGame',
+				args: [timeoutPreset, gameMode],
+				overrides: {
+					...feeOverrides,
+					value: ethers.utils.parseEther(String(betAmount).trim())
+				},
+				provider: $wallet.provider,
+				signer: $wallet.signer,
+				verification,
+				assertCurrentContext: () => {
+					const liveWallet = get(wallet);
+					const liveContext = {
+						verified: true,
+						chainId: liveWallet.chainId,
+						factoryAddress: get(contractAddress),
+						account: liveWallet.account
+					};
+					if (!verifiedFactoryContextMatches(verification, liveContext)) {
+						throw new Error('Wallet or factory context changed before sending the transaction');
+					}
+				}
 			});
 
 			await tx.wait();
@@ -257,8 +329,10 @@ function createActiveGameStore() {
 		address: null,
 		loading: false,
 		error: null,
-		data: null
+		data: null,
+		verification: null
 	});
+	const loadGuard = createGenerationGuard();
 
 	let currentGameContract = null;
 	let moveMadeListener = null;
@@ -292,6 +366,92 @@ function createActiveGameStore() {
 			}
 			currentGameContract = null;
 		}
+	}
+
+	async function getVerifiedGameForMutation({ requireData = false, includeFees = true } = {}) {
+		const walletSnapshot = get(wallet);
+		const stateSnapshot = get({ subscribe });
+		const factorySnapshot = get(contractAddress);
+
+		if (!walletSnapshot.signer || !walletSnapshot.provider || !walletSnapshot.account || !stateSnapshot.address) {
+			throw new Error('No game loaded');
+		}
+		if (requireData && !stateSnapshot.data) throw new Error('No game loaded');
+
+		const expectedContext = {
+			verified: true,
+			chainId: walletSnapshot.chainId,
+			factoryAddress: factorySnapshot,
+			gameAddress: stateSnapshot.address,
+			account: walletSnapshot.account
+		};
+		if (!verifiedGameContextMatches(stateSnapshot.verification, expectedContext)) {
+			throw new Error('Game verification is stale; reload the game before sending a transaction');
+		}
+
+		const [chessCoreAbi, feeOverrides] = await Promise.all([
+			getChessCoreAbi(),
+			includeFees
+				? getTransactionFeeOverrides(walletSnapshot.provider, walletSnapshot.chainId)
+				: Promise.resolve({})
+		]);
+		const verifiedContext = await verifyRegisteredGame({
+			provider: walletSnapshot.provider,
+			signer: walletSnapshot.signer,
+			account: walletSnapshot.account,
+			chainId: walletSnapshot.chainId,
+			factoryAddress: factorySnapshot,
+			gameAddress: stateSnapshot.address
+		});
+		const currentWallet = get(wallet);
+		const currentState = get({ subscribe });
+		const currentFactory = get(contractAddress);
+		const currentContext = {
+			verified: true,
+			chainId: currentWallet.chainId,
+			factoryAddress: currentFactory,
+			gameAddress: currentState.address,
+			account: currentWallet.account
+		};
+		if (!verifiedGameContextMatches(verifiedContext, currentContext) ||
+			!verifiedGameContextMatches(currentState.verification, verifiedContext)) {
+			throw new Error('Wallet or game context changed while verifying the transaction');
+		}
+
+		return {
+			game: new ethers.Contract(verifiedContext.gameAddress, chessCoreAbi, walletSnapshot.signer),
+			wallet: walletSnapshot,
+			state: stateSnapshot,
+			verification: verifiedContext,
+			transactionOverrides: bindTransactionToVerifiedAccount(feeOverrides, verifiedContext)
+		};
+	}
+
+	function sendVerifiedGameTransaction(context, method, args = [], extraOverrides = {}) {
+		return sendBoundContractTransaction({
+			contract: context.game,
+			method,
+			args,
+			overrides: { ...context.transactionOverrides, ...extraOverrides },
+			provider: context.wallet.provider,
+			signer: context.wallet.signer,
+			verification: context.verification,
+			assertCurrentContext: () => {
+				const currentWallet = get(wallet);
+				const currentState = get({ subscribe });
+				const currentContext = {
+					verified: true,
+					chainId: currentWallet.chainId,
+					factoryAddress: get(contractAddress),
+					gameAddress: currentState.address,
+					account: currentWallet.account
+				};
+				if (!verifiedGameContextMatches(context.verification, currentContext) ||
+					!verifiedGameContextMatches(currentState.verification, context.verification)) {
+					throw new Error('Wallet, factory, or game route changed before sending the transaction');
+				}
+			}
+		});
 	}
 
 	// Handle incoming move from blockchain event
@@ -492,13 +652,26 @@ function createActiveGameStore() {
 
 		async load(address) {
 			const $wallet = get(wallet);
-			if (!$wallet.signer) return;
+			const $contractAddress = get(contractAddress);
+			if (!$wallet.signer || !$wallet.provider || !$wallet.account) return;
 
-			update(s => ({ ...s, address, loading: true, error: null }));
+			const generation = loadGuard.begin();
+			cleanupListeners();
+			set({ address, loading: true, error: null, data: null, verification: null });
 
 			try {
+				const verification = await verifyRegisteredGame({
+					provider: $wallet.provider,
+					signer: $wallet.signer,
+					account: $wallet.account,
+					chainId: $wallet.chainId,
+					factoryAddress: $contractAddress,
+					gameAddress: address
+				});
+				if (!loadGuard.isCurrent(generation)) return;
+
 				const chessCoreAbi = await getChessCoreAbi();
-				const game = new ethers.Contract(address, chessCoreAbi, $wallet.signer);
+				const game = new ethers.Contract(verification.gameAddress, chessCoreAbi, $wallet.signer);
 
 				const [players, currentPlayer, state, betting, boardState, timeoutStatus, drawOfferStatus, timeoutSeconds, gameMode, gameId, canCancelUnjoinedGame, cancelUnjoinedRemaining, drawRuleStatus] = await Promise.all([
 					game.getPlayers(),
@@ -510,11 +683,12 @@ function createActiveGameStore() {
 					game.getDrawOfferStatus().catch(() => null), // May not exist on older contracts
 					game.timeoutSeconds().catch(() => 3600), // Default to one hour
 					game.gameMode().catch(() => 0), // Default to Tournament if not available
-					game.gameId().catch(() => 0),
+					game.gameId(),
 					game.canCancelUnjoinedGame($wallet.account || ethers.constants.AddressZero).catch(() => false),
 					game.getCancelUnjoinedRemaining().catch(() => 0),
 					game.getDrawRuleStatus().catch(() => null)
 				]);
+				if (!loadGuard.isCurrent(generation)) return;
 
 				// Convert board state from contract format
 				const board = boardState.map(row => row.map(cell => Number(cell)));
@@ -562,6 +736,29 @@ function createActiveGameStore() {
 				} catch (eventErr) {
 					console.warn('Could not fetch move history:', eventErr);
 				}
+				if (!loadGuard.isCurrent(generation)) return;
+
+				const finalVerification = await verifyRegisteredGame({
+					provider: $wallet.provider,
+					signer: $wallet.signer,
+					account: $wallet.account,
+					chainId: $wallet.chainId,
+					factoryAddress: $contractAddress,
+					gameAddress: verification.gameAddress
+				});
+				if (!loadGuard.isCurrent(generation)) return;
+				const currentWallet = get(wallet);
+				const currentContext = {
+					verified: true,
+					chainId: currentWallet.chainId,
+					factoryAddress: get(contractAddress),
+					gameAddress: address,
+					account: currentWallet.account
+				};
+				if (!verifiedGameContextMatches(verification, finalVerification) ||
+					!verifiedGameContextMatches(finalVerification, currentContext)) {
+					throw new Error('Wallet or game context changed while loading the game');
+				}
 
 				const stateNum = Number(state);
 				const playerRole =
@@ -588,9 +785,10 @@ function createActiveGameStore() {
 				}
 
 				set({
-					address,
+					address: finalVerification.gameAddress,
 					loading: false,
 					error: null,
+					verification: finalVerification,
 					data: {
 						gameId: Number(gameId),
 						whitePlayer: players[0],
@@ -616,7 +814,7 @@ function createActiveGameStore() {
 				});
 
 				// Setup real-time event listeners for opponent moves
-				cleanupListeners();
+				if (!loadGuard.isCurrent(generation)) return;
 				currentGameContract = game;
 
 				// Listen for MoveMade events
@@ -636,23 +834,20 @@ function createActiveGameStore() {
 				game.on('DrawAccepted', drawAcceptedListener);
 
 			} catch (err) {
-				update(s => ({ ...s, loading: false, error: err.message }));
+				if (!loadGuard.isCurrent(generation)) return;
+				cleanupListeners();
+				set({ address, loading: false, error: err.message, data: null, verification: null });
 			}
 		},
 
 		// Estimate gas for a move
 		async estimateGas(fromRow, fromCol, toRow, toCol, promotionPiece = 0) {
-			const $wallet = get(wallet);
-			const $state = get({ subscribe });
-
-			if (!$wallet.signer || !$state.address) {
-				return null;
-			}
-
 			try {
-				const chessCoreAbi = await getChessCoreAbi();
-				const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
-				const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
+				const {
+					game,
+					wallet: $wallet,
+					transactionOverrides
+				} = await getVerifiedGameForMutation();
 				let gasEstimate;
 
 				if (promotionPiece !== 0) {
@@ -662,13 +857,19 @@ function createActiveGameStore() {
 						toRow,
 						toCol,
 						promotionPiece,
-						feeOverrides
+						transactionOverrides
 					);
 				} else {
-					gasEstimate = await game.estimateGas.makeMove(fromRow, fromCol, toRow, toCol, feeOverrides);
+					gasEstimate = await game.estimateGas.makeMove(
+						fromRow,
+						fromCol,
+						toRow,
+						toCol,
+						transactionOverrides
+					);
 				}
 
-				const gasPrice = feeOverrides.maxFeePerGas || await $wallet.provider.getGasPrice();
+				const gasPrice = transactionOverrides.maxFeePerGas || await $wallet.provider.getGasPrice();
 				const gasCost = gasEstimate.mul(gasPrice);
 
 				return {
@@ -684,13 +885,8 @@ function createActiveGameStore() {
 		},
 
 		async makeMove(fromRow, fromCol, toRow, toCol, promotionPiece = 0) {
-			const $wallet = get(wallet);
-			const $state = get({ subscribe });
-
-			if (!$wallet.signer || !$state.address) {
-				throw new Error('No game loaded');
-			}
-			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
+			const context = await getVerifiedGameForMutation({ requireData: true });
+			const $state = context.state;
 
 			// Optimistic update - apply move immediately to UI
 			const piece = $state.data?.board[fromRow]?.[fromCol];
@@ -734,25 +930,38 @@ function createActiveGameStore() {
 			}
 
 			try {
-				const chessCoreAbi = await getChessCoreAbi();
-				const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
-				let tx;
-				if (promotionPiece !== 0) {
-					tx = await game.makeMoveWithPromotion(
-						fromRow,
-						fromCol,
-						toRow,
-						toCol,
-						promotionPiece,
-						feeOverrides
+				const tx = promotionPiece !== 0
+					? await sendVerifiedGameTransaction(
+						context,
+						'makeMoveWithPromotion',
+						[fromRow, fromCol, toRow, toCol, promotionPiece]
+					)
+					: await sendVerifiedGameTransaction(
+						context,
+						'makeMove',
+						[fromRow, fromCol, toRow, toCol]
 					);
-				} else {
-					tx = await game.makeMove(fromRow, fromCol, toRow, toCol, feeOverrides);
-				}
 				await tx.wait();
 			} catch (err) {
-				// Revert optimistic update on error
-				await this.load($state.address);
+				// Reload the optimistic board only while the exact wallet/factory/game
+				// context that initiated the move is still active. A late revert from
+				// route A must never overwrite a newer route B load.
+				const currentWallet = get(wallet);
+				const currentState = get({ subscribe });
+				const currentContext = {
+					verified: true,
+					chainId: currentWallet.chainId,
+					factoryAddress: get(contractAddress),
+					gameAddress: currentState.address,
+					account: currentWallet.account
+				};
+				if (verifiedGameMutationContextMatches(
+					context.verification,
+					currentState.verification,
+					currentContext
+				)) {
+					await this.load(context.verification.gameAddress);
+				}
 				throw err;
 			}
 		},
@@ -778,118 +987,64 @@ function createActiveGameStore() {
 		},
 
 		async joinGame() {
-			const $wallet = get(wallet);
-			const $state = get({ subscribe });
-
-			if (!$wallet.signer || !$state.address || !$state.data) {
-				throw new Error('No game loaded');
-			}
-
-			const chessCoreAbi = await getChessCoreAbi();
-			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
+			const { game, state: $state } = await getVerifiedGameForMutation({
+				requireData: true,
+				includeFees: false
+			});
 			const value = ethers.utils.parseEther($state.data.betting.toString());
-			const customized = await game.boardCustomized().catch(() => false);
-			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
-			const overrides = { ...feeOverrides, value };
+			const customized = await game.boardCustomized();
+			const setupHash = customized ? await game.getBoardSetupHash() : null;
+			const submission = await getVerifiedGameForMutation({ requireData: true });
 			const tx = customized
-				? await game.joinGameAsBlackConfirmingBoard(await game.getBoardSetupHash(), overrides)
-				: await game.joinGameAsBlack(overrides);
+				? await sendVerifiedGameTransaction(
+					submission,
+					'joinGameAsBlackConfirmingBoard',
+					[setupHash],
+					{ value }
+				)
+				: await sendVerifiedGameTransaction(submission, 'joinGameAsBlack', [], { value });
 			await tx.wait();
 		},
 
 		async cancelUnjoinedGame() {
-			const $wallet = get(wallet);
-			const $state = get({ subscribe });
-
-			if (!$wallet.signer || !$state.address) {
-				throw new Error('No game loaded');
-			}
-
-			const chessCoreAbi = await getChessCoreAbi();
-			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
-			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
-			const tx = await game.cancelUnjoinedGame(feeOverrides);
+			const context = await getVerifiedGameForMutation();
+			const tx = await sendVerifiedGameTransaction(context, 'cancelUnjoinedGame');
 			await tx.wait();
 		},
 
 		async resign() {
-			const $wallet = get(wallet);
-			const $state = get({ subscribe });
-
-			if (!$wallet.signer || !$state.address) {
-				throw new Error('No game loaded');
-			}
-
-			const chessCoreAbi = await getChessCoreAbi();
-			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
-			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
-			const tx = await game.resign(feeOverrides);
+			const context = await getVerifiedGameForMutation();
+			const tx = await sendVerifiedGameTransaction(context, 'resign');
 			await tx.wait();
 		},
 
 		async claimVictoryByTimeout() {
-			const $wallet = get(wallet);
-			const $state = get({ subscribe });
-
-			if (!$wallet.signer || !$state.address) {
-				throw new Error('No game loaded');
-			}
-
-			const chessCoreAbi = await getChessCoreAbi();
-			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
-			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
-			const tx = await game.claimVictoryByTimeout(feeOverrides);
+			const context = await getVerifiedGameForMutation();
+			const tx = await sendVerifiedGameTransaction(context, 'claimVictoryByTimeout');
 			await tx.wait();
 		},
 
 		async offerDraw() {
-			const $wallet = get(wallet);
-			const $state = get({ subscribe });
-
-			if (!$wallet.signer || !$state.address) {
-				throw new Error('No game loaded');
-			}
-
-			const chessCoreAbi = await getChessCoreAbi();
-			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
-			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
-			const tx = await game.offerDraw(feeOverrides);
+			const context = await getVerifiedGameForMutation();
+			const tx = await sendVerifiedGameTransaction(context, 'offerDraw');
 			await tx.wait();
 
 			// Optimistically update local state
 			update(s => ({
 				...s,
-				data: s.data ? { ...s.data, drawOfferedBy: $wallet.account } : null
+				data: s.data ? { ...s.data, drawOfferedBy: context.wallet.account } : null
 			}));
 		},
 
 		async acceptDraw() {
-			const $wallet = get(wallet);
-			const $state = get({ subscribe });
-
-			if (!$wallet.signer || !$state.address) {
-				throw new Error('No game loaded');
-			}
-
-			const chessCoreAbi = await getChessCoreAbi();
-			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
-			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
-			const tx = await game.acceptDraw(feeOverrides);
+			const context = await getVerifiedGameForMutation();
+			const tx = await sendVerifiedGameTransaction(context, 'acceptDraw');
 			await tx.wait();
 		},
 
 		async declineDraw() {
-			const $wallet = get(wallet);
-			const $state = get({ subscribe });
-
-			if (!$wallet.signer || !$state.address) {
-				throw new Error('No game loaded');
-			}
-
-			const chessCoreAbi = await getChessCoreAbi();
-			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
-			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
-			const tx = await game.declineDraw(feeOverrides);
+			const context = await getVerifiedGameForMutation();
+			const tx = await sendVerifiedGameTransaction(context, 'declineDraw');
 			await tx.wait();
 
 			// Optimistically update local state
@@ -900,17 +1055,8 @@ function createActiveGameStore() {
 		},
 
 		async cancelDrawOffer() {
-			const $wallet = get(wallet);
-			const $state = get({ subscribe });
-
-			if (!$wallet.signer || !$state.address) {
-				throw new Error('No game loaded');
-			}
-
-			const chessCoreAbi = await getChessCoreAbi();
-			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
-			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
-			const tx = await game.cancelDrawOffer(feeOverrides);
+			const context = await getVerifiedGameForMutation();
+			const tx = await sendVerifiedGameTransaction(context, 'cancelDrawOffer');
 			await tx.wait();
 
 			// Optimistically update local state
@@ -921,56 +1067,36 @@ function createActiveGameStore() {
 		},
 
 		async claimDrawByRepetition() {
-			const $wallet = get(wallet);
-			const $state = get({ subscribe });
-
-			if (!$wallet.signer || !$state.address) {
-				throw new Error('No game loaded');
-			}
-
-			const chessCoreAbi = await getChessCoreAbi();
-			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
-			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
-			const tx = await game.claimDrawByRepetition(feeOverrides);
+			const context = await getVerifiedGameForMutation();
+			const tx = await sendVerifiedGameTransaction(context, 'claimDrawByRepetition');
 			await tx.wait();
 		},
 
 		async claimDrawByFiftyMoveRule() {
-			const $wallet = get(wallet);
-			const $state = get({ subscribe });
-
-			if (!$wallet.signer || !$state.address) {
-				throw new Error('No game loaded');
-			}
-
-			const chessCoreAbi = await getChessCoreAbi();
-			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
-			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
-			const tx = await game.claimDrawByFiftyMoveRule(feeOverrides);
+			const context = await getVerifiedGameForMutation();
+			const tx = await sendVerifiedGameTransaction(context, 'claimDrawByFiftyMoveRule');
 			await tx.wait();
 		},
 
 		async claimPrize() {
-			const $wallet = get(wallet);
-			const $state = get({ subscribe });
-
-			if (!$wallet.signer || !$state.address) {
-				throw new Error('No game loaded');
-			}
-
-			const chessCoreAbi = await getChessCoreAbi();
-			const game = new ethers.Contract($state.address, chessCoreAbi, $wallet.signer);
-			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
-
-			const pending = await game.pendingPrize($wallet.account);
+			const initial = await getVerifiedGameForMutation({ includeFees: false });
+			const pending = await initial.game.pendingPrize(initial.verification.account);
 			if (pending.gt(0)) {
-				const tx = await game.withdrawPrize(feeOverrides);
+				const withdrawal = await getVerifiedGameForMutation();
+				if (!verifiedGameContextMatches(initial.verification, withdrawal.verification)) {
+					throw new Error('Wallet or game context changed before withdrawing the prize');
+				}
+				const tx = await sendVerifiedGameTransaction(withdrawal, 'withdrawPrize');
 				await tx.wait();
 				return;
 			}
 
 			try {
-				const finalizeTx = await game.finalizePrizes(feeOverrides);
+				const finalization = await getVerifiedGameForMutation();
+				if (!verifiedGameContextMatches(initial.verification, finalization.verification)) {
+					throw new Error('Wallet or game context changed before finalizing prizes');
+				}
+				const finalizeTx = await sendVerifiedGameTransaction(finalization, 'finalizePrizes');
 				await finalizeTx.wait();
 			} catch (err) {
 				if (!isCustomError(err, 'PrizeAlreadyClaimed()')) {
@@ -978,13 +1104,18 @@ function createActiveGameStore() {
 				}
 			}
 
-			const tx = await game.withdrawPrize(feeOverrides);
+			const withdrawal = await getVerifiedGameForMutation();
+			if (!verifiedGameContextMatches(initial.verification, withdrawal.verification)) {
+				throw new Error('Wallet or game context changed before withdrawing the prize');
+			}
+			const tx = await sendVerifiedGameTransaction(withdrawal, 'withdrawPrize');
 			await tx.wait();
 		},
 
 		clear() {
+			loadGuard.invalidate();
 			cleanupListeners();
-			set({ address: null, loading: false, error: null, data: null });
+			set({ address: null, loading: false, error: null, data: null, verification: null });
 		}
 	};
 }

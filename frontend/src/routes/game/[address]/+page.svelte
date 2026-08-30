@@ -1124,7 +1124,8 @@
 					<!-- Dispute Panel (for finished games) -->
 					{#if isGameFinished}
 						<DisputePanel
-							gameId={data.gameId || 0}
+							gameId={data.gameId}
+							gameAddress={$activeGame.address}
 							whitePlayer={data.whitePlayer}
 							blackPlayer={data.blackPlayer}
 							gameState={data.state}

@@ -1,5 +1,10 @@
 <script>
 	import { createEventDispatcher, onMount } from 'svelte';
+	import {
+		findInvalidChessPieces,
+		isSupportedChessPiece,
+		isValidChessBoardShape
+	} from '$lib/utils/boardValidation.js';
 
 	export let board = [];
 	export let orientation = 'white';
@@ -122,12 +127,14 @@
 	let startPos = { x: 0, y: 0 };
 	const DRAG_THRESHOLD = 5; // Pixels to move before considering it a drag
 
-	// Validate board data
-	$: isValidBoard = board && Array.isArray(board) && board.length === 8 &&
-		board.every(row => Array.isArray(row) && row.length === 8);
+	// Validate both the shape and the complete on-chain piece domain. Corrupted
+	// values must remain visible and must disable interaction rather than looking empty.
+	$: boardShapeValid = isValidChessBoardShape(board);
+	$: invalidPieces = findInvalidChessPieces(board);
+	$: isValidBoard = boardShapeValid && invalidPieces.length === 0;
 
 	// Generate board display based on orientation
-	$: displayBoard = isValidBoard
+	$: displayBoard = boardShapeValid
 		? (orientation === 'black'
 			? board.slice().reverse().map(row => row.slice().reverse())
 			: board)
@@ -149,7 +156,7 @@
 	}
 
 	function handlePointerDown(e, displayRow, displayCol) {
-		if (!interactive) return;
+		if (!interactive || !isValidBoard) return;
 
 		const coords = getActualCoords(displayRow, displayCol);
 		const piece = board[coords.row][coords.col];
@@ -167,7 +174,7 @@
 	}
 
 	function handlePointerUp(e, displayRow, displayCol) {
-		if (!interactive) {
+		if (!interactive || !isValidBoard) {
 			isDragging = false;
 			draggedPiece = null;
 			hasMoved = false;
@@ -196,7 +203,7 @@
 	}
 
 	function handleSquareClick(displayRow, displayCol) {
-		if (!interactive) return;
+		if (!interactive || !isValidBoard) return;
 		if (hasMoved) return; // Was a drag, not a click
 
 		const coords = getActualCoords(displayRow, displayCol);
@@ -401,7 +408,14 @@
 	}
 </script>
 
-<div class="relative select-none flex justify-center">
+<div class="relative select-none flex flex-col items-center justify-center">
+	{#if !isValidBoard}
+		<div class="mb-2 rounded border border-chess-danger bg-red-950/60 px-3 py-2 text-sm text-chess-danger" role="alert">
+			{boardShapeValid
+				? `Invalid on-chain board state (${invalidPieces.length} unsupported piece value${invalidPieces.length === 1 ? '' : 's'}).`
+				: 'Invalid on-chain board shape.'}
+		</div>
+	{/if}
 	<div
 		class="chess-board grid grid-cols-8 rounded-lg overflow-hidden shadow-2xl"
 	>
@@ -409,6 +423,7 @@
 			{#each row as piece, displayCol}
 				{@const isLight = (displayRow + displayCol) % 2 === 0}
 				{@const pieceData = PIECES[piece]}
+				{@const invalidPiece = !isSupportedChessPiece(piece)}
 				{@const selected = isSelected(displayRow, displayCol)}
 
 				{@const coords = getActualCoords(displayRow, displayCol)}
@@ -422,8 +437,8 @@
 
 				<button
 					class="aspect-square flex items-center justify-center text-4xl md:text-5xl transition-colors relative touch-none
-						{interactive && piece !== 0 ? 'cursor-grab active:cursor-grabbing' : ''}
-						{interactive && piece === 0 ? 'cursor-pointer' : ''}
+						{interactive && isValidBoard && piece !== 0 ? 'cursor-grab active:cursor-grabbing' : ''}
+						{interactive && isValidBoard && piece === 0 ? 'cursor-pointer' : ''}
 						{isLastMove ? 'last-move-highlight' : ''}
 						{kingCheck ? 'king-in-check' : ''}"
 					style="background-color: {isLight ? (isLastMove ? '#f7ec8c' : '#f0d9b5') : (isLastMove ? '#d4c34a' : '#b58863')}; {selected ? 'box-shadow: inset 0 0 0 4px #e4a853;' : ''}"
@@ -440,7 +455,9 @@
 					{/if}
 
 					<!-- Show pending piece at destination with pulsing effect -->
-					{#if isPendingDest && pendingPieceData}
+					{#if invalidPiece}
+						<span class="font-bold text-chess-danger" aria-label={`Invalid piece value ${piece}`}>!</span>
+					{:else if isPendingDest && pendingPieceData}
 						<span class="pending-piece {pendingPieceData.color === 'white' ? 'piece-white' : 'piece-black'}">
 							{pendingPieceData.char}
 						</span>
