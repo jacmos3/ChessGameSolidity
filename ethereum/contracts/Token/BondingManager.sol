@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./ChessToken.sol";
 
@@ -39,7 +40,24 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
     // Circuit breaker
     uint256 public constant MAX_PRICE_CHANGE_PERCENT = 50;
     uint256 public constant MIN_PRICE = 1e12; // Minimum price floor (0.000001 ETH per CHESS)
+    uint256 public constant PRICE_CHANGE_WINDOW = 1 days;
+    uint256 public constant MIN_PRICE_UPDATE_INTERVAL = 15 minutes;
     uint256 public lastKnownPrice;
+    uint256 public priceWindowAnchor;
+    uint256 public priceWindowStartedAt;
+    uint256 public lastMaterialPriceUpdateAt;
+    bool public circuitBreakerTripped;
+
+    // With a 15-minute minimum interval there can be at most 98 relevant
+    // observations in 24 hours (initial price, an immediate first update, and
+    // subsequent interval-spaced updates). The ring keeps enforcement bounded.
+    struct PriceCheckpoint {
+        uint256 observedUntil;
+        uint256 price;
+    }
+    PriceCheckpoint[98] private priceCheckpoints;
+    uint16 private priceCheckpointCount;
+    uint16 private priceCheckpointCursor;
 
     // Minimum bond floor in ETH terms
     uint256 public minBondEthValue = 0.01 ether;
@@ -80,17 +98,21 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
     event BondSlashed(uint256 indexed gameId, address indexed player, uint256 chessAmount, uint256 ethAmount);
     event PriceUpdated(uint256 oldPrice, uint256 newPrice);
     event CircuitBreakerTriggered(uint256 oldPrice, uint256 newPrice);
+    event CircuitBreakerReset(uint256 oldPrice, uint256 newPrice);
     event ChessFactoryUpdated(address indexed previousFactory, address indexed newFactory);
     event GameContractAuthorized(address indexed gameContract);
 
     constructor(address _chessToken, uint256 _initialPrice) {
         require(_chessToken.code.length > 0, "Token must be contract");
-        require(_initialPrice > 0, "Invalid price");
+        require(_initialPrice >= MIN_PRICE, "Price below minimum floor");
 
         chessToken = ChessToken(_chessToken);
         chessEthPrice = _initialPrice;
         lastKnownPrice = _initialPrice;
+        priceWindowAnchor = _initialPrice;
+        priceWindowStartedAt = block.timestamp;
         priceLastUpdated = block.timestamp;
+        _resetPriceCheckpoints(_initialPrice);
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(ORACLE_ROLE, msg.sender);
@@ -324,33 +346,113 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
      * @notice Update the trusted CHESS/ETH price used for bond calculations
      * @param newPrice New CHESS/ETH price
      */
-    function updatePrice(uint256 newPrice) external onlyRole(ORACLE_ROLE) {
+    function updatePrice(uint256 newPrice) external onlyRole(ORACLE_ROLE) whenNotPaused {
         require(newPrice >= MIN_PRICE, "Price below minimum floor");
 
-        // Circuit breaker check
-        if (lastKnownPrice > 0) {
-            uint256 priceDiff;
-            if (newPrice > lastKnownPrice) {
-                priceDiff = newPrice - lastKnownPrice;
-            } else {
-                priceDiff = lastKnownPrice - newPrice;
-            }
+        if (block.timestamp >= priceWindowStartedAt + PRICE_CHANGE_WINDOW) {
+            priceWindowAnchor = chessEthPrice;
+            priceWindowStartedAt = block.timestamp;
+        }
 
-            uint256 changePercent = (priceDiff * 100) / lastKnownPrice;
+        if (newPrice != chessEthPrice && lastMaterialPriceUpdateAt != 0) {
+            require(
+                block.timestamp >= lastMaterialPriceUpdateAt + MIN_PRICE_UPDATE_INTERVAL,
+                "Price update too frequent"
+            );
+        }
 
-            if (changePercent > MAX_PRICE_CHANGE_PERCENT) {
-                _pause();
-                emit CircuitBreakerTriggered(lastKnownPrice, newPrice);
-                return;
-            }
+        uint256 priceDiff = newPrice > priceWindowAnchor
+            ? newPrice - priceWindowAnchor
+            : priceWindowAnchor - newPrice;
+
+        // Compare against the window anchor, not the preceding update. This prevents
+        // an updater from bypassing the breaker through a sequence of individually
+        // acceptable changes inside the same window.
+        uint256 maxWindowChange = Math.mulDiv(
+            priceWindowAnchor,
+            MAX_PRICE_CHANGE_PERCENT,
+            100
+        );
+        bool exceedsAnchorLimit = priceDiff > maxWindowChange;
+        uint256 rollingLimitReference = _rollingLimitReference(newPrice);
+        if (exceedsAnchorLimit || rollingLimitReference != 0) {
+            circuitBreakerTripped = true;
+            _pause();
+            emit CircuitBreakerTriggered(
+                exceedsAnchorLimit ? priceWindowAnchor : rollingLimitReference,
+                newPrice
+            );
+            return;
         }
 
         uint256 oldPrice = chessEthPrice;
+        if (newPrice != oldPrice) {
+            _recordPriceTransition(newPrice);
+        }
         chessEthPrice = newPrice;
         lastKnownPrice = newPrice;
         priceLastUpdated = block.timestamp;
+        if (newPrice != oldPrice) {
+            lastMaterialPriceUpdateAt = block.timestamp;
+        }
 
         emit PriceUpdated(oldPrice, newPrice);
+    }
+
+    function _rollingLimitReference(uint256 newPrice) internal view returns (uint256) {
+        if (_priceChangeExceedsLimit(chessEthPrice, newPrice)) return chessEthPrice;
+
+        for (uint256 i = 0; i < priceCheckpointCount; i++) {
+            PriceCheckpoint storage checkpoint = priceCheckpoints[i];
+            if (
+                checkpoint.price != 0 &&
+                block.timestamp <= checkpoint.observedUntil + PRICE_CHANGE_WINDOW &&
+                _priceChangeExceedsLimit(checkpoint.price, newPrice)
+            ) {
+                return checkpoint.price;
+            }
+        }
+        return 0;
+    }
+
+    function _priceChangeExceedsLimit(uint256 referencePrice, uint256 newPrice)
+        internal
+        pure
+        returns (bool)
+    {
+        uint256 difference = newPrice > referencePrice
+            ? newPrice - referencePrice
+            : referencePrice - newPrice;
+        return difference > Math.mulDiv(referencePrice, MAX_PRICE_CHANGE_PERCENT, 100);
+    }
+
+    function _recordPriceTransition(uint256 newPrice) internal {
+        // The previous price remained effective until this transition. Refresh
+        // its endpoint so a window boundary cannot erase a recent price move.
+        if (priceCheckpointCount > 0) {
+            uint256 latestIndex = priceCheckpointCursor == 0
+                ? priceCheckpoints.length - 1
+                : priceCheckpointCursor - 1;
+            priceCheckpoints[latestIndex].observedUntil = block.timestamp;
+        }
+
+        priceCheckpoints[priceCheckpointCursor] = PriceCheckpoint({
+            observedUntil: block.timestamp,
+            price: newPrice
+        });
+        priceCheckpointCursor = uint16((priceCheckpointCursor + 1) % priceCheckpoints.length);
+        if (priceCheckpointCount < priceCheckpoints.length) {
+            priceCheckpointCount++;
+        }
+    }
+
+    function _resetPriceCheckpoints(uint256 price) internal {
+        priceCheckpoints[0] = PriceCheckpoint({
+            observedUntil: block.timestamp,
+            price: price
+        });
+        priceCheckpointCount = 1;
+        priceCheckpointCursor = 1;
     }
 
     /**
@@ -391,7 +493,31 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
     }
 
     function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(!circuitBreakerTripped, "Reset circuit breaker first");
         _unpause();
+    }
+
+    /**
+     * @notice Recover from a price circuit-breaker trip using an admin-reviewed price
+     * @dev Resets the cumulative-change window and unpauses atomically.
+     */
+    function resetCircuitBreaker(uint256 trustedPrice) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(paused() && circuitBreakerTripped, "Circuit breaker not tripped");
+        require(trustedPrice >= MIN_PRICE, "Price below minimum floor");
+
+        uint256 oldPrice = chessEthPrice;
+        chessEthPrice = trustedPrice;
+        lastKnownPrice = trustedPrice;
+        priceWindowAnchor = trustedPrice;
+        priceWindowStartedAt = block.timestamp;
+        lastMaterialPriceUpdateAt = block.timestamp;
+        priceLastUpdated = block.timestamp;
+        circuitBreakerTripped = false;
+        _resetPriceCheckpoints(trustedPrice);
+        _unpause();
+
+        emit PriceUpdated(oldPrice, trustedPrice);
+        emit CircuitBreakerReset(oldPrice, trustedPrice);
     }
 
     function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {

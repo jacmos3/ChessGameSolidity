@@ -11,6 +11,7 @@ const batches = [
     "test/TestCheckValidation.js",
     "test/TestDrawRules.js",
     "test/TestEnPassantPromotion.js",
+    "test/TestGameCoreSecurityRegression.js",
     "test/TestPieceMovements.js",
   ],
   [

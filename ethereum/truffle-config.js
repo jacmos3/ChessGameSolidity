@@ -25,7 +25,10 @@
  const localRpcGas = Number(process.env["LOCAL_RPC_GAS"] || "25000000");
  const baseSepoliaRpcUrl = process.env["BASE_SEPOLIA_RPC_URL"];
  const baseRpcUrl = process.env["BASE_RPC_URL"];
- const { parseBaseMaxPriorityFeePerGas } = require('./scripts/base-fee-config');
+ const {
+   MAX_BASE_MAX_FEE_PER_GAS_WEI,
+   parseBaseMaxPriorityFeePerGas
+ } = require('./scripts/base-fee-config');
  const baseMaxPriorityFeePerGas = parseBaseMaxPriorityFeePerGas();
  
  const HDWalletProvider = require('@truffle/hdwallet-provider');
@@ -39,6 +42,15 @@
  const publicProvider = (rpcUrl, networkName) => {
    if (!mnemonic || !rpcUrl) {
      throw new Error(`MNEMONIC and ${networkName}_RPC_URL are required for ${networkName}`);
+   }
+   let parsedRpcUrl;
+   try {
+     parsedRpcUrl = new URL(rpcUrl);
+   } catch {
+     throw new Error(`${networkName}_RPC_URL must be a valid HTTPS URL`);
+   }
+   if (parsedRpcUrl.protocol !== "https:") {
+     throw new Error(`${networkName}_RPC_URL must use HTTPS`);
    }
    const provider = new Web3.providers.HttpProvider(rpcUrl, {
      keepAlive: true,
@@ -86,6 +98,7 @@ module.exports = {
        network_id: 84532,
        chain_id: 84532,
        maxPriorityFeePerGas: baseMaxPriorityFeePerGas,
+       maxFeePerGas: MAX_BASE_MAX_FEE_PER_GAS_WEI,
        confirmations: 2,
        timeoutBlocks: 200,
        skipDryRun: true
@@ -95,6 +108,7 @@ module.exports = {
        network_id: 8453,
        chain_id: 8453,
        maxPriorityFeePerGas: baseMaxPriorityFeePerGas,
+       maxFeePerGas: MAX_BASE_MAX_FEE_PER_GAS_WEI,
        confirmations: 2,
        timeoutBlocks: 200,
        skipDryRun: false

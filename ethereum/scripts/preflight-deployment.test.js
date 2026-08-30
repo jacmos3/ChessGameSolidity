@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const {
+  assertFeeCapSufficient,
   formatUnits,
   isAddress,
   parseGovernanceHandoff,
@@ -19,6 +20,7 @@ const VALID_ENV = {
   ORACLE_UPDATER: "0x4444444444444444444444444444444444444444",
   GOVERNANCE_HANDOFF: "true"
 };
+const rpcQuantity = (value) => `0x${BigInt(value).toString(16)}`;
 
 test("selectedNetwork accepts split and inline arguments", () => {
   assert.equal(selectedNetwork(["--network", "base_sepolia"]), "base_sepolia");
@@ -48,12 +50,23 @@ test("environment validation selects only the requested RPC", () => {
   assert.equal(config.rpcUrl, VALID_ENV.BASE_SEPOLIA_RPC_URL);
   assert.equal(config.handoffGovernance, true);
   assert.equal(config.maxPriorityFeePerGas, 1_000_000);
+  assert.equal(config.maxFeePerGas, 5_000_000_000);
 });
 
 test("environment validation rejects an invalid Base priority fee", () => {
   assert.throws(
     () => validateEnvironment({ ...VALID_ENV, BASE_MAX_PRIORITY_FEE_PER_GAS_WEI: "2.5" }, "base_sepolia"),
     /positive integer/
+  );
+});
+
+test("environment validation rejects plaintext public RPC URLs", () => {
+  assert.throws(
+    () => validateEnvironment(
+      { ...VALID_ENV, BASE_SEPOLIA_RPC_URL: "http://sepolia.example.invalid" },
+      "base_sepolia"
+    ),
+    /must use HTTPS/
   );
 });
 
@@ -67,4 +80,34 @@ test("environment validation reports all missing required variables", () => {
 test("formatUnits produces concise human-readable values", () => {
   assert.equal(formatUnits(1234567890000000000n, 18), "1.234567");
   assert.equal(formatUnits(1000000000n, 9), "1");
+});
+
+test("fee-cap validation accepts a suggested fee within the fixed cap", () => {
+  assert.doesNotThrow(() => assertFeeCapSufficient(
+    { maxFeePerGas: 5_000_000_000, maxPriorityFeePerGas: 1_000_000 },
+    rpcQuantity(4_500_000_000),
+    rpcQuantity(4_000_000_000)
+  ));
+});
+
+test("fee-cap validation rejects a base fee that leaves no configured priority headroom", () => {
+  assert.throws(
+    () => assertFeeCapSufficient(
+      { maxFeePerGas: 5_000_000_000, maxPriorityFeePerGas: 1_000_000 },
+      rpcQuantity(5_000_000_000),
+      rpcQuantity(5_000_000_000)
+    ),
+    /cannot cover the latest base fee.*priority fee/
+  );
+});
+
+test("fee-cap validation rejects an RPC suggested fee above the fixed cap", () => {
+  assert.throws(
+    () => assertFeeCapSufficient(
+      { maxFeePerGas: 5_000_000_000, maxPriorityFeePerGas: 1_000_000 },
+      rpcQuantity(6_000_000_000),
+      rpcQuantity(4_000_000_000)
+    ),
+    /below the RPC suggested gas price/
+  );
 });

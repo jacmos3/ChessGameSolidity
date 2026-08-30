@@ -3,6 +3,7 @@ const test = require("node:test");
 
 const {
   DEFAULT_BASE_MAX_PRIORITY_FEE_PER_GAS_WEI,
+  MAX_BASE_PRIORITY_FEE_PER_GAS_WEI,
   parseBaseMaxPriorityFeePerGas
 } = require("./base-fee-config");
 
@@ -13,6 +14,10 @@ test("Base priority fee uses a conservative default", () => {
 
 test("Base priority fee accepts an explicit integer override", () => {
   assert.equal(parseBaseMaxPriorityFeePerGas({ BASE_MAX_PRIORITY_FEE_PER_GAS_WEI: "2500000" }), 2_500_000);
+  assert.equal(
+    parseBaseMaxPriorityFeePerGas({ BASE_MAX_PRIORITY_FEE_PER_GAS_WEI: String(MAX_BASE_PRIORITY_FEE_PER_GAS_WEI) }),
+    MAX_BASE_PRIORITY_FEE_PER_GAS_WEI
+  );
 });
 
 test("Base priority fee rejects unsafe or malformed overrides", () => {
@@ -22,4 +27,11 @@ test("Base priority fee rejects unsafe or malformed overrides", () => {
       /positive/
     );
   }
+});
+
+test("Base priority fee rejects values above the economic cap", () => {
+  assert.throws(
+    () => parseBaseMaxPriorityFeePerGas({ BASE_MAX_PRIORITY_FEE_PER_GAS_WEI: "100000001" }),
+    /0.1 gwei safety cap/
+  );
 });

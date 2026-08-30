@@ -27,6 +27,17 @@ const advanceTime = (seconds) => new Promise((resolve, reject) => {
   );
 });
 
+async function expectRevert(promise, label) {
+  let caught;
+  try {
+    await promise;
+  } catch (error) {
+    caught = error;
+  }
+  assert.exists(caught, `${label}: expected a revert`);
+  assert.match(caught.message, /revert|custom error|invalid opcode/i, label);
+}
+
 contract("BondingManager", (accounts) => {
   const admin = accounts[0];
   const teamWallet = accounts[1];
@@ -415,34 +426,184 @@ contract("BondingManager", (accounts) => {
       const newPrice = web3.utils.toWei("0.002", "ether");
       await bondingManager.updatePrice(newPrice, { from: admin });
 
-      try {
-        await bondingManager.depositBond(web3.utils.toWei("100", "ether"), { from: player1 });
-        assert.fail("Should have reverted");
-      } catch (error) {
-        assert.include(error.message, "revert");
-      }
+      await expectRevert(
+        bondingManager.depositBond(web3.utils.toWei("100", "ether"), { from: player1 }),
+        "deposit while the circuit breaker is paused"
+      );
     });
 
-    it("should allow admin to unpause", async () => {
-      // Trigger and unpause
+    it("should require an explicit reviewed-price reset after a circuit-breaker trip", async () => {
       const newPrice = web3.utils.toWei("0.002", "ether");
       await bondingManager.updatePrice(newPrice, { from: admin });
-      await bondingManager.unpause({ from: admin });
+
+      await expectRevert(
+        bondingManager.unpause({ from: admin }),
+        "unpause after a circuit-breaker trip"
+      );
+
+      const reviewedPrice = web3.utils.toWei("0.0011", "ether");
+      await bondingManager.resetCircuitBreaker(reviewedPrice, { from: admin });
 
       const isPaused = await bondingManager.paused();
       assert.isFalse(isPaused);
+      assert.isFalse(await bondingManager.circuitBreakerTripped());
+      assert.equal((await bondingManager.chessEthPrice()).toString(), reviewedPrice);
+      assert.equal((await bondingManager.priceWindowAnchor()).toString(), reviewedPrice);
+    });
+
+    it("should reject an unauthorized circuit-breaker reset without changing oracle state", async () => {
+      await bondingManager.updatePrice(web3.utils.toWei("0.002", "ether"), { from: admin });
+
+      const before = {
+        price: await bondingManager.chessEthPrice(),
+        lastKnownPrice: await bondingManager.lastKnownPrice(),
+        anchor: await bondingManager.priceWindowAnchor(),
+        windowStartedAt: await bondingManager.priceWindowStartedAt(),
+        lastMaterialUpdateAt: await bondingManager.lastMaterialPriceUpdateAt(),
+        priceLastUpdated: await bondingManager.priceLastUpdated()
+      };
+      let reverted = false;
+      try {
+        await bondingManager.resetCircuitBreaker(
+          web3.utils.toWei("0.0011", "ether"),
+          { from: player1 }
+        );
+      } catch (error) {
+        reverted = true;
+        assert.match(error.message, /revert|custom error|invalid opcode/i);
+      }
+
+      assert.isTrue(reverted, "a caller without DEFAULT_ADMIN_ROLE must be rejected");
+      assert.isTrue(await bondingManager.paused());
+      assert.isTrue(await bondingManager.circuitBreakerTripped());
+      assert.equal((await bondingManager.chessEthPrice()).toString(), before.price.toString());
+      assert.equal((await bondingManager.lastKnownPrice()).toString(), before.lastKnownPrice.toString());
+      assert.equal((await bondingManager.priceWindowAnchor()).toString(), before.anchor.toString());
+      assert.equal((await bondingManager.priceWindowStartedAt()).toString(), before.windowStartedAt.toString());
+      assert.equal((await bondingManager.lastMaterialPriceUpdateAt()).toString(), before.lastMaterialUpdateAt.toString());
+      assert.equal((await bondingManager.priceLastUpdated()).toString(), before.priceLastUpdated.toString());
+    });
+
+    it("should reject a circuit-breaker reset below the price floor without changing state", async () => {
+      await bondingManager.updatePrice(web3.utils.toWei("0.002", "ether"), { from: admin });
+
+      const minPrice = web3.utils.toBN(await bondingManager.MIN_PRICE());
+      const belowFloor = minPrice.sub(web3.utils.toBN("1"));
+      const before = {
+        price: await bondingManager.chessEthPrice(),
+        lastKnownPrice: await bondingManager.lastKnownPrice(),
+        anchor: await bondingManager.priceWindowAnchor(),
+        windowStartedAt: await bondingManager.priceWindowStartedAt(),
+        lastMaterialUpdateAt: await bondingManager.lastMaterialPriceUpdateAt(),
+        priceLastUpdated: await bondingManager.priceLastUpdated()
+      };
+      let reverted = false;
+      try {
+        await bondingManager.resetCircuitBreaker(belowFloor, { from: admin });
+      } catch (error) {
+        reverted = true;
+        assert.match(error.message, /revert|custom error|invalid opcode/i);
+      }
+
+      assert.isTrue(reverted, "a reviewed price below MIN_PRICE must be rejected");
+      assert.isTrue(await bondingManager.paused());
+      assert.isTrue(await bondingManager.circuitBreakerTripped());
+      assert.equal((await bondingManager.chessEthPrice()).toString(), before.price.toString());
+      assert.equal((await bondingManager.lastKnownPrice()).toString(), before.lastKnownPrice.toString());
+      assert.equal((await bondingManager.priceWindowAnchor()).toString(), before.anchor.toString());
+      assert.equal((await bondingManager.priceWindowStartedAt()).toString(), before.windowStartedAt.toString());
+      assert.equal((await bondingManager.lastMaterialPriceUpdateAt()).toString(), before.lastMaterialUpdateAt.toString());
+      assert.equal((await bondingManager.priceLastUpdated()).toString(), before.priceLastUpdated.toString());
+    });
+
+    it("should still allow admin recovery from a manual pause", async () => {
+      await bondingManager.pause({ from: admin });
+      await bondingManager.unpause({ from: admin });
+      assert.isFalse(await bondingManager.paused());
+    });
+
+    it("should reject cumulative increases beyond the window limit", async () => {
+      const firstStep = web3.utils.toWei("0.0015", "ether");
+      const secondStep = web3.utils.toWei("0.00225", "ether");
+
+      await bondingManager.updatePrice(firstStep, { from: admin });
+      await advanceTime(15 * 60 + 1);
+      await bondingManager.updatePrice(secondStep, { from: admin });
+
+      assert.isTrue(await bondingManager.paused());
+      assert.equal((await bondingManager.chessEthPrice()).toString(), firstStep);
+      assert.equal((await bondingManager.priceWindowAnchor()).toString(), initialPrice);
+    });
+
+    it("should enforce the rolling limit across the fixed-window boundary", async () => {
+      const firstStep = web3.utils.toWei("0.0015", "ether");
+      const secondStep = web3.utils.toWei("0.00225", "ether");
+
+      // Move close to the fixed-window boundary, then make an allowed 50% move.
+      await advanceTime(24 * 60 * 60 - 15 * 60);
+      await bondingManager.updatePrice(firstStep, { from: admin });
+
+      // The next update is exactly 50% from the current price and crosses the
+      // fixed boundary. It must still trip because the original price was
+      // observed less than 24 hours ago.
+      await advanceTime(15 * 60 + 1);
+      const tripTx = await bondingManager.updatePrice(secondStep, { from: admin });
+
+      assert.isTrue(await bondingManager.paused());
+      assert.equal((await bondingManager.chessEthPrice()).toString(), firstStep);
+      assert.equal((await bondingManager.priceWindowAnchor()).toString(), firstStep);
+      const breakerEvent = tripTx.logs.find((log) => log.event === "CircuitBreakerTriggered");
+      assert.exists(breakerEvent, "rolling violation must emit the circuit-breaker event");
+      assert.equal(breakerEvent.args.oldPrice.toString(), initialPrice);
+      assert.equal(breakerEvent.args.newPrice.toString(), secondStep);
+    });
+
+    it("should permit a boundary move after the older price leaves the rolling window", async () => {
+      const firstStep = web3.utils.toWei("0.0015", "ether");
+      const secondStep = web3.utils.toWei("0.00225", "ether");
+
+      await bondingManager.updatePrice(firstStep, { from: admin });
+      await advanceTime(24 * 60 * 60 + 1);
+      await bondingManager.updatePrice(secondStep, { from: admin });
+
+      assert.isFalse(await bondingManager.paused());
+      assert.equal((await bondingManager.chessEthPrice()).toString(), secondStep);
+      assert.equal((await bondingManager.priceWindowAnchor()).toString(), firstStep);
+    });
+
+    it("should reject cumulative decreases beyond the window limit", async () => {
+      const firstStep = web3.utils.toWei("0.0005", "ether");
+      const secondStep = web3.utils.toWei("0.0004", "ether");
+
+      await bondingManager.updatePrice(firstStep, { from: admin });
+      await advanceTime(15 * 60 + 1);
+      await bondingManager.updatePrice(secondStep, { from: admin });
+
+      assert.isTrue(await bondingManager.paused());
+      assert.equal((await bondingManager.chessEthPrice()).toString(), firstStep);
+    });
+
+    it("should enforce a minimum interval between material updates", async () => {
+      const firstStep = web3.utils.toWei("0.0011", "ether");
+      const secondStep = web3.utils.toWei("0.0012", "ether");
+
+      await bondingManager.updatePrice(firstStep, { from: admin });
+      await expectRevert(
+        bondingManager.updatePrice(secondStep, { from: admin }),
+        "material update inside the minimum interval"
+      );
+
+      assert.equal((await bondingManager.chessEthPrice()).toString(), firstStep);
     });
 
     it("should reject price below MIN_PRICE floor", async () => {
       // MIN_PRICE is 1e12 (0.000001 ETH)
       const belowMinPrice = "999999999999"; // Just below 1e12
 
-      try {
-        await bondingManager.updatePrice(belowMinPrice, { from: admin });
-        assert.fail("Should have reverted");
-      } catch (error) {
-        assert.include(error.message, "revert");
-      }
+      await expectRevert(
+        bondingManager.updatePrice(belowMinPrice, { from: admin }),
+        "oracle price below MIN_PRICE"
+      );
     });
 
     it("should have MIN_PRICE constant set correctly", async () => {

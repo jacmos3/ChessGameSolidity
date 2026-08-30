@@ -1,4 +1,5 @@
 const { loadDeployment } = require("./deployment-output");
+const { assertDisputeSecurityPolicy } = require("./deployment-security-policy");
 
 const ChessToken = artifacts.require("ChessToken");
 const BondingManager = artifacts.require("BondingManager");
@@ -127,6 +128,9 @@ module.exports = async function verifyDeployment(callback) {
     assertAddress(await instances.chessFactory.disputeDAO(), contracts.DisputeDAO, "ChessFactory DisputeDAO");
     assertAddress(await instances.chessFactory.playerRating(), contracts.PlayerRating, "ChessFactory PlayerRating");
     assertAddress(await instances.chessFactory.rewardPool(), contracts.RewardPool, "ChessFactory RewardPool");
+    if (await instances.chessFactory.isDeployedGame(ZERO_ADDRESS)) {
+      throw new Error("ChessFactory canonical game registry accepts the zero address");
+    }
 
     assertAddress(await instances.bondingManager.chessToken(), contracts.ChessToken, "BondingManager token");
     assertAddress(await instances.bondingManager.chessFactory(), contracts.ChessFactory, "BondingManager factory");
@@ -143,6 +147,27 @@ module.exports = async function verifyDeployment(callback) {
     assertAddress(await instances.chessNFT.factory(), contracts.ChessFactory, "ChessNFT factory");
     assertAddress(await instances.chessGovernor.token(), contracts.ChessToken, "ChessGovernor token");
     assertAddress(await instances.chessGovernor.timelock(), contracts.ChessTimelock, "ChessGovernor timelock");
+
+    const [
+      minimumPanelSize,
+      minimumPanelCollateral,
+      arbitrationCoverageBps,
+      quorumPercentage,
+      supermajority
+    ] = await Promise.all([
+      instances.disputeDAO.minimumPanelSize(),
+      instances.disputeDAO.minimumPanelCollateral(),
+      instances.disputeDAO.arbitrationCoverageBps(),
+      instances.disputeDAO.quorumPercentage(),
+      instances.disputeDAO.supermajority()
+    ]);
+    assertDisputeSecurityPolicy({
+      minimumPanelSize,
+      minimumPanelCollateral,
+      arbitrationCoverageBps,
+      quorumPercentage,
+      supermajority
+    });
 
     const factoryGameRole = await instances.bondingManager.GAME_MANAGER_ROLE();
     const bondingDisputeRole = await instances.bondingManager.DISPUTE_MANAGER_ROLE();
