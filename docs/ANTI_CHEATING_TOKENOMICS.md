@@ -1,6 +1,6 @@
 # Anti-Cheating System & Tokenomics
 
-> **Historical design document:** this file contains exploratory tokenomics and features that are not all implemented. Use the Solidity contracts, canonical migration, and root README as the source of truth.
+> **Unsupported historical design:** this file includes unimplemented economics, obsolete panel sizes, and obsolete dispute outcomes. Do not use its examples for deployment or fund handling. Use the root README and [`SECURITY_REMEDIATION.md`](SECURITY_REMEDIATION.md); contract source and the canonical migration are authoritative.
 
 ## Il Paradigma: "Don't Detect, Disincentivize"
 
