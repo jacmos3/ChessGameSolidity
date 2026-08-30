@@ -2,6 +2,18 @@ const PlayerRating = artifacts.require("PlayerRating");
 const ChessCore = artifacts.require("ChessCore");
 const ChessFactory = artifacts.require("ChessFactory");
 
+async function expectRevert(promise) {
+    let caught;
+    try {
+        await promise;
+    } catch (error) {
+        caught = error;
+    }
+
+    assert.exists(caught, "Expected transaction to revert");
+    assert.match(caught.message, /revert|custom error|invalid opcode/i);
+}
+
 contract("PlayerRating - ELO System", accounts => {
     const [admin, player1, player2, player3, unauthorized] = accounts;
     let rating;
@@ -38,14 +50,14 @@ contract("PlayerRating - ELO System", accounts => {
 
     describe("Player Registration", () => {
         it("should register new player with default rating", async () => {
-            await rating.registerPlayer(player1);
+            await rating.registerPlayer(player1, { from: player1 });
             const stats = await rating.getPlayerStats(player1);
             assert.equal(stats.rating.toString(), "1200", "Rating should be 1200");
             assert.equal(stats.peakRating.toString(), "1200", "Peak rating should be 1200");
         });
 
         it("should not re-register existing player", async () => {
-            await rating.registerPlayer(player1);
+            await rating.registerPlayer(player1, { from: player1 });
 
             // Grant GAME_REPORTER_ROLE to admin for testing
             const GAME_REPORTER_ROLE = await rating.GAME_REPORTER_ROLE();
@@ -58,16 +70,30 @@ contract("PlayerRating - ELO System", accounts => {
             const rating1 = stats1.rating.toString();
 
             // Try to re-register
-            await rating.registerPlayer(player1);
+            await rating.registerPlayer(player1, { from: player1 });
 
             const stats2 = await rating.getPlayerStats(player1);
             assert.equal(stats2.rating.toString(), rating1, "Rating should not reset on re-registration");
         });
 
         it("should add player to ranked list", async () => {
-            await rating.registerPlayer(player1);
+            await rating.registerPlayer(player1, { from: player1 });
             const count = await rating.getRankedPlayerCount();
             assert.equal(count.toString(), "1", "Should have 1 ranked player");
+        });
+
+        it("should reject registration of an arbitrary third-party address", async () => {
+            await expectRevert(rating.registerPlayer(player2, { from: unauthorized }));
+
+            assert.equal((await rating.getRankedPlayerCount()).toString(), "0");
+            assert.isFalse(await rating.isRanked(player2));
+        });
+
+        it("should reject the zero address", async () => {
+            await expectRevert(rating.registerPlayer(
+                "0x0000000000000000000000000000000000000000",
+                { from: player1 }
+            ));
         });
     });
 
@@ -175,6 +201,20 @@ contract("PlayerRating - ELO System", accounts => {
         it("should not allow invalid result", async () => {
             try {
                 await rating.reportGame(player1, player2, 3, { from: admin });
+                assert.fail("Should have thrown error");
+            } catch (error) {
+                assert(error.message.includes("revert"), "Expected revert error");
+            }
+        });
+
+        it("should reject zero-address participants", async () => {
+            try {
+                await rating.reportGame(
+                    "0x0000000000000000000000000000000000000000",
+                    player2,
+                    1,
+                    { from: admin }
+                );
                 assert.fail("Should have thrown error");
             } catch (error) {
                 assert(error.message.includes("revert"), "Expected revert error");
@@ -300,7 +340,7 @@ contract("PlayerRating - ELO System", accounts => {
             // This verifies that players can still have ratings tracked
             // even if they can't be added to the leaderboard (when cap is reached)
             // We can't easily test the cap being reached, but we verify the mechanism works
-            await rating.registerPlayer(player1, { from: admin });
+            await rating.registerPlayer(player1, { from: player1 });
 
             // Verify player has rating but we check the cap exists
             const playerRating = await rating.getRating(player1);

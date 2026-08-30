@@ -3,6 +3,8 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/utils/Base64.sol";
 
 library ChessMediaLibrary {
+    error InvalidBoardPiece(int8 piece, uint16 row, uint16 col);
+
     int8 public constant EMPTY = 0;
     int8 public constant PAWN = 1;
     int8 public constant KNIGHT = 2;
@@ -55,7 +57,11 @@ library ChessMediaLibrary {
             for (uint16 col = 0; col < 8; col++) {
                 string memory x = toString(col * 50 + 25);
                 string memory y = toString(row * 50 + 25);
-                int8 piece = board[row][col];         
+                int8 piece = board[row][col];
+                if (piece < -KING || piece > KING) {
+                    // Never render an unsupported value as an apparently empty square.
+                    revert InvalidBoardPiece(piece, row, col);
+                }
                 string memory token;
                 string memory p;
 

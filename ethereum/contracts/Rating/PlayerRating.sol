@@ -95,6 +95,15 @@ contract PlayerRating is AccessControl {
     /// @notice Register a new player with default rating
     /// @param player Address of the player
     function registerPlayer(address player) external {
+        require(player != address(0), "Invalid player");
+        require(
+            msg.sender == player || _isValidGameContract(msg.sender),
+            "Only player or game"
+        );
+        _registerPlayer(player);
+    }
+
+    function _registerPlayer(address player) internal {
         if (players[player].rating == 0) {
             players[player] = PlayerStats({
                 rating: DEFAULT_RATING,
@@ -118,25 +127,7 @@ contract PlayerRating is AccessControl {
 
     /// @notice Ensure player is registered (internal helper)
     function _ensureRegistered(address player) internal {
-        if (players[player].rating == 0) {
-            players[player] = PlayerStats({
-                rating: DEFAULT_RATING,
-                gamesPlayed: 0,
-                wins: 0,
-                losses: 0,
-                draws: 0,
-                peakRating: DEFAULT_RATING,
-                lastGameTimestamp: 0
-            });
-
-            // Only add to leaderboard if under cap (prevents unbounded array growth)
-            if (!isRanked[player] && rankedPlayers.length < MAX_RANKED_PLAYERS) {
-                rankedPlayers.push(player);
-                isRanked[player] = true;
-            }
-
-            emit PlayerRegistered(player, DEFAULT_RATING);
-        }
+        _registerPlayer(player);
     }
 
     /// @notice Report a game result and update ratings
@@ -153,6 +144,7 @@ contract PlayerRating is AccessControl {
             _isValidGameContract(msg.sender) || hasRole(GAME_REPORTER_ROLE, msg.sender),
             "Not authorized"
         );
+        require(white != address(0) && black != address(0), "Invalid player");
         require(white != black, "Same player");
         require(result <= 2, "Invalid result");
 

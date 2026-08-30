@@ -24,8 +24,12 @@ contract("ChessFactory", (accounts) => {
     // TimeoutPreset: 0=Finney, 1=Buterin, 2=Nakamoto
     await chessFactory.createChessGame(2, 0, { from: accounts[0], value: web3.utils.toWei("1", "ether") });
     const newChessGames = await chessFactory.totalChessGames();
+    const deployedGames = await chessFactory.getDeployedChessGames();
+    const createdGame = deployedGames[deployedGames.length - 1];
 
     assert.equal(newChessGames.toNumber(), (initialChessGames + 1), "Total number of ChessGame should be increased by 1");
+    assert.isTrue(await chessFactory.isDeployedGame(createdGame), "Created game must be registered");
+    assert.isFalse(await chessFactory.isDeployedGame(accounts[1]), "Arbitrary addresses must not be registered");
   });
 
   it("should get deployed chess games", async () => {

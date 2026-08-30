@@ -213,6 +213,7 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
       // Setup board with black pawn at row 6 (one move from promotion)
       await chessCore.debugCreative(6, 4, -PAWN, { from: whitePlayer });
       await chessCore.debugCreative(7, 4, EMPTY, { from: whitePlayer }); // Clear e1
+      await chessCore.debugCreative(7, 7, KING, { from: whitePlayer });  // Relocate white king to h1
 
       await joinAsBlack(betAmount);
 
@@ -230,6 +231,7 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
     it("should not allow promotion to king", async () => {
       await chessCore.debugCreative(1, 4, PAWN, { from: whitePlayer });
       await chessCore.debugCreative(0, 4, EMPTY, { from: whitePlayer });
+      await chessCore.debugCreative(0, 7, -KING, { from: whitePlayer }); // Relocate black king to h8
 
       await joinAsBlack(betAmount);
 
@@ -244,6 +246,7 @@ contract("ChessCore - En Passant and Pawn Promotion", (accounts) => {
     it("should not allow promotion to pawn", async () => {
       await chessCore.debugCreative(1, 4, PAWN, { from: whitePlayer });
       await chessCore.debugCreative(0, 4, EMPTY, { from: whitePlayer });
+      await chessCore.debugCreative(0, 7, -KING, { from: whitePlayer }); // Relocate black king to h8
 
       await joinAsBlack(betAmount);
 

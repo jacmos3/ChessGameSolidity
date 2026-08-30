@@ -30,6 +30,13 @@ const advanceTime = (seconds) => {
   });
 };
 
+const mineBlock = () => new Promise((resolve, reject) => {
+  web3.currentProvider.send(
+    { jsonrpc: "2.0", method: "evm_mine", params: [], id: Date.now() },
+    (err, result) => err ? reject(err) : resolve(result)
+  );
+});
+
 const CHALLENGE_WINDOW = 48 * 60 * 60; // 48 hours in seconds
 
 contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
@@ -446,7 +453,7 @@ contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
         3600,
         3600,
         3600,
-        3,
+        66,
         66,
         web3.utils.toWei("1", "ether"),
         { from: admin }
@@ -473,6 +480,9 @@ contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
     async function resolveCurrentDisputeAsCheat(accusedPlayer, saltPrefix = "settlement-cheat") {
       await disputeDAO.challenge(gameId, accusedPlayer, { from: challenger });
       const disputeId = await disputeDAO.gameToDispute(gameId);
+      const target = web3.utils.toBN(await disputeDAO.panelSelectionBlock(disputeId));
+      while (web3.utils.toBN(await web3.eth.getBlockNumber()).lt(target)) await mineBlock();
+      await disputeDAO.finalizePanel(disputeId);
       const selectedArbitrators = await disputeDAO.getSelectedArbitrators(disputeId);
 
       assert.isAtLeast(selectedArbitrators.length, 3, "Dispute should select enough arbitrators to reach quorum");
@@ -484,10 +494,11 @@ contract("Integration - ChessCore with Anti-Cheating System", (accounts) => {
         const arbitrator = selectedArbitrators[i];
         const salt = web3.utils.soliditySha3(`${saltPrefix}-${i}`);
         salts[arbitrator.toLowerCase()] = salt;
-        const commitHash = web3.utils.soliditySha3(
-          { type: "uint8", value: cheatVote },
-          { type: "bytes32", value: salt },
-          { type: "address", value: arbitrator }
+        const commitHash = await disputeDAO.computeVoteCommitment(
+          disputeId,
+          cheatVote,
+          salt,
+          arbitrator
         );
 
         await disputeDAO.commitVote(disputeId, commitHash, { from: arbitrator });

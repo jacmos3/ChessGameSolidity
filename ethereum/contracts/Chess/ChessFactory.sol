@@ -13,6 +13,8 @@ contract ChessFactory {
     using Clones for address;
 
     address[] public deployedChessGames;
+    /// @notice Canonical registry used by clients to reject look-alike game contracts.
+    mapping(address => bool) public isDeployedGame;
     address public addressNFT;
     uint256 public totalChessGames;
 
@@ -145,6 +147,7 @@ contract ChessFactory {
         );
 
         deployedChessGames.push(clone);
+        isDeployedGame[clone] = true;
         totalChessGames++;
 
         // Register game contract with RewardPool and PlayerRating for O(1) validation
