@@ -1,9 +1,9 @@
 import { ethers } from 'ethers';
+import { isValidArbitratorVote } from './disputeModel.js';
 
-const STORAGE_PREFIX = 'mychess:vote-commit:v3';
+const STORAGE_PREFIX = 'mychess:vote-commit:v4';
 const ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/;
 const BYTES32_PATTERN = /^0x[0-9a-fA-F]{64}$/;
-const VALID_VOTES = new Set([1, 2, 3]);
 const VALID_STATUSES = new Set(['pending', 'broadcast', 'confirmed']);
 
 function normalizeAddress(address) {
@@ -51,7 +51,7 @@ export function getVoteCommitStorageKey(context) {
 export function computeVoteCommitHash({ context, vote, salt }) {
 	const normalized = normalizeContext(context);
 	const normalizedVote = Number(vote);
-	if (!VALID_VOTES.has(normalizedVote)) throw new Error('Invalid committed vote');
+	if (!isValidArbitratorVote(normalizedVote)) throw new Error('Invalid committed vote');
 	if (typeof salt !== 'string' || !BYTES32_PATTERN.test(salt)) throw new Error('Invalid vote salt');
 
 	return ethers.utils.keccak256(
@@ -81,7 +81,7 @@ export function createVoteCommitRecord({
 }) {
 	const normalized = normalizeContext(context);
 	const normalizedVote = Number(vote);
-	if (!VALID_VOTES.has(normalizedVote)) throw new Error('Invalid committed vote');
+	if (!isValidArbitratorVote(normalizedVote)) throw new Error('Invalid committed vote');
 	if (typeof salt !== 'string' || !BYTES32_PATTERN.test(salt)) throw new Error('Invalid vote salt');
 	if (typeof hash !== 'string' || !BYTES32_PATTERN.test(hash)) throw new Error('Invalid commit hash');
 	if (hash.toLowerCase() !== computeVoteCommitHash({ context: normalized, vote: normalizedVote, salt })) {
@@ -96,7 +96,7 @@ export function createVoteCommitRecord({
 		: normalizeInteger(nonce, 'commit transaction nonce');
 
 	return {
-		version: 3,
+		version: 4,
 		...normalized,
 		vote: normalizedVote,
 		salt: salt.toLowerCase(),
@@ -135,21 +135,20 @@ export function parseVoteCommit(serialized, expectedContext, expectedHash = '') 
 
 	try {
 		const parsed = JSON.parse(serialized);
+		if (!VALID_STATUSES.has(parsed.status)) return null;
 		const record = createVoteCommitRecord({
 			context: parsed,
 			vote: parsed.vote,
 			salt: parsed.salt,
 				hash: parsed.hash,
 				createdAt: parsed.createdAt,
-				// Version 3 backups created by older clients were persisted only after
-				// confirmation, so a missing status is safely interpreted as confirmed.
-				status: parsed.status ?? 'confirmed',
+				status: parsed.status,
 				transactionHash: parsed.transactionHash || '',
 				nonce: parsed.nonce
 		});
 		const expected = normalizeContext(expectedContext);
 
-		if (parsed.version !== 3) return null;
+		if (parsed.version !== 4) return null;
 		for (const field of ['chainId', 'daoAddress', 'account', 'gameId', 'disputeId']) {
 			if (record[field] !== expected[field]) return null;
 		}
@@ -212,11 +211,91 @@ export const VoteCommitReconciliation = {
 	ConflictingCommit: 'conflicting-commit'
 };
 
+const COMMIT_VOTE_INTERFACE = new ethers.utils.Interface([
+	'function commitVote(uint256 disputeId, bytes32 commitHash)'
+]);
+
+function normalizedTransactionHash(value) {
+	return typeof value === 'string' && BYTES32_PATTERN.test(value)
+		? value.toLowerCase()
+		: '';
+}
+
+function normalizedTransactionData(value) {
+	return typeof value === 'string' && /^0x(?:[0-9a-fA-F]{2})*$/.test(value)
+		? value.toLowerCase()
+		: '';
+}
+
+async function receiptIsFinalized(provider, receipt) {
+	const blockNumber = Number(receipt?.blockNumber);
+	if (!provider?.getBlock || !Number.isSafeInteger(blockNumber) || blockNumber < 0) {
+		return false;
+	}
+
+	try {
+		const finalizedBlock = await provider.getBlock('finalized');
+		const finalizedNumber = Number(finalizedBlock?.number);
+		if (!Number.isSafeInteger(finalizedNumber) || finalizedNumber < blockNumber) return false;
+
+		// If the receipt includes its block hash, ensure the finalized canonical
+		// block still has that hash. This keeps a cached receipt from being treated
+		// as proof after a shallow reorg.
+		const receiptBlockHash = normalizedTransactionHash(receipt.blockHash);
+		if (!receiptBlockHash) return false;
+		const canonicalBlock = await provider.getBlock(blockNumber);
+		if (normalizedTransactionHash(canonicalBlock?.hash) !== receiptBlockHash) return false;
+		return true;
+	} catch {
+		// Providers that do not expose the finalized tag cannot prove finality.
+		return false;
+	}
+}
+
+function replacementTransactionMatchesRecord(replacement, receipt, record) {
+	const transaction = replacement?.transaction || replacement;
+	if (!transaction || typeof transaction !== 'object') return null;
+
+	const transactionHash = normalizedTransactionHash(transaction.hash || transaction.transactionHash);
+	const receiptHash = normalizedTransactionHash(receipt?.transactionHash || receipt?.hash);
+	if (!transactionHash || !receiptHash || transactionHash !== receiptHash) return null;
+
+	const nonce = Number(transaction.nonce);
+	if (!Number.isSafeInteger(nonce) || nonce !== record.nonce) return null;
+
+	let from;
+	try {
+		from = normalizeAddress(transaction.from);
+	} catch {
+		return null;
+	}
+	if (from !== normalizeAddress(record.account)) return null;
+
+	let to;
+	try {
+		to = normalizeAddress(transaction.to);
+	} catch {
+		return null;
+	}
+	const data = normalizedTransactionData(transaction.data || transaction.input);
+	if (!data) return null;
+
+	const expectedData = COMMIT_VOTE_INTERFACE.encodeFunctionData('commitVote', [
+		record.disputeId,
+		record.hash
+	]).toLowerCase();
+
+	return {
+		isSameCommit: to === normalizeAddress(record.daoAddress) && data === expectedData
+	};
+}
+
 export async function reconcileVoteCommitRecord({
 	record,
 	onChainHash,
 	provider,
-	knownReceipt = null
+	knownReceipt = null,
+	knownReplacement = null
 }) {
 	if (!record || typeof record.hash !== 'string' || !BYTES32_PATTERN.test(record.hash)) {
 		throw new Error('Invalid vote commit record');
@@ -245,15 +324,36 @@ export async function reconcileVoteCommitRecord({
 		}
 	}
 
-	if (receipt && Number(receipt.status) === 0) {
-		return { status: VoteCommitReconciliation.TerminallyNotCommitted };
-	}
 	if (receipt) {
-		const receiptHash = receipt.transactionHash || receipt.hash || '';
-		if (receiptHash && receiptHash.toLowerCase() !== record.transactionHash.toLowerCase()) {
-			// A mined replacement consumed the saved nonce. Since the fresh on-chain
-			// commitment is still zero, the replacement was a cancellation/non-commit.
-			return { status: VoteCommitReconciliation.TerminallyNotCommitted };
+		const receiptHash = normalizedTransactionHash(receipt.transactionHash || receipt.hash);
+		const savedHash = record.transactionHash.toLowerCase();
+		const finalized = await receiptIsFinalized(provider, receipt);
+
+		if (receiptHash === savedHash) {
+			// A successful receipt with a zero on-chain commitment is contradictory
+			// (stale RPC, wrong fork, or reorg), so it must never discard the salt.
+			if (Number(receipt.status) === 0 && finalized) {
+				return { status: VoteCommitReconciliation.TerminallyNotCommitted };
+			}
+			return { status: VoteCommitReconciliation.Ambiguous };
+		}
+
+		if (receiptHash) {
+			// A TRANSACTION_REPLACED error can carry the replacement response. A
+			// receipt hash alone does not prove which nonce, sender, target, or
+			// calldata was mined. Preserve the secret unless all metadata is
+			// coherent and the replacement receipt is finalized.
+			const replacement = replacementTransactionMatchesRecord(
+				knownReplacement,
+				receipt,
+				record
+			);
+			if (!finalized || !replacement || replacement.isSameCommit) {
+				return { status: VoteCommitReconciliation.Ambiguous };
+			}
+			if (Number(receipt.status) === 0 || Number(receipt.status) === 1) {
+				return { status: VoteCommitReconciliation.TerminallyNotCommitted };
+			}
 		}
 		return { status: VoteCommitReconciliation.Ambiguous };
 	}
@@ -261,9 +361,10 @@ export async function reconcileVoteCommitRecord({
 	try {
 		const latestNonce = Number(await provider.getTransactionCount(record.account, 'latest'));
 		if (Number.isSafeInteger(latestNonce) && latestNonce > record.nonce) {
-			// No receipt exists for the saved hash, but a mined transaction has
-			// consumed a later nonce and the on-chain commit remains zero.
-			return { status: VoteCommitReconciliation.TerminallyNotCommitted };
+			// A nonce advance does not identify the transaction that consumed this
+			// nonce and can disagree across RPC replicas. It is never proof that the
+			// commitment is absent; retain the exact vote and salt for recovery.
+			return { status: VoteCommitReconciliation.Ambiguous };
 		}
 	} catch {
 		// A provider failure cannot prove that the saved transaction is dead.

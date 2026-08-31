@@ -3,6 +3,18 @@ pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
 
+interface IRatingGameIdentity {
+    function gameId() external view returns (uint256);
+}
+
+interface IRatingEligibilityRegistry {
+    function rewardEligible(address player) external view returns (bool);
+}
+
+interface IRatingCanonicalFactory {
+    function isDeployedGame(address game) external view returns (bool);
+}
+
 /// @title PlayerRating - ELO Rating System for Chess Players
 /// @notice Manages player ratings using the ELO rating system
 /// @dev Uses fixed-point math for ELO calculations (multiply by 100 for precision)
@@ -11,9 +23,13 @@ contract PlayerRating is AccessControl {
 
     // ChessFactory address for validating game contracts
     address public chessFactory;
+    address public eligibilityRegistry;
 
     // Valid game contracts mapping (prevents DOS from iterating all games)
     mapping(address => bool) public validGameContracts;
+    mapping(address => uint256) public registeredGameIds;
+    mapping(address => bool) public processedGameContracts;
+    mapping(bytes32 => uint256) public lastRatedPairAt;
 
     // Default starting rating (1200 is standard for new players)
     uint256 public constant DEFAULT_RATING = 1200;
@@ -30,6 +46,12 @@ contract PlayerRating is AccessControl {
 
     // Number of games before player is considered "established"
     uint256 public constant PROVISIONAL_GAMES = 30;
+
+    // Permissionless wallets are not identities. These eligibility gates keep
+    // trivial zero-move and repeated-pair games out of the rated data set.
+    uint256 public constant MIN_RATED_PLIES = 20;
+    uint256 public constant RATED_PAIR_COOLDOWN = 7 days;
+    uint8 private constant TOURNAMENT_MODE = 0;
 
     // Maximum players in leaderboard (prevents unbounded array growth)
     uint256 public constant MAX_RANKED_PLAYERS = 100000;
@@ -67,6 +89,13 @@ contract PlayerRating is AccessControl {
         uint256 blackRatingChange
     );
     event PlayerRegistered(address indexed player, uint256 initialRating);
+    event CanonicalGameProcessed(
+        address indexed gameContract,
+        uint256 indexed gameId,
+        bool rated,
+        bytes32 reason
+    );
+    event EligibilityRegistryUpdated(address indexed previousRegistry, address indexed newRegistry);
 
     constructor() {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
@@ -78,10 +107,22 @@ contract PlayerRating is AccessControl {
         chessFactory = _chessFactory;
     }
 
+    /// @notice Set the signer-backed player eligibility registry used by canonical ELO.
+    /// @dev Manual governance imports remain independent; public game reports fail closed.
+    function setEligibilityRegistry(address newRegistry) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(newRegistry.code.length > 0, "Registry must be contract");
+        emit EligibilityRegistryUpdated(eligibilityRegistry, newRegistry);
+        eligibilityRegistry = newRegistry;
+    }
+
     /// @notice Check if caller is a valid game contract
-    /// @dev Uses mapping for O(1) lookup instead of O(n) iteration
+    /// @dev The caller must remain registered by the currently configured
+    ///      canonical factory; stale mappings from a prior factory are inert.
     function _isValidGameContract(address caller) internal view returns (bool) {
-        return validGameContracts[caller];
+        return
+            chessFactory != address(0) &&
+            validGameContracts[caller] &&
+            IRatingCanonicalFactory(chessFactory).isDeployedGame(caller);
     }
 
     /// @notice Register a game contract as valid (called by ChessFactory)
@@ -89,7 +130,12 @@ contract PlayerRating is AccessControl {
     function registerGameContract(address gameContract) external {
         require(msg.sender == chessFactory, "Only factory");
         require(gameContract.code.length > 0, "Game must be contract");
+        require(
+            IRatingCanonicalFactory(chessFactory).isDeployedGame(gameContract),
+            "Game not canonical"
+        );
         validGameContracts[gameContract] = true;
+        registeredGameIds[gameContract] = IRatingGameIdentity(gameContract).gameId() + 1;
     }
 
     /// @notice Register a new player with default rating
@@ -115,13 +161,16 @@ contract PlayerRating is AccessControl {
                 lastGameTimestamp: 0
             });
 
-            // Only add to leaderboard if under cap (prevents unbounded array growth)
-            if (!isRanked[player] && rankedPlayers.length < MAX_RANKED_PLAYERS) {
-                rankedPlayers.push(player);
-                isRanked[player] = true;
-            }
-
             emit PlayerRegistered(player, DEFAULT_RATING);
+        }
+    }
+
+    function _addRankedPlayer(address player) internal {
+        // Self-registration alone must not consume a permanent leaderboard slot.
+        // Only a result accepted by the rated-game path makes a player rankable.
+        if (!isRanked[player] && rankedPlayers.length < MAX_RANKED_PLAYERS) {
+            rankedPlayers.push(player);
+            isRanked[player] = true;
         }
     }
 
@@ -139,11 +188,88 @@ contract PlayerRating is AccessControl {
         address black,
         uint8 result
     ) external {
-        // Allow calls from valid game contracts OR accounts with GAME_REPORTER_ROLE
-        require(
-            _isValidGameContract(msg.sender) || hasRole(GAME_REPORTER_ROLE, msg.sender),
-            "Not authorized"
-        );
+        // Manual/imported reports remain an explicit governance capability.
+        // Canonical games must use the one-shot, policy-gated path below.
+        require(hasRole(GAME_REPORTER_ROLE, msg.sender), "Not authorized");
+        _applyGameResult(white, black, result);
+    }
+
+    /// @notice Process a canonical game exactly once and apply rating policy.
+    /// @return rated True when the result changed ELO/statistics.
+    function reportCanonicalGame(
+        address white,
+        address black,
+        uint8 result,
+        uint256 plyCount,
+        uint8 mode
+    ) external returns (bool rated) {
+        require(_isValidGameContract(msg.sender), "Not authorized");
+        require(!processedGameContracts[msg.sender], "Game already processed");
+        require(registeredGameIds[msg.sender] != 0, "Game identity missing");
+        require(white != address(0) && black != address(0), "Invalid player");
+        require(white != black, "Same player");
+        require(result <= 2, "Invalid result");
+
+        processedGameContracts[msg.sender] = true;
+        uint256 canonicalGameId = registeredGameIds[msg.sender] - 1;
+
+        if (mode != TOURNAMENT_MODE) {
+            emit CanonicalGameProcessed(
+                msg.sender,
+                canonicalGameId,
+                false,
+                keccak256("NON_TOURNAMENT")
+            );
+            return false;
+        }
+        if (plyCount < MIN_RATED_PLIES) {
+            emit CanonicalGameProcessed(
+                msg.sender,
+                canonicalGameId,
+                false,
+                keccak256("TOO_SHORT")
+            );
+            return false;
+        }
+        if (
+            eligibilityRegistry == address(0) ||
+            !IRatingEligibilityRegistry(eligibilityRegistry).rewardEligible(white) ||
+            !IRatingEligibilityRegistry(eligibilityRegistry).rewardEligible(black)
+        ) {
+            emit CanonicalGameProcessed(
+                msg.sender,
+                canonicalGameId,
+                false,
+                keccak256("UNVERIFIED_PLAYER")
+            );
+            return false;
+        }
+
+        bytes32 pairKey = _ratedPairKey(white, black);
+        uint256 lastRatedAt = lastRatedPairAt[pairKey];
+        if (lastRatedAt != 0 && block.timestamp < lastRatedAt + RATED_PAIR_COOLDOWN) {
+            emit CanonicalGameProcessed(
+                msg.sender,
+                canonicalGameId,
+                false,
+                keccak256("PAIR_COOLDOWN")
+            );
+            return false;
+        }
+
+        lastRatedPairAt[pairKey] = block.timestamp;
+        _applyGameResult(white, black, result);
+        emit CanonicalGameProcessed(msg.sender, canonicalGameId, true, bytes32(0));
+        return true;
+    }
+
+    function _ratedPairKey(address player1, address player2) internal pure returns (bytes32) {
+        return uint160(player1) < uint160(player2)
+            ? keccak256(abi.encode(player1, player2))
+            : keccak256(abi.encode(player2, player1));
+    }
+
+    function _applyGameResult(address white, address black, uint8 result) internal {
         require(white != address(0) && black != address(0), "Invalid player");
         require(white != black, "Same player");
         require(result <= 2, "Invalid result");
@@ -151,6 +277,8 @@ contract PlayerRating is AccessControl {
         // Ensure both players are registered
         _ensureRegistered(white);
         _ensureRegistered(black);
+        _addRankedPlayer(white);
+        _addRankedPlayer(black);
 
         uint256 whiteRating = players[white].rating;
         uint256 blackRating = players[black].rating;

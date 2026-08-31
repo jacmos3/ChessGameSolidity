@@ -432,6 +432,24 @@ contract("BondingManager", (accounts) => {
       );
     });
 
+    it("should report no player as eligible for a new game while paused", async () => {
+      await bondingManager.depositBond(web3.utils.toWei("100", "ether"), {
+        from: player1,
+        value: web3.utils.toWei("0.1", "ether")
+      });
+      assert.isTrue(await bondingManager.hasSufficientBond(
+        player1,
+        web3.utils.toWei("0.001", "ether")
+      ));
+
+      await bondingManager.pause({ from: admin });
+
+      assert.isFalse(await bondingManager.hasSufficientBond(
+        player1,
+        web3.utils.toWei("0.001", "ether")
+      ));
+    });
+
     it("should require an explicit reviewed-price reset after a circuit-breaker trip", async () => {
       const newPrice = web3.utils.toWei("0.002", "ether");
       await bondingManager.updatePrice(newPrice, { from: admin });

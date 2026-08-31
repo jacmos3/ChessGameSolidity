@@ -67,11 +67,17 @@ contract("ArbitratorRegistry", (accounts) => {
     extraExcluded = ZERO_ADDRESS,
     snapshotRound = 0
   ) {
+    const activeSelection = await registry.activePanelSelection();
+    if (!web3.utils.toBN(activeSelection).isZero()) {
+      await registry.unlockPanelSelection(activeSelection, { from: disputeManager });
+    }
+    await registry.lockPanelSelection(disputeId, { from: disputeManager });
     const snapshot = await registry.getSelectionSnapshot(
       disputeId,
       player1,
       player2,
       extraExcluded,
+      count,
       snapshotRound,
       { from: disputeManager }
     );
@@ -84,6 +90,7 @@ contract("ArbitratorRegistry", (accounts) => {
       entropy,
       snapshotRound,
       (snapshot.snapshotTimestamp || snapshot[3]).toString(),
+      (snapshot.snapshotGameRecordSequence || snapshot[4]).toString(),
       snapshot.fingerprint || snapshot[0]
     ];
   }
@@ -467,6 +474,7 @@ contract("ArbitratorRegistry", (accounts) => {
         ...args,
         { from: disputeManager }
       );
+      await arbitratorRegistry.unlockPanelSelection(90, { from: disputeManager });
 
       const arb = await arbitratorRegistry.arbitrators(arbitrator1);
       assert.isTrue(web3.utils.toBN(arb.lastVoteTime).gt(web3.utils.toBN("0")));
@@ -603,6 +611,7 @@ contract("ArbitratorRegistry", (accounts) => {
         ...args,
         { from: disputeManager }
       );
+      await arbitratorRegistry.unlockPanelSelection(42, { from: disputeManager });
 
       const assignments = await arbitratorRegistry.activeAssignments(arbitrator1);
       assert.equal(assignments.toString(), "1", "The selected panel must be tracked");
@@ -693,6 +702,7 @@ contract("ArbitratorRegistry", (accounts) => {
         ...args,
         { from: disputeManager }
       );
+      await freshRegistry.unlockPanelSelection(72, { from: disputeManager });
       const supplyBefore = await chessToken.totalSupply();
       await freshRegistry.slashForNonReveal(72, arbitrator1, { from: disputeManager });
 
@@ -717,6 +727,7 @@ contract("ArbitratorRegistry", (accounts) => {
       const disputeId = 73;
       const args = await selectionArgs(freshRegistry, disputeId, 1);
       await freshRegistry.selectArbitrators(...args, { from: disputeManager });
+      await freshRegistry.unlockPanelSelection(disputeId, { from: disputeManager });
 
       const before = await freshRegistry.getArbitratorInfo(arbitrator1);
       const supplyBefore = await chessToken.totalSupply();
@@ -811,6 +822,7 @@ contract("ArbitratorRegistry", (accounts) => {
       await advanceTime(7 * 24 * 60 * 60 + 1);
       const args = await selectionArgs(arbitratorRegistry, 1, 1);
       await arbitratorRegistry.selectArbitrators(...args, { from: disputeManager });
+      await arbitratorRegistry.unlockPanelSelection(1, { from: disputeManager });
       const before = await arbitratorRegistry.getArbitratorInfo(arbitrator1);
 
       await expectRevert(

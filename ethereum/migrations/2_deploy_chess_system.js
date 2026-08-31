@@ -10,9 +10,47 @@ const ChessNFT = artifacts.require("ChessNFT");
 const ChessTimelock = artifacts.require("ChessTimelock");
 const ChessGovernor = artifacts.require("ChessGovernor");
 const PlayerRating = artifacts.require("PlayerRating");
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
 
 // Current linked bytecode estimates at roughly 6.5M gas on Base.
 const CHESS_CORE_DEPLOY_GAS = 8_000_000;
+
+async function captureDeploymentProvenance(entries, expectedDeployer) {
+  const networkId = String(await web3.eth.net.getId());
+  const deployments = {};
+
+  for (const [name, abstraction, instance] of entries) {
+    const artifactNetwork = abstraction._json?.networks?.[networkId];
+    const txHash = instance.transactionHash || artifactNetwork?.transactionHash;
+    if (!txHash) throw new Error(`${name}: deployment transaction hash unavailable`);
+
+    const [receipt, transaction] = await Promise.all([
+      web3.eth.getTransactionReceipt(txHash),
+      web3.eth.getTransaction(txHash)
+    ]);
+    if (!receipt || !transaction || !receipt.contractAddress) {
+      throw new Error(`${name}: incomplete deployment transaction provenance`);
+    }
+    if (transaction.from.toLowerCase() !== expectedDeployer.toLowerCase()) {
+      throw new Error(`${name}: unexpected deployment sender ${transaction.from}`);
+    }
+    deployments[name] = {
+      txHash,
+      blockNumber: Number(receipt.blockNumber),
+      blockHash: receipt.blockHash,
+      from: transaction.from,
+      address: receipt.contractAddress
+    };
+  }
+
+  return {
+    chainId: Number(await web3.eth.getChainId()),
+    deploymentBlock: Math.min(...Object.values(deployments).map((entry) => entry.blockNumber)),
+    deployments
+  };
+}
 
 module.exports = async function (deployer, network, accounts) {
   const admin = accounts[0];
@@ -201,16 +239,19 @@ module.exports = async function (deployer, network, accounts) {
   console.log("  Setting ChessFactory on PlayerRating...");
   await playerRating.setChessFactory(chessFactory.address, { from: admin });
 
+  console.log("  Setting signer-backed eligibility registry on PlayerRating...");
+  await playerRating.setEligibilityRegistry(rewardPool.address, { from: admin });
+
   console.log("  Setting ChessFactory on RewardPool...");
   await rewardPool.setChessFactory(chessFactory.address, { from: admin });
 
-  if (config.faucetSigner !== admin) {
+  if (config.faucetSigner.toLowerCase() !== admin.toLowerCase()) {
     console.log("  Setting dedicated faucet signer...");
     await rewardPool.setFaucetSigner(config.faucetSigner, { from: admin });
   }
 
   const ORACLE_ROLE_BM = await bondingManager.ORACLE_ROLE();
-  if (config.oracleUpdater !== admin) {
+  if (config.oracleUpdater.toLowerCase() !== admin.toLowerCase()) {
     console.log("  Granting ORACLE_ROLE to the dedicated price updater...");
     await bondingManager.grantRole(ORACLE_ROLE_BM, config.oracleUpdater, { from: admin });
   }
@@ -316,6 +357,20 @@ module.exports = async function (deployer, network, accounts) {
   console.log(`RewardPool:         ${rewardPool.address}`);
   console.log("===========================================\n");
 
+  const provenance = await captureDeploymentProvenance([
+    ["ChessToken", ChessToken, chessToken],
+    ["BondingManager", BondingManager, bondingManager],
+    ["ArbitratorRegistry", ArbitratorRegistry, arbitratorRegistry],
+    ["DisputeDAO", DisputeDAO, disputeDAO],
+    ["ChessMediaLibrary", ChessMediaLibrary, chessMediaLibrary],
+    ["ChessCoreImplementation", ChessCore, chessCoreImpl],
+    ["ChessFactory", ChessFactory, chessFactory],
+    ["ChessTimelock", ChessTimelock, chessTimelock],
+    ["ChessGovernor", ChessGovernor, chessGovernor],
+    ["PlayerRating", PlayerRating, playerRating],
+    ["RewardPool", RewardPool, rewardPool]
+  ], admin);
+
   // Save deployment addresses to file (for frontend/scripts)
   const deploymentInfo = {
     network: network,
@@ -336,7 +391,8 @@ module.exports = async function (deployer, network, accounts) {
       PlayerRating: playerRating.address,
       RewardPool: rewardPool.address
     },
-    config: config
+    config: config,
+    provenance
   };
 
   if (process.env.SKIP_DEPLOYMENT_OUTPUT === "true") {
@@ -344,8 +400,6 @@ module.exports = async function (deployer, network, accounts) {
     return;
   }
 
-  const fs = require('fs');
-  const path = require('path');
   const deploymentsDir = process.env.DEPLOYMENTS_DIR || path.join(__dirname, '..', 'deployments');
 
   if (!fs.existsSync(deploymentsDir)) {
@@ -353,16 +407,19 @@ module.exports = async function (deployer, network, accounts) {
   }
 
   const filename = `deployment-${network}-${Date.now()}.json`;
+  const deploymentBytes = Buffer.from(JSON.stringify(deploymentInfo, null, 2));
+  const deploymentDigest = crypto.createHash("sha256").update(deploymentBytes).digest("hex");
   fs.writeFileSync(
     path.join(deploymentsDir, filename),
-    JSON.stringify(deploymentInfo, null, 2)
+    deploymentBytes
   );
   console.log(`Deployment info saved to: deployments/${filename}`);
+  console.log(`Deployment manifest SHA-256: ${deploymentDigest}`);
 
   // Also save as latest
   fs.writeFileSync(
     path.join(deploymentsDir, `latest-${network}.json`),
-    JSON.stringify(deploymentInfo, null, 2)
+    deploymentBytes
   );
   console.log(`Latest deployment saved to: deployments/latest-${network}.json\n`);
 };
@@ -436,6 +493,9 @@ function getNetworkConfig(network, accounts) {
 
   if (config.handoffGovernance) {
     const deployerAddress = accounts[0].toLowerCase();
+    if (config.treasury.toLowerCase() === deployerAddress) {
+      throw new Error("TREASURY_WALLET must differ from the deployer when governance handoff is enabled");
+    }
     if (config.faucetSigner.toLowerCase() === deployerAddress) {
       throw new Error("FAUCET_SIGNER must differ from the deployer when governance handoff is enabled");
     }

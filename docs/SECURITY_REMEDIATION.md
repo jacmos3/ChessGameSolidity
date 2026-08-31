@@ -1,5 +1,11 @@
 # Security Remediation Status
 
+> **Historical round-one record.** This document is retained for traceability and
+> describes an earlier remediation state. The current final assessment, controls,
+> verification results, and residual risks are documented in
+> [`SECURITY_REMEDIATION_ROUND2.md`](./SECURITY_REMEDIATION_ROUND2.md). Where the two
+> documents differ, the round-two report is authoritative.
+
 This document describes the security-remediation branch based on commit `b2e41a0`. It is the operational reference for the changed security boundaries and ABI migration. The Solidity sources and canonical migration remain authoritative.
 
 The remediation has been verified locally only. It is not an external audit, a formal verification, or evidence that a public deployment is safe for material funds.

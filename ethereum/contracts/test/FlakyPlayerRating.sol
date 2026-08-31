@@ -15,9 +15,13 @@ contract FlakyPlayerRating {
         validGameContracts[gameContract] = true;
     }
 
-    function reportGame(address, address, uint8) external {
+    function reportCanonicalGame(address, address, uint8, uint256, uint8)
+        external
+        returns (bool)
+    {
         require(validGameContracts[msg.sender], "Not authorized");
         require(!shouldFail, "Temporary rating failure");
         successfulReports++;
+        return true;
     }
 }

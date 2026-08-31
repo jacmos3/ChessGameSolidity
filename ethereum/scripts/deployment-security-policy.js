@@ -4,6 +4,11 @@ const EXPECTED_DISPUTE_SECURITY_POLICY = Object.freeze({
   arbitrationCoverageBps: 10_000n,
   quorumPercentage: 66n,
   supermajority: 66n,
+  challengeDeposit: 50n * 10n ** 18n,
+  challengeDepositBps: 500n,
+  challengeWindow: 48n * 60n * 60n,
+  commitPeriod: 24n * 60n * 60n,
+  revealPeriod: 24n * 60n * 60n,
 });
 
 function asUint(value, label) {
@@ -29,6 +34,11 @@ function assertDisputeSecurityPolicy(
     ["arbitrationCoverageBps", "arbitration coverage bps"],
     ["quorumPercentage", "voting-power quorum percentage"],
     ["supermajority", "decision supermajority percentage"],
+    ["challengeDeposit", "minimum challenge deposit"],
+    ["challengeDepositBps", "challenge exposure bps"],
+    ["challengeWindow", "challenge window"],
+    ["commitPeriod", "commit period"],
+    ["revealPeriod", "reveal period"],
   ];
 
   for (const [field, label] of fields) {

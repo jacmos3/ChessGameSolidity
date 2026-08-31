@@ -468,6 +468,7 @@ contract BondingManager is AccessControl, ReentrancyGuard, Pausable {
      * @notice Check if user has sufficient bond for a stake
      */
     function hasSufficientBond(address user, uint256 stake) external view returns (bool) {
+        if (paused()) return false;
         (uint256 chessRequired, uint256 ethRequired) = calculateRequiredBond(stake);
         UserBond storage bond = bonds[user];
 

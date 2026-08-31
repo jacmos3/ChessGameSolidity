@@ -9,6 +9,10 @@ import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import "../Rating/PlayerRating.sol";
 
+interface IRewardCanonicalFactory {
+    function isDeployedGame(address game) external view returns (bool);
+}
+
 /// @title RewardPool - Play-to-Earn reward system for Chess
 /// @notice Manages faucet and game rewards with anti-abuse mechanisms
 /// @dev Uses separate pools for faucet and rewards, with decay and behavior factors
@@ -29,7 +33,18 @@ contract RewardPool is Ownable, ReentrancyGuard {
     uint256 public constant OPPONENT_COOLDOWN = 7 days; // Cooldown for same opponent
     uint256 public constant BEHAVIOR_HISTORY = 20;      // Games to track for behavior
 
-    // Rating factor: floor at 20% (200/1000)
+    // A signer-backed identity gate makes creating fresh wallets insufficient to
+    // farm rewards. The immutable ceiling also bounds losses if that signer or
+    // its off-chain eligibility process is compromised.
+    bytes32 public constant REWARD_ELIGIBILITY_DOMAIN =
+        keccak256("RewardPool.rewardEligibility.v2");
+    bytes32 public constant FAUCET_AUTHORIZATION_DOMAIN =
+        keccak256("RewardPool.faucet.v2");
+    uint256 public constant MAX_GLOBAL_DAILY_REWARD = 1_000 * 10**18;
+    uint256 public constant MAX_GLOBAL_DAILY_FAUCET = 1_000 * 10**18;
+
+    // Legacy rating constants retained for ABI compatibility. Ratings are a
+    // permissionless reputation signal and are no longer an economic multiplier.
     uint256 public constant RATING_FACTOR_FLOOR = 200;  // 0.2 in fixed point (1000 = 1.0)
     uint256 public constant RATING_REFERENCE = 2000;    // Rating where factor = floor
 
@@ -46,12 +61,26 @@ contract RewardPool is Ownable, ReentrancyGuard {
     uint256 public faucetPool;
     uint256 public rewardPool;
     uint256 public rewardPoolCapacity;  // Used for decay calculation
+    uint256 public globalDailyRewardCap;
+    uint256 public globalDailyFaucetCap;
 
     // Valid game contracts (prevents DOS from iterating all games)
     mapping(address => bool) public validGameContracts;
 
     // Faucet tracking
     mapping(address => bool) public hasClaimed;
+    mapping(address => uint256) public faucetNonces;
+    mapping(uint256 => uint256) public globalDailyFaucetClaims;
+
+    // Reward eligibility is explicitly attested by faucetSigner. Epoch binding
+    // lets a signer rotation atomically invalidate every authorization and every
+    // eligibility granted by a compromised key.
+    uint256 public rewardEligibilityEpoch = 1;
+    mapping(address => uint256) private rewardEligibleAtEpoch;
+    mapping(address => uint256) public rewardEligibilityNonces;
+
+    // Day index => total CHESS rewards actually paid that day.
+    mapping(uint256 => uint256) public globalDailyRewards;
 
     // Daily game tracking (player => day => count)
     mapping(address => mapping(uint256 => uint256)) public dailyGames;
@@ -68,6 +97,13 @@ contract RewardPool is Ownable, ReentrancyGuard {
         uint8[20] history;     // 0=normal, 1=resign, 2=timeout
     }
     mapping(address => BehaviorRecord) public behaviorRecords;
+
+    struct RewardQuote {
+        uint256 amount;
+        uint256 poolFactor;
+        uint256 ratingFactor;
+        uint256 behaviorFactor;
+    }
 
     // ========== EVENTS ==========
     event FaucetClaimed(address indexed player, uint256 amount);
@@ -87,6 +123,16 @@ contract RewardPool is Ownable, ReentrancyGuard {
     event PoolLow(string poolType, uint256 remaining, uint256 threshold);
     event BehaviorRecorded(address indexed player, uint8 gameType);
     event FaucetSignerUpdated(address indexed previousSigner, address indexed newSigner);
+    event RewardEligibilityRegistered(address indexed player);
+    event RewardEligibilityRevoked(address indexed player);
+    event RewardEligibilityEpochAdvanced(uint256 previousEpoch, uint256 newEpoch);
+    event GlobalDailyRewardCapSet(uint256 previousCap, uint256 newCap);
+    event GlobalDailyRewardCapReached(
+        uint256 indexed day,
+        uint256 emitted,
+        uint256 attemptedReward
+    );
+    event GlobalDailyFaucetCapSet(uint256 previousCap, uint256 newCap);
 
     // ========== CONSTRUCTOR ==========
     constructor(
@@ -99,6 +145,8 @@ contract RewardPool is Ownable, ReentrancyGuard {
         chessToken = IERC20(_chessToken);
         playerRating = PlayerRating(_playerRating);
         faucetSigner = msg.sender;
+        globalDailyRewardCap = MAX_GLOBAL_DAILY_REWARD;
+        globalDailyFaucetCap = MAX_GLOBAL_DAILY_FAUCET;
     }
 
     // ========== ADMIN FUNCTIONS ==========
@@ -109,11 +157,50 @@ contract RewardPool is Ownable, ReentrancyGuard {
         chessFactory = _chessFactory;
     }
 
-    /// @notice Set the service key allowed to authorize faucet beneficiaries
+    /// @notice Rotate the service key and atomically invalidate all reward eligibility
+    /// @dev Previously eligible users must obtain a fresh v2 attestation. This is
+    ///      intentionally fail-closed so a compromised signer cannot leave a
+    ///      permanent population of reward-enabled Sybil wallets behind.
     function setFaucetSigner(address newSigner) external onlyOwner {
         require(newSigner != address(0), "Invalid signer");
         emit FaucetSignerUpdated(faucetSigner, newSigner);
         faucetSigner = newSigner;
+        uint256 previousEpoch = rewardEligibilityEpoch;
+        rewardEligibilityEpoch = previousEpoch + 1;
+        emit RewardEligibilityEpochAdvanced(previousEpoch, rewardEligibilityEpoch);
+    }
+
+    /// @notice Revoke one wallet and consume its current authorization nonce
+    function revokeRewardEligibility(address player) external onlyOwner {
+        require(player != address(0), "Invalid player");
+        // This is deliberately valid even before an authorization is consumed:
+        // incident response must be able to invalidate one leaked, pre-signed
+        // attestation without rotating the signer for every user.
+        rewardEligibleAtEpoch[player] = 0;
+        rewardEligibilityNonces[player]++;
+        faucetNonces[player]++;
+        emit RewardEligibilityRevoked(player);
+    }
+
+    /// @notice Set the operational daily cap without being able to exceed the
+    /// immutable protocol maximum or invalidate rewards already paid today.
+    function setGlobalDailyRewardCap(uint256 newCap) external onlyOwner {
+        require(newCap > 0 && newCap <= MAX_GLOBAL_DAILY_REWARD, "Invalid daily cap");
+        uint256 today = block.timestamp / 1 days;
+        require(newCap >= globalDailyRewards[today], "Cap below emitted rewards");
+
+        emit GlobalDailyRewardCapSet(globalDailyRewardCap, newCap);
+        globalDailyRewardCap = newCap;
+    }
+
+    /// @notice Bound faucet loss during signer compromise or issuer malfunction
+    function setGlobalDailyFaucetCap(uint256 newCap) external onlyOwner {
+        require(newCap > 0 && newCap <= MAX_GLOBAL_DAILY_FAUCET, "Invalid faucet cap");
+        uint256 today = block.timestamp / 1 days;
+        require(newCap >= globalDailyFaucetClaims[today], "Cap below faucet emissions");
+
+        emit GlobalDailyFaucetCapSet(globalDailyFaucetCap, newCap);
+        globalDailyFaucetCap = newCap;
     }
 
     /// @notice Deposit CHESS to faucet pool
@@ -164,14 +251,38 @@ contract RewardPool is Ownable, ReentrancyGuard {
 
     // ========== FAUCET ==========
 
-    /// @notice Claim faucet tokens once with an off-chain eligibility authorization
-    /// @param authorization Signature over this pool, chain ID, and beneficiary
-    function claimFaucet(bytes calldata authorization) external nonReentrant {
+    /// @notice Claim faucet tokens once with an expiring, epoch-bound authorization
+    /// @param deadline Last timestamp at which the authorization may be consumed
+    /// @param authorization Signature over purpose, pool, chain, beneficiary,
+    ///        signer epoch, per-wallet nonce and deadline
+    function claimFaucet(
+        uint256 deadline,
+        bytes calldata authorization
+    ) external nonReentrant {
         require(!hasClaimed[msg.sender], "Already claimed");
         require(chessToken.balanceOf(msg.sender) == 0, "Already has CHESS");
         require(faucetPool >= FAUCET_AMOUNT, "Faucet pool empty");
+        require(block.timestamp <= deadline, "Faucet authorization expired");
 
-        bytes32 digest = keccak256(abi.encodePacked(address(this), block.chainid, msg.sender));
+        uint256 today = block.timestamp / 1 days;
+        uint256 emittedToday = globalDailyFaucetClaims[today];
+        require(
+            emittedToday + FAUCET_AMOUNT <= globalDailyFaucetCap,
+            "Faucet daily cap reached"
+        );
+
+        uint256 nonce = faucetNonces[msg.sender];
+        bytes32 digest = keccak256(
+            abi.encode(
+                FAUCET_AUTHORIZATION_DOMAIN,
+                address(this),
+                block.chainid,
+                msg.sender,
+                rewardEligibilityEpoch,
+                nonce,
+                deadline
+            )
+        );
         bytes32 signedDigest = MessageHashUtils.toEthSignedMessageHash(digest);
         require(
             SignatureChecker.isValidSignatureNow(faucetSigner, signedDigest, authorization),
@@ -179,7 +290,10 @@ contract RewardPool is Ownable, ReentrancyGuard {
         );
 
         hasClaimed[msg.sender] = true;
+        faucetNonces[msg.sender] = nonce + 1;
+        _markRewardEligible(msg.sender);
         faucetPool -= FAUCET_AMOUNT;
+        globalDailyFaucetClaims[today] = emittedToday + FAUCET_AMOUNT;
         chessToken.safeTransfer(msg.sender, FAUCET_AMOUNT);
 
         emit FaucetClaimed(msg.sender, FAUCET_AMOUNT);
@@ -190,78 +304,217 @@ contract RewardPool is Ownable, ReentrancyGuard {
         }
     }
 
+    /// @notice Register for game rewards using a dedicated off-chain eligibility
+    /// attestation. This is separate from the faucet authorization so signatures
+    /// cannot be replayed across purposes.
+    /// @param deadline Last timestamp at which the attestation may be consumed
+    /// @param authorization Signature over domain, pool, chain, beneficiary,
+    ///        eligibility epoch, per-wallet nonce, and deadline
+    function registerRewardEligibility(
+        uint256 deadline,
+        bytes calldata authorization
+    ) external nonReentrant {
+        require(!rewardEligible(msg.sender), "Already reward eligible");
+        require(block.timestamp <= deadline, "Reward authorization expired");
+
+        uint256 nonce = rewardEligibilityNonces[msg.sender];
+
+        bytes32 digest = keccak256(
+            abi.encode(
+                REWARD_ELIGIBILITY_DOMAIN,
+                address(this),
+                block.chainid,
+                msg.sender,
+                rewardEligibilityEpoch,
+                nonce,
+                deadline
+            )
+        );
+        bytes32 signedDigest = MessageHashUtils.toEthSignedMessageHash(digest);
+        require(
+            SignatureChecker.isValidSignatureNow(faucetSigner, signedDigest, authorization),
+            "Invalid reward authorization"
+        );
+
+        rewardEligibilityNonces[msg.sender] = nonce + 1;
+        _markRewardEligible(msg.sender);
+    }
+
     // ========== GAME REWARDS ==========
 
-    /// @notice Distribute rewards for a completed game
-    /// @param player The player to reward
-    /// @param opponent The opponent (for anti-collusion check)
-    /// @param isWinner Whether the player won
-    /// @param isDraw Whether the game was a draw
-    /// @param isCheckmate Whether the game ended in checkmate
-    /// @param moveCount Total moves in the game
-    /// @param wasResign Whether the player resigned (for behavior tracking)
-    /// @param wasTimeout Whether the player lost by timeout (for behavior tracking)
-    function distributeReward(
-        address player,
-        address opponent,
-        bool isWinner,
-        bool isDraw,
+    /// @notice Atomically distribute both sides of one completed-game reward
+    /// @dev Atomic budgeting prevents fixed call ordering from paying only one side
+    ///      when the pool or global daily budget is nearly exhausted.
+    /// @param result 0=draw, 1=White wins, 2=Black wins
+    /// @param disqualifiedPlayer Optional side barred from rewards by adjudication
+    function distributeGameRewards(
+        address white,
+        address black,
+        uint8 result,
         bool isCheckmate,
         uint256 moveCount,
-        bool wasResign,
-        bool wasTimeout
+        bool whiteWasResign,
+        bool whiteWasTimeout,
+        bool blackWasResign,
+        bool blackWasTimeout,
+        address disqualifiedPlayer
     ) external nonReentrant {
-        // Only allow calls from valid game contracts
         require(_isValidGameContract(msg.sender), "Not authorized");
-        require(player != address(0) && opponent != address(0), "Invalid addresses");
-        require(player != opponent, "Same player");
+        require(white != address(0) && black != address(0), "Invalid addresses");
+        require(white != black, "Same player");
+        require(result <= 2, "Invalid result");
+        require(
+            disqualifiedPlayer == address(0) ||
+            disqualifiedPlayer == white ||
+            disqualifiedPlayer == black,
+            "Invalid disqualified player"
+        );
 
-        // Record behavior (even if no reward given)
-        _recordBehavior(player, wasResign, wasTimeout);
-
-        // Check if player qualifies for reward
-        if (!_canReceiveReward(player, opponent, moveCount)) {
-            return;  // No reward, but behavior was recorded
+        bool isDraw = result == 0;
+        bool whiteWins = result == 1;
+        bool blackWins = result == 2;
+        RewardQuote memory whiteQuote;
+        RewardQuote memory blackQuote;
+        if (
+            disqualifiedPlayer != white &&
+            _canReceiveReward(white, black, moveCount)
+        ) {
+            whiteQuote = _quoteReward(
+                white,
+                whiteWins,
+                isDraw,
+                isCheckmate && whiteWins,
+                moveCount
+            );
+        }
+        if (
+            disqualifiedPlayer != black &&
+            _canReceiveReward(black, white, moveCount)
+        ) {
+            blackQuote = _quoteReward(
+                black,
+                blackWins,
+                isDraw,
+                isCheckmate && blackWins,
+                moveCount
+            );
         }
 
-        // Calculate and distribute reward
-        uint256 reward = _calculateReward(player, isWinner, isDraw, isCheckmate, moveCount);
+        // Negative behavior belongs to the canonical game record, not to the
+        // availability of today's incentive budget. Record a qualifying
+        // resignation/timeout exactly once even when a side hit its daily limit,
+        // the pair is cooling down, or the pool/cap is exhausted. Normal results
+        // remain payout-gated so zero-value games cannot wash this history.
+        bool recordWhitePenalty =
+            (whiteWasResign || whiteWasTimeout) &&
+            disqualifiedPlayer != white &&
+            rewardEligible(white) &&
+            rewardEligible(black) &&
+            moveCount / 2 >= MIN_MOVES_FOR_REWARD;
+        bool recordBlackPenalty =
+            (blackWasResign || blackWasTimeout) &&
+            disqualifiedPlayer != black &&
+            rewardEligible(white) &&
+            rewardEligible(black) &&
+            moveCount / 2 >= MIN_MOVES_FOR_REWARD;
+        if (recordWhitePenalty) {
+            _recordBehavior(white, whiteWasResign, whiteWasTimeout);
+        }
+        if (recordBlackPenalty) {
+            _recordBehavior(black, blackWasResign, blackWasTimeout);
+        }
 
-        if (reward > 0 && reward <= rewardPool) {
-            // Update tracking
-            uint256 today = block.timestamp / 1 days;
-            dailyGames[player][today]++;
-            lastOpponentGame[player][opponent] = block.timestamp;
+        uint256 totalReward = whiteQuote.amount + blackQuote.amount;
+        if (totalReward == 0 || totalReward > rewardPool) return;
 
-            // Transfer reward
-            rewardPool -= reward;
-            chessToken.safeTransfer(player, reward);
+        uint256 today = block.timestamp / 1 days;
+        uint256 emittedToday = globalDailyRewards[today];
+        uint256 remainingDailyBudget = globalDailyRewardCap - emittedToday;
+        if (totalReward > remainingDailyBudget) {
+            emit GlobalDailyRewardCapReached(today, emittedToday, totalReward);
+            return;
+        }
 
-            // Get factors for event
-            (uint256 poolFactor, uint256 ratingFactor, uint256 behaviorFactor) = getPlayerFactors(player);
+        // A rewarded encounter consumes the pair cooldown in both directions,
+        // even when one side has already exhausted its own daily allowance. A
+        // directional update lets the unpaid side collect against the same
+        // opponent on the next day before the seven-day cooldown expires.
+        lastOpponentGame[white][black] = block.timestamp;
+        lastOpponentGame[black][white] = block.timestamp;
 
-            emit RewardDistributed(
-                player,
-                _getBaseReward(isWinner, isDraw),
-                reward,
-                poolFactor,
-                ratingFactor,
-                behaviorFactor
-            );
-
-            // Emit warning if pool is low (< 10% of capacity)
-            if (rewardPoolCapacity > 0 && rewardPool < rewardPoolCapacity / 10) {
-                emit PoolLow("reward", rewardPool, rewardPoolCapacity / 10);
+        if (whiteQuote.amount > 0) {
+            dailyGames[white][today]++;
+            if (!recordWhitePenalty) {
+                _recordBehavior(white, false, false);
             }
+        }
+        if (blackQuote.amount > 0) {
+            dailyGames[black][today]++;
+            if (!recordBlackPenalty) {
+                _recordBehavior(black, false, false);
+            }
+        }
+
+        uint256 newDailyTotal = emittedToday + totalReward;
+        globalDailyRewards[today] = newDailyTotal;
+        if (newDailyTotal == globalDailyRewardCap) {
+            emit GlobalDailyRewardCapReached(today, newDailyTotal, totalReward);
+        }
+
+        rewardPool -= totalReward;
+        if (whiteQuote.amount > 0) {
+            chessToken.safeTransfer(white, whiteQuote.amount);
+            _emitRewardDistributed(white, whiteWins, isDraw, whiteQuote);
+        }
+        if (blackQuote.amount > 0) {
+            chessToken.safeTransfer(black, blackQuote.amount);
+            _emitRewardDistributed(black, blackWins, isDraw, blackQuote);
+        }
+
+        if (rewardPoolCapacity > 0 && rewardPool < rewardPoolCapacity / 10) {
+            emit PoolLow("reward", rewardPool, rewardPoolCapacity / 10);
         }
     }
 
     // ========== INTERNAL FUNCTIONS ==========
 
     /// @notice Check if caller is a valid game contract
-    /// @dev Uses mapping for O(1) lookup instead of O(n) iteration
+    /// @dev The local registration alone is insufficient: a game must remain a
+    ///      member of the currently configured canonical factory. This makes
+    ///      authorizations left by a prior or temporary factory inert.
     function _isValidGameContract(address caller) internal view returns (bool) {
-        return validGameContracts[caller];
+        return
+            chessFactory != address(0) &&
+            validGameContracts[caller] &&
+            IRewardCanonicalFactory(chessFactory).isDeployedGame(caller);
+    }
+
+    function _markRewardEligible(address player) internal {
+        if (!rewardEligible(player)) {
+            rewardEligibleAtEpoch[player] = rewardEligibilityEpoch;
+            emit RewardEligibilityRegistered(player);
+        }
+    }
+
+    /// @notice Whether a wallet is eligible in the currently active signer epoch
+    function rewardEligible(address player) public view returns (bool) {
+        return rewardEligibleAtEpoch[player] == rewardEligibilityEpoch;
+    }
+
+    function _emitRewardDistributed(
+        address player,
+        bool isWinner,
+        bool isDraw,
+        RewardQuote memory quote
+    ) internal {
+        emit RewardDistributed(
+            player,
+            _getBaseReward(isWinner, isDraw),
+            quote.amount,
+            quote.poolFactor,
+            quote.ratingFactor,
+            quote.behaviorFactor
+        );
     }
 
     /// @notice Register a game contract as valid (called by ChessFactory)
@@ -269,6 +522,10 @@ contract RewardPool is Ownable, ReentrancyGuard {
     function registerGameContract(address gameContract) external {
         require(msg.sender == chessFactory, "Only factory");
         require(gameContract.code.length > 0, "Game must be contract");
+        require(
+            IRewardCanonicalFactory(chessFactory).isDeployedGame(gameContract),
+            "Game not canonical"
+        );
         validGameContracts[gameContract] = true;
     }
 
@@ -278,6 +535,11 @@ contract RewardPool is Ownable, ReentrancyGuard {
         address opponent,
         uint256 moveCount
     ) internal view returns (bool) {
+        // Both sides must have passed the signer-backed eligibility process.
+        if (!rewardEligible(player) || !rewardEligible(opponent)) {
+            return false;
+        }
+
         // Check minimum moves (per side, so divide by 2)
         if (moveCount / 2 < MIN_MOVES_FOR_REWARD) {
             return false;
@@ -300,6 +562,13 @@ contract RewardPool is Ownable, ReentrancyGuard {
             return false;
         }
 
+        // The exact reward is checked against the remaining budget before any
+        // accounting state changes. This quick check avoids needless work after
+        // the cap is fully consumed.
+        if (globalDailyRewards[today] >= globalDailyRewardCap) {
+            return false;
+        }
+
         return true;
     }
 
@@ -318,24 +587,33 @@ contract RewardPool is Ownable, ReentrancyGuard {
         bool isCheckmate,
         uint256 moveCount
     ) internal view returns (uint256) {
+        return _quoteReward(player, isWinner, isDraw, isCheckmate, moveCount).amount;
+    }
+
+    function _quoteReward(
+        address player,
+        bool isWinner,
+        bool isDraw,
+        bool isCheckmate,
+        uint256 moveCount
+    ) internal view returns (RewardQuote memory quote) {
+        (quote.poolFactor, quote.ratingFactor, quote.behaviorFactor) = getPlayerFactors(player);
         uint256 baseReward = _getBaseReward(isWinner, isDraw);
 
-        // Get factors (all in 1000 = 1.0 scale)
-        (uint256 poolFactor, uint256 ratingFactor, uint256 behaviorFactor) = getPlayerFactors(player);
-
         // Calculate: base * poolFactor * ratingFactor * behaviorFactor / 1000^3
-        uint256 reward = baseReward * poolFactor * ratingFactor * behaviorFactor / (1000 * 1000 * 1000);
+        quote.amount = baseReward * quote.poolFactor * quote.ratingFactor *
+            quote.behaviorFactor / (1000 * 1000 * 1000);
 
         // Add bonuses (also affected by pool factor only, not rating/behavior)
         uint256 bonus = 0;
         if (isWinner && isCheckmate) {
-            bonus += CHECKMATE_BONUS * poolFactor / 1000;
+            bonus += CHECKMATE_BONUS * quote.poolFactor / 1000;
         }
         if (moveCount >= LONG_GAME_THRESHOLD * 2) {  // Total moves, so *2
-            bonus += LONG_GAME_BONUS * poolFactor / 1000;
+            bonus += LONG_GAME_BONUS * quote.poolFactor / 1000;
         }
 
-        return reward + bonus;
+        quote.amount += bonus;
     }
 
     /// @notice Record player behavior
@@ -371,7 +649,7 @@ contract RewardPool is Ownable, ReentrancyGuard {
 
     /// @notice Get all factors for a player
     /// @return poolFactor Quadratic decay based on pool fullness (1000 = 1.0)
-    /// @return ratingFactor Inversely proportional to rating (1000 = 1.0)
+    /// @return ratingFactor Fixed at 1000; permissionless ELO is not an economic input
     /// @return behaviorFactor Based on resign/timeout history (1000 = 1.0)
     function getPlayerFactors(address player) public view returns (
         uint256 poolFactor,
@@ -387,20 +665,10 @@ contract RewardPool is Ownable, ReentrancyGuard {
             poolFactor = (ratio * ratio) / 1000;  // Quadratic
         }
 
-        // Rating factor: inversely proportional
-        // ratingFactor = max(0.2, (2000 - rating) / 1000)
-        uint256 rating = playerRating.getRating(player);
-        if (rating >= RATING_REFERENCE) {
-            ratingFactor = RATING_FACTOR_FLOOR;
-        } else {
-            ratingFactor = ((RATING_REFERENCE - rating) * 1000) / 1000;
-            if (ratingFactor < RATING_FACTOR_FLOOR) {
-                ratingFactor = RATING_FACTOR_FLOOR;
-            }
-            if (ratingFactor > 1000) {
-                ratingFactor = 1000;
-            }
-        }
+        // Wallet-based ELO is Sybil/collusion-sensitive. Using it to increase or
+        // reduce token rewards turns leaderboard manipulation into direct economic
+        // extraction, so the reward path deliberately treats it as neutral.
+        ratingFactor = 1000;
 
         // Behavior factor: 1.0 - (resignRate * 0.5) - (timeoutRate * 0.5)
         BehaviorRecord storage record = behaviorRecords[player];

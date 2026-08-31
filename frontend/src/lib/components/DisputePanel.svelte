@@ -1,5 +1,5 @@
 <script>
-	import { onDestroy, onMount } from 'svelte';
+	import { createEventDispatcher, onDestroy, onMount } from 'svelte';
 	import { wallet, truncateAddress } from '$lib/stores/wallet.js';
 	import {
 		dispute,
@@ -22,19 +22,20 @@
 		VoteCommitReconciliation
 	} from '$lib/utils/voteCommit.js';
 	import { TRANSACTION_NOT_BROADCAST } from '$lib/utils/disputeVerification.js';
+	import { isChallengeableGameState, isCheatDecision } from '$lib/utils/disputeModel.js';
 
 	export let gameId;
 	export let gameAddress;
 	export let whitePlayer = '';
 	export let blackPlayer = '';
 	export let gameState = 0;
+	const dispatch = createEventDispatcher();
 
 	let disputeData = null;
 	let loading = false;
 	let error = null;
 	let success = null;
 
-	let accusedPlayer = '';
 	let selectedVote = Vote.None;
 	let savedCommit = null;
 	let hasSavedCommit = false;
@@ -44,6 +45,10 @@
 	let lastLoadKey = '';
 	let loadGeneration = 0;
 	let destroyed = false;
+	let resolutionWatcherKey = '';
+	let stopResolutionWatcher = null;
+	let resolutionWatcherRetryTimer = null;
+	let settlementNotificationKey = '';
 
 	onMount(async () => {
 		if ($wallet.connected && $disputeAvailable) {
@@ -54,6 +59,7 @@
 	onDestroy(() => {
 		destroyed = true;
 		loadGeneration += 1;
+		stopCurrentResolutionWatcher();
 		dispute.invalidateContext();
 	});
 
@@ -62,7 +68,21 @@
 		refreshPanel();
 	}
 
-	$: canChallenge = gameState >= 3 && gameState <= 5 &&
+	$: {
+		const nextWatcherKey = $wallet.connected && $disputeAvailable && gameAddress && disputeData?.id
+			? `${currentPanelLoadKey()}:${disputeData.id}`
+			: '';
+		if (nextWatcherKey !== resolutionWatcherKey) {
+			if (nextWatcherKey) startResolutionWatcher(nextWatcherKey);
+			else stopCurrentResolutionWatcher();
+		}
+	}
+
+	$: canonicalWhitePlayer = disputeData?.whitePlayer || whitePlayer;
+	$: canonicalBlackPlayer = disputeData?.blackPlayer || blackPlayer;
+	$: isGameParticipant = Boolean($wallet.account) && [canonicalWhitePlayer, canonicalBlackPlayer]
+		.some((participant) => participant?.toLowerCase() === $wallet.account.toLowerCase());
+	$: canChallenge = isGameParticipant && isChallengeableGameState(gameState) &&
 		(!disputeData || (disputeData.state === DisputeState.Pending && disputeData.challengeWindowOpen));
 	$: canCloseChallengeWindow = disputeData?.state === DisputeState.Pending && !disputeData?.challengeWindowOpen;
 	$: isSelectedArbitrator = disputeData?.user?.isSelectedArbitrator ?? false;
@@ -70,6 +90,7 @@
 	$: timelineSteps = disputeData ? buildTimeline(disputeData) : [];
 	$: panelSelectionTimedOut = Boolean(
 		disputeData?.state === DisputeState.Selecting &&
+		disputeData.panelSelectionIsHead &&
 		disputeData.panelSelectionScheduledAt &&
 		disputeData.panelSelectionTimeout &&
 		Math.floor(Date.now() / 1000) >
@@ -94,6 +115,42 @@
 		clearCommitRecordUiState();
 		commitStorageWarning = '';
 		restoreBackup = '';
+	}
+
+	function stopCurrentResolutionWatcher() {
+		if (resolutionWatcherRetryTimer) {
+			clearTimeout(resolutionWatcherRetryTimer);
+			resolutionWatcherRetryTimer = null;
+		}
+		stopResolutionWatcher?.();
+		stopResolutionWatcher = null;
+		resolutionWatcherKey = '';
+	}
+
+	async function startResolutionWatcher(nextWatcherKey) {
+		stopCurrentResolutionWatcher();
+		resolutionWatcherKey = nextWatcherKey;
+		try {
+			const cleanup = await dispute.watchResolution(gameId, gameAddress, async ({ removed }) => {
+				if (!destroyed && resolutionWatcherKey === nextWatcherKey) {
+					await refreshPanel(true);
+					if (removed) dispatch('settled', { gameAddress });
+				}
+			});
+			if (destroyed || resolutionWatcherKey !== nextWatcherKey) cleanup();
+			else stopResolutionWatcher = cleanup;
+		} catch (watchError) {
+			if (!destroyed && resolutionWatcherKey === nextWatcherKey) {
+				console.warn('Unable to watch dispute resolution:', watchError);
+				resolutionWatcherRetryTimer = setTimeout(() => {
+					resolutionWatcherRetryTimer = null;
+					if (!destroyed && disputeData?.id &&
+						`${currentPanelLoadKey()}:${disputeData.id}` === nextWatcherKey) {
+						startResolutionWatcher(nextWatcherKey);
+					}
+				}, 5000);
+			}
+		}
 	}
 
 	function getCommitContextFor(data = disputeData) {
@@ -137,6 +194,7 @@
 			// Never render a previous account's commit secret while the next
 			// route/account/chain is still being verified.
 			disputeData = null;
+			stopCurrentResolutionWatcher();
 			clearCommitUiState();
 		}
 		lastLoadKey = loadKey;
@@ -150,6 +208,17 @@
 			const loaded = await dispute.getDisputeByGame(requestedGameId, requestedGameAddress);
 			if (!isCurrentPanelLoad(generation, loadKey)) return;
 			disputeData = loaded;
+			const nextSettlementNotificationKey = loaded?.state === DisputeState.Resolved
+				? `${loadKey}:${loaded.id}:${loaded.finalDecision}`
+				: '';
+			if (nextSettlementNotificationKey &&
+				nextSettlementNotificationKey !== settlementNotificationKey) {
+				// DisputeDAO cannot emit ChessCore.GameStateChanged. Tell the page
+				// to reload the canonical result even when its first panel read
+				// already observes a verdict mined after the game-store snapshot.
+				dispatch('settled', { gameAddress: requestedGameAddress });
+			}
+			settlementNotificationKey = nextSettlementNotificationKey;
 			await syncSavedCommit(generation, loadKey, loaded);
 		} catch (err) {
 			if (!isCurrentPanelLoad(generation, loadKey)) return;
@@ -222,31 +291,6 @@
 				parsed = parseVoteCommit(storage.getItem(storageKey), context, expectedHash);
 			} catch {
 				commitStorageWarning = 'Browser storage could not be read. Any valid in-memory reveal backup has been preserved.';
-			}
-		}
-
-		// Preserve valid commits created before storage keys were scoped by chain and account.
-		if (!parsed && storage && expectedHash) {
-			const legacyKey = `vote_commit_${loaded.id}`;
-			try {
-				const legacyRaw = storage.getItem(legacyKey);
-				if (legacyRaw) {
-					const legacy = JSON.parse(legacyRaw);
-					const migrated = createVoteCommitRecord({
-						context,
-						vote: legacy.vote,
-						salt: legacy.salt,
-						hash: legacy.hash,
-						createdAt: Date.now()
-					});
-					if (migrated.hash === expectedHash.toLowerCase()) {
-						parsed = migrated;
-						persistCommitRecord(storage, storageKey, migrated);
-						removeCommitRecord(storage, legacyKey);
-					}
-				}
-			} catch {
-				// Invalid legacy records are ignored without discarding a valid in-memory record.
 			}
 		}
 
@@ -343,6 +387,24 @@
 		}
 	}
 
+	function handleDiscardCommitBackup() {
+		if (!savedCommit) return;
+		if (!window.confirm(
+			'Discard the local reveal backup from this browser? This cannot be undone unless you exported another copy.'
+		)) return;
+
+		const storage = getCommitStorage();
+		const key = getVoteCommitStorageKey(savedCommit);
+		if (!storage || !removeCommitRecord(storage, key)) {
+			error = 'The local reveal backup could not be removed. It has been retained.';
+			return;
+		}
+
+		clearCommitRecordUiState();
+		error = null;
+		success = 'Local reveal backup discarded at your request.';
+	}
+
 	function getPhase(d) {
 		const now = Math.floor(Date.now() / 1000);
 
@@ -412,7 +474,13 @@
 		if (d.state === DisputeState.Selecting) {
 			return [
 				{ label: 'Challenge', status: 'complete', detail: 'Deposit locked' },
-				{ label: 'Panel', status: 'active', detail: `Future entropy at block ${d.panelSelectionBlock}` },
+				{
+					label: 'Panel',
+					status: 'active',
+					detail: d.panelSelectionBlock
+						? `Future entropy at block ${d.panelSelectionBlock}`
+						: d.panelSelectionIsHead ? 'FIFO head awaiting activation' : 'Waiting in FIFO queue'
+				},
 				{ label: 'Commit', status: 'upcoming', detail: 'Starts after panel finalization' },
 				{ label: 'Resolve', status: 'upcoming', detail: 'After commit and reveal' }
 			];
@@ -471,7 +539,7 @@
 				{ label: 'Challenge', status: 'complete', detail: 'Deposit remains locked' },
 				{ label: 'Panels', status: 'complete', detail: 'Permissionless arbitration exhausted' },
 				{ label: 'Backstop', status: 'active', detail: 'Awaiting timelocked governance decision' },
-				{ label: 'Resolve', status: 'upcoming', detail: 'Only Legitimate or Cheating is permitted' }
+				{ label: 'Resolve', status: 'upcoming', detail: 'Legit, White cheated, or Black cheated' }
 			];
 		}
 
@@ -509,9 +577,15 @@
 		return truncateAddress(address);
 	}
 
+	function getDecisionClasses(vote) {
+		if (vote === Vote.Legit) return 'text-chess-success';
+		if (isCheatDecision(vote)) return 'text-chess-danger';
+		return 'text-chess-gray';
+	}
+
 	async function handleChallenge() {
-		if (!accusedPlayer) {
-			error = 'Select a player to accuse';
+		if (!isGameParticipant) {
+			error = 'Only a participant in this game may request review';
 			return;
 		}
 
@@ -520,8 +594,8 @@
 		success = null;
 
 		try {
-			await dispute.challenge(gameId, accusedPlayer, disputeData?.context || $dispute.verification);
-			success = 'Challenge locked. Anyone can finalize the panel after the scheduled future block.';
+			await dispute.challenge(gameId, disputeData?.context || $dispute.verification);
+			success = 'Challenge locked. If queued, anyone may activate it once it reaches the FIFO head; the panel can then be finalized after its future entropy block.';
 			await loadDispute();
 		} catch (err) {
 			error = err.message || 'Failed to submit challenge';
@@ -541,6 +615,22 @@
 			await loadDispute();
 		} catch (err) {
 			error = err.message || 'Panel cannot be finalized yet';
+		}
+
+		loading = false;
+	}
+
+	async function handleActivatePanelSelection() {
+		loading = true;
+		error = null;
+		success = null;
+
+		try {
+			await dispute.activatePanelSelection(disputeData.id, disputeData.context);
+			success = 'FIFO head activated. A future entropy block is now scheduled.';
+			await loadDispute();
+		} catch (err) {
+			error = err.message || 'Panel selection cannot be activated yet';
 		}
 
 		loading = false;
@@ -667,20 +757,17 @@
 		} catch (err) {
 			if (err.transactionTransmission === TRANSACTION_NOT_BROADCAST && pendingRecord && storageKey) {
 				const isCurrent = isCurrentCommitOperation(operationLoadKey, pendingRecord);
-				if (retryRecord) {
-					persistCommitRecord(
-						getCommitStorage(isCurrent),
-						storageKey,
-						retryRecord,
-						isCurrent
-					);
-					applyCommitRecordToCurrentUi(operationLoadKey, retryRecord);
-				} else {
-					removeCommitRecord(getCommitStorage(isCurrent), storageKey, isCurrent);
-					if (isCurrent && savedCommit?.hash === pendingRecord.hash) {
-						clearCommitRecordUiState();
-					}
-				}
+				// Even a pre-broadcast failure keeps the exact vote and salt. This is
+				// harmless, enables an idempotent retry, and avoids making cleanup
+				// depend on wallet/provider error classification.
+				const retainedRecord = retryRecord || pendingRecord;
+				persistCommitRecord(
+					getCommitStorage(isCurrent),
+					storageKey,
+					retainedRecord,
+					isCurrent
+				);
+				applyCommitRecordToCurrentUi(operationLoadKey, retainedRecord);
 			} else if (pendingRecord && storageKey && operationContext) {
 				try {
 					const onChainHash = await dispute.getVoteCommitHash(
@@ -692,7 +779,8 @@
 						onChainHash,
 						provider: operationProvider,
 						knownReceipt: err.receipt || err.replacement?.receipt ||
-							err.cause?.receipt || err.cause?.replacement?.receipt || null
+							err.cause?.receipt || err.cause?.replacement?.receipt || null,
+						knownReplacement: err.replacement || err.cause?.replacement || null
 					});
 					if (reconciliation.status === VoteCommitReconciliation.Committed) {
 						pendingRecord = updateVoteCommitStatus(
@@ -719,7 +807,7 @@
 						removeCommitRecord(getCommitStorage(isCurrent), storageKey, isCurrent);
 						if (isCurrent) {
 							clearCommitRecordUiState();
-							error = 'The previous transaction is terminally not committed. You may safely retry while the commit window remains open.';
+							error = 'The previous transaction was proven failed in a finalized block. You may safely create a new commitment while the commit window remains open.';
 							loading = false;
 						}
 						return;
@@ -865,8 +953,16 @@
 							<span class="ml-1">{formatParticipant(disputeData.challenger, 'Open window')}</span>
 						</div>
 						<div>
-							<span class="text-chess-gray">Accused:</span>
-							<span class="ml-1">{formatParticipant(disputeData.accusedPlayer, 'Not selected')}</span>
+							<span class="text-chess-gray">Scope:</span>
+							<span class="ml-1">Whole game</span>
+						</div>
+						<div>
+							<span class="text-chess-gray">White:</span>
+							<span class="ml-1">{formatParticipant(canonicalWhitePlayer, 'Unknown')}</span>
+						</div>
+						<div>
+							<span class="text-chess-gray">Black:</span>
+							<span class="ml-1">{formatParticipant(canonicalBlackPlayer, 'Unknown')}</span>
 						</div>
 						<div>
 							<span class="text-chess-gray">Stake:</span>
@@ -893,8 +989,16 @@
 							</div>
 						{:else if disputeData.state === DisputeState.Selecting}
 							<div>
-								<span class="text-chess-gray">Selection block:</span>
-								<span class="ml-1">{disputeData.panelSelectionBlock}</span>
+								<span class="text-chess-gray">Selection:</span>
+								<span class="ml-1">
+									{#if disputeData.panelSelectionBlock}
+										Block {disputeData.panelSelectionBlock}
+									{:else if disputeData.panelSelectionIsHead}
+										FIFO head awaiting activation
+									{:else}
+										Queued (position after sequence {disputeData.nextSelectionSequence})
+									{/if}
+								</span>
 							</div>
 							<div>
 								<span class="text-chess-gray">Required active stake coverage:</span>
@@ -929,44 +1033,29 @@
 					<div class="bg-chess-darker/50 rounded-lg p-3 space-y-3">
 						<div class="text-sm">
 							{#if disputeData.challengeWindowOpen}
-								The challenge window is open. Anyone can accuse one player of cheating by posting the CHESS deposit.
+								A participant may ask the panel to review the complete game. The panel—not the challenger—decides whether the game is legitimate, White cheated, or Black cheated.
 							{:else}
 								The challenge window expired. This record is still pending only because nobody has closed it on-chain yet.
 							{/if}
 						</div>
 						<div class="text-xs text-chess-gray">
-							Deposit required: {$dispute.challengeDeposit} CHESS
+							Deposit required for this game: {disputeData.requiredChallengeDeposit} CHESS
 						</div>
+						{#if disputeData.challengeWindowOpen && !isGameParticipant}
+							<div class="text-xs text-chess-gray">
+								Only the registered White or Black wallet can request review.
+							</div>
+						{/if}
 					</div>
 
 					{#if canChallenge}
-						<div class="space-y-4">
-							<div>
-								<div class="text-sm text-chess-gray mb-2">Accuse Player</div>
-								<div class="flex gap-2">
-									<button
-										class="flex-1 py-2 px-3 rounded-lg text-sm transition-colors
-											{accusedPlayer === whitePlayer ? 'bg-chess-accent text-chess-darker' : 'bg-chess-darker hover:bg-chess-dark'}"
-										on:click={() => accusedPlayer = whitePlayer}
-									>
-										White: {truncateAddress(whitePlayer)}
-									</button>
-									<button
-										class="flex-1 py-2 px-3 rounded-lg text-sm transition-colors
-											{accusedPlayer === blackPlayer ? 'bg-chess-accent text-chess-darker' : 'bg-chess-darker hover:bg-chess-dark'}"
-										on:click={() => accusedPlayer = blackPlayer}
-									>
-										Black: {truncateAddress(blackPlayer)}
-									</button>
-								</div>
-							</div>
-
+						<div>
 							<button
 								class="btn btn-danger w-full"
 								on:click={handleChallenge}
-								disabled={loading || !accusedPlayer}
+								disabled={loading}
 							>
-								{loading ? 'Submitting...' : 'Challenge Game'}
+								{loading ? 'Submitting...' : 'Request Whole-Game Review'}
 							</button>
 						</div>
 					{:else if canCloseChallengeWindow}
@@ -981,20 +1070,35 @@
 
 				{:else if disputeData.state === DisputeState.Selecting}
 					<div class="bg-chess-darker/50 rounded-lg p-3 space-y-3">
-						<p class="text-sm">
-							The challenge and deposit are locked. Panel entropy comes from the committed future block and selection is permissionless.
-						</p>
-						<div class="text-xs text-chess-gray">
-							Target block: {disputeData.panelSelectionBlock}. If its blockhash expires, reschedule before retrying.
-						</div>
-						<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-							<button class="btn btn-primary" on:click={handleFinalizePanel} disabled={loading}>
-								{loading ? 'Submitting...' : 'Finalize Panel'}
-							</button>
-							<button class="btn btn-secondary" on:click={handleRefreshPanelSelection} disabled={loading}>
-								Reschedule Expired Block
-							</button>
-						</div>
+						{#if !disputeData.panelSelectionBlock}
+							{#if disputeData.panelSelectionIsHead}
+								<p class="text-sm">
+									This dispute is the FIFO head. Anyone may try to reserve the panel and schedule its future entropy block.
+								</p>
+								<button class="btn btn-primary w-full" on:click={handleActivatePanelSelection} disabled={loading}>
+									{loading ? 'Submitting...' : 'Activate FIFO Head'}
+								</button>
+							{:else}
+								<p class="text-sm">
+									This dispute is still queued. The current FIFO head must finish or time out before this entry can be activated.
+								</p>
+							{/if}
+						{:else}
+							<p class="text-sm">
+								The challenge and deposit are locked. Panel entropy comes from the committed future block and selection is permissionless.
+							</p>
+							<div class="text-xs text-chess-gray">
+								Target block: {disputeData.panelSelectionBlock}. If its blockhash expires, reschedule before retrying.
+							</div>
+							<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+								<button class="btn btn-primary" on:click={handleFinalizePanel} disabled={loading}>
+									{loading ? 'Submitting...' : 'Finalize Panel'}
+								</button>
+								<button class="btn btn-secondary" on:click={handleRefreshPanelSelection} disabled={loading}>
+									Reschedule Expired Block
+								</button>
+							</div>
+						{/if}
 						{#if panelSelectionTimedOut}
 							<button class="btn btn-danger w-full" on:click={handleMarkPanelUnavailable} disabled={loading}>
 								Send Timed-out Selection to Backstop
@@ -1009,23 +1113,23 @@
 							Permissionless arbitration could not produce a decision. The challenge deposit and game bonds remain locked.
 						</p>
 						<p class="text-xs text-chess-gray">
-							Only the timelocked governance admin can resolve this dispute, and it must choose Legitimate or Cheating.
+							Only the timelocked governance admin can resolve this dispute, and it must choose Legitimate, White Cheated, or Black Cheated.
 						</p>
 					</div>
 
 				{:else if disputeData.state !== DisputeState.Resolved}
 					<div class="bg-chess-darker/50 rounded-lg p-3">
-						<div class="flex justify-between text-sm mb-2">
+						<div class="text-sm mb-2">
 							<span class="text-chess-gray">Voting power (CHESS)</span>
-							<span>
+							<div class="grid grid-cols-2 gap-2 mt-2 text-xs">
 								<span class="text-chess-success">{disputeData.legitVotes} Legit</span>
-								<span class="text-chess-gray mx-1">vs</span>
-								<span class="text-chess-danger">{disputeData.cheatVotes} Cheat</span>
-							</span>
+								<span class="text-chess-danger">{disputeData.whiteCheatVotes} White cheated</span>
+								<span class="text-chess-danger">{disputeData.blackCheatVotes} Black cheated</span>
+								<span class="text-chess-gray">{disputeData.abstainVotes} Abstain</span>
+							</div>
 						</div>
 						<div class="grid grid-cols-2 gap-3 text-xs text-chess-gray mb-2">
 							<div>Participation: {disputeData.totalVotes}/{disputeData.panelSize}</div>
-							<div>Abstain power: {disputeData.abstainVotes}</div>
 							<div>Revealed power: {disputeData.revealedVotingPower}/{disputeData.requiredVotingPower}</div>
 							<div>
 								Active stake coverage: {disputeData.panelActiveStake}/{disputeData.requiredActiveStakeCoverage}
@@ -1145,7 +1249,7 @@
 											Select your vote. Your choice stays hidden until reveal.
 										</p>
 
-										<div class="flex gap-2">
+										<div class="grid grid-cols-2 gap-2">
 											<button
 												class="flex-1 py-2 px-3 rounded-lg text-sm transition-colors
 													{selectedVote === Vote.Legit ? 'bg-chess-success text-chess-darker' : 'bg-chess-darker hover:bg-chess-dark'}"
@@ -1155,10 +1259,17 @@
 											</button>
 											<button
 												class="flex-1 py-2 px-3 rounded-lg text-sm transition-colors
-													{selectedVote === Vote.Cheat ? 'bg-chess-danger text-chess-darker' : 'bg-chess-darker hover:bg-chess-dark'}"
-												on:click={() => selectedVote = Vote.Cheat}
+													{selectedVote === Vote.WhiteCheat ? 'bg-chess-danger text-chess-darker' : 'bg-chess-darker hover:bg-chess-dark'}"
+												on:click={() => selectedVote = Vote.WhiteCheat}
 											>
-												Cheating
+												White Cheated
+											</button>
+											<button
+												class="flex-1 py-2 px-3 rounded-lg text-sm transition-colors
+													{selectedVote === Vote.BlackCheat ? 'bg-chess-danger text-chess-darker' : 'bg-chess-darker hover:bg-chess-dark'}"
+												on:click={() => selectedVote = Vote.BlackCheat}
+											>
+												Black Cheated
 											</button>
 											<button
 												class="flex-1 py-2 px-3 rounded-lg text-sm transition-colors
@@ -1228,17 +1339,32 @@
 					<div class="bg-chess-darker/50 rounded-lg p-3 text-center">
 						<div class="text-xs text-chess-gray uppercase mb-1">Final Decision</div>
 						<div class="text-xl font-display
-							{disputeData.finalDecision === Vote.Cheat ? 'text-chess-danger' : 'text-chess-success'}">
+							{getDecisionClasses(disputeData.finalDecision)}">
 							{getVoteLabel(disputeData.finalDecision)}
 						</div>
 						<div class="text-sm text-chess-gray mt-1">
-							{disputeData.legitVotes} Legit vs {disputeData.cheatVotes} Cheat
-							{#if disputeData.hasAbstainVotes}
-								<span> • {disputeData.abstainVotes} Abstain</span>
-							{/if}
+							{disputeData.legitVotes} Legit • {disputeData.whiteCheatVotes} White cheated • {disputeData.blackCheatVotes} Black cheated
+							{#if disputeData.hasAbstainVotes}<span> • {disputeData.abstainVotes} Abstain</span>{/if}
 						</div>
 						<div class="text-xs text-chess-gray mt-1">
 							Panel {disputeData.panelSize} • Effective quorum {disputeData.effectiveQuorum || 0}
+						</div>
+					</div>
+				{/if}
+
+				{#if hasSavedCommit && disputeData.user?.hasRevealed}
+					<div class="rounded-lg border border-chess-accent/20 bg-chess-darker/50 p-3 space-y-2">
+						<div class="text-sm font-medium text-chess-accent">Finality recovery backup retained</div>
+						<p class="text-xs text-chess-gray">
+							Your reveal was observed, but the local vote and salt are retained for reorg recovery. Export another copy before removing this one.
+						</p>
+						<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+							<button class="btn btn-secondary" on:click={copyCommitBackup}>
+								Copy Reveal Backup
+							</button>
+							<button class="btn btn-secondary" on:click={handleDiscardCommitBackup}>
+								Discard Local Backup
+							</button>
 						</div>
 					</div>
 				{/if}

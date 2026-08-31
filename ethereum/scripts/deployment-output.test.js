@@ -1,8 +1,11 @@
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { networkFromArguments, resolveDeploymentPath } = require("./deployment-output");
+const { loadDeployment, networkFromArguments, resolveDeploymentPath } = require("./deployment-output");
 
 test("networkFromArguments handles Truffle network syntax", () => {
   assert.equal(networkFromArguments(["--network", "base_sepolia"]), "base_sepolia");
@@ -23,4 +26,35 @@ test("DEPLOYMENT_FILE overrides network-derived output", () => {
     env: { DEPLOYMENT_FILE: "custom/deployment.json" }
   });
   assert.equal(resolved, path.resolve(process.cwd(), "custom/deployment.json"));
+});
+
+test("public deployment output requires and verifies an external manifest digest", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "deployment-output-"));
+  try {
+    const deploymentPath = path.join(directory, "manifest.json");
+    const bytes = Buffer.from(JSON.stringify({ network: "base", config: {} }));
+    fs.writeFileSync(deploymentPath, bytes);
+    const digest = crypto.createHash("sha256").update(bytes).digest("hex");
+
+    assert.throws(
+      () => loadDeployment({ env: { DEPLOYMENT_FILE: deploymentPath }, argv: [] }),
+      /DEPLOYMENT_MANIFEST_SHA256 is required/
+    );
+    assert.throws(
+      () => loadDeployment({
+        env: { DEPLOYMENT_FILE: deploymentPath, DEPLOYMENT_MANIFEST_SHA256: "00".repeat(32) },
+        argv: []
+      }),
+      /digest mismatch/
+    );
+    assert.equal(
+      loadDeployment({
+        env: { DEPLOYMENT_FILE: deploymentPath, DEPLOYMENT_MANIFEST_SHA256: digest },
+        argv: []
+      }).deploymentSha256,
+      digest
+    );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

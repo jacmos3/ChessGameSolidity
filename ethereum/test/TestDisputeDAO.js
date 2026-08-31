@@ -94,11 +94,11 @@ contract("DisputeDAO", (accounts) => {
     }
   }
 
-  async function lockAndChallenge(gameId, accusedPlayer, options = { from: challenger }) {
+  async function lockAndChallenge(gameId, options = { from: player1 }) {
     const disputeId = await disputeDAO.gameToDispute(gameId);
     const fullDispute = await disputeDAO.disputes(disputeId);
     await lockGameBonds(gameId, fullDispute.gameStake);
-    return disputeDAO.challenge(gameId, accusedPlayer, options);
+    return disputeDAO.challenge(gameId, options);
   }
 
   beforeEach(async () => {
@@ -136,6 +136,8 @@ contract("DisputeDAO", (accounts) => {
     await chessToken.mintPlayToEarn(arb3, mintAmount, { from: admin });
     // Approve tokens
     await chessToken.approve(disputeDAO.address, mintAmount, { from: challenger });
+    await chessToken.approve(disputeDAO.address, mintAmount, { from: player1 });
+    await chessToken.approve(disputeDAO.address, mintAmount, { from: player2 });
     await chessToken.approve(arbitratorRegistry.address, mintAmount, { from: arb1 });
     await chessToken.approve(arbitratorRegistry.address, mintAmount, { from: arb2 });
     await chessToken.approve(arbitratorRegistry.address, mintAmount, { from: arb3 });
@@ -257,78 +259,77 @@ contract("DisputeDAO", (accounts) => {
     });
 
     it("should create a challenge", async () => {
-      const balanceBefore = await chessToken.balanceOf(challenger);
+      const balanceBefore = await chessToken.balanceOf(player1);
 
-      await lockAndChallenge(gameId, player1, { from: challenger });
+      await lockAndChallenge(gameId, { from: player1 });
 
-      const balanceAfter = await chessToken.balanceOf(challenger);
+      const balanceAfter = await chessToken.balanceOf(player1);
       const diff = web3.utils.toBN(balanceBefore).sub(web3.utils.toBN(balanceAfter));
       assert.equal(diff.toString(), CHALLENGE_DEPOSIT);
     });
 
     it("should enter the irrevocable future-entropy selection phase", async () => {
-      await lockAndChallenge(gameId, player1, { from: challenger });
+      await lockAndChallenge(gameId, { from: player1 });
 
       const dispute = await disputeDAO.getDispute(1);
       assert.equal(dispute.state.toString(), "6"); // Selecting
-      assert.equal(dispute.challenger, challenger);
-      assert.equal(dispute.accusedPlayer, player1);
+      assert.equal(dispute.challenger, player1);
       assert.isTrue(
         web3.utils.toBN(await disputeDAO.panelSelectionBlock(1)).gt(web3.utils.toBN("0")),
         "A future selection block must be committed"
       );
     });
 
-    it("should set otherPlayer to the non-accused game participant", async () => {
-      await lockAndChallenge(gameId, player1, { from: challenger });
-
-      const fullDispute = await disputeDAO.disputes(1);
-      assert.equal(fullDispute.otherPlayer, player2);
+    it("should derive a proportional deposit from the locked game exposure", async () => {
+      await lockGameBonds(gameId, stake);
+      assert.equal(
+        (await disputeDAO.getRequiredChallengeDepositForGame(gameId)).toString(),
+        CHALLENGE_DEPOSIT
+      );
     });
 
-    it("should reject challenges against addresses that are not players in the game", async () => {
+    it("should reject challenges from addresses that are not players in the game", async () => {
+      await lockGameBonds(gameId, stake);
       await expectRevert(
-        lockAndChallenge(gameId, gameManager, { from: challenger }),
-        "challenging an address that is not a player"
+        disputeDAO.challenge(gameId, { from: challenger }),
+        "challenge by a non-participant"
       );
     });
 
     it("should track active challenges per user", async () => {
-      await lockAndChallenge(gameId, player1, { from: challenger });
+      await lockAndChallenge(gameId, { from: player1 });
 
-      const activeCount = await disputeDAO.activeChallenges(challenger);
+      const activeCount = await disputeDAO.activeChallenges(player1);
       assert.equal(activeCount.toString(), "1");
     });
 
     it("should not expose a panel in the challenge transaction", async () => {
-      await lockAndChallenge(gameId, player1, { from: challenger });
+      await lockAndChallenge(gameId, { from: player1 });
 
       const arbitrators = await disputeDAO.getSelectedArbitrators(1);
       assert.equal(arbitrators.length, 0, "Selection must use a later block hash");
     });
 
-    it("should defeat a real same-transaction selective-abort helper", async () => {
+    it("should reject a same-transaction selective-abort helper that is not a player", async () => {
       const helper = await SelectiveAbortChallenger.new({ from: challenger });
       await lockGameBonds(gameId, stake);
       await chessToken.transfer(helper.address, CHALLENGE_DEPOSIT, { from: challenger });
 
-      await helper.attemptSelectiveAbort(
-        disputeDAO.address,
-        chessToken.address,
-        gameId,
-        player1,
-        "0x0000000000000000000000000000000000000000",
-        { from: challenger }
+      await expectRevert(
+        helper.attemptSelectiveAbort(
+          disputeDAO.address,
+          chessToken.address,
+          gameId,
+          player1,
+          "0x0000000000000000000000000000000000000000",
+          { from: challenger }
+        ),
+        "non-participant selective-abort helper"
       );
-
-      const dispute = await disputeDAO.getDispute(1);
-      assert.equal((await helper.observedPanelSize()).toString(), "0");
-      assert.equal(dispute.challenger, helper.address);
-      assert.equal(dispute.state.toString(), "6");
-      assert.equal((await disputeDAO.disputeDeposits(1)).toString(), CHALLENGE_DEPOSIT);
+      assert.equal((await disputeDAO.disputeDeposits(1)).toString(), "0");
     });
 
-    it("should reject an immature pool before taking a deposit and leave its stake withdrawable", async () => {
+    it("should preserve a valid challenge through the backstop when the pool is immature", async () => {
       const immatureRegistry = await ArbitratorRegistry.new(chessToken.address, { from: admin });
       const immatureDAO = await DisputeDAO.new(
         chessToken.address,
@@ -361,20 +362,22 @@ contract("DisputeDAO", (accounts) => {
         stake,
         { from: gameManager }
       );
-      await chessToken.approve(immatureDAO.address, CHALLENGE_DEPOSIT, { from: challenger });
-      const challengerBalanceBefore = await chessToken.balanceOf(challenger);
+      await chessToken.approve(immatureDAO.address, CHALLENGE_DEPOSIT, { from: player1 });
+      const challengerBalanceBefore = await chessToken.balanceOf(player1);
 
-      await expectRevert(
-        immatureDAO.challenge(immatureGameId, player1, { from: challenger }),
-        "an immature arbitrator population"
-      );
+      await immatureDAO.challenge(immatureGameId, { from: player1 });
 
-      assert.equal((await immatureDAO.disputeDeposits(1)).toString(), "0");
-      assert.equal((await immatureDAO.activeChallenges(challenger)).toString(), "0");
+      assert.equal((await immatureDAO.getDispute(1)).state.toString(), "7");
+      assert.equal((await immatureDAO.disputeDeposits(1)).toString(), CHALLENGE_DEPOSIT);
+      assert.equal((await immatureDAO.activeChallenges(player1)).toString(), "1");
+      assert.equal((await immatureDAO.selectionSequenceCounter()).toString(), "0");
+      assert.equal((await immatureRegistry.activePanelSelection()).toString(), "0");
       assert.equal(
-        (await chessToken.balanceOf(challenger)).toString(),
-        challengerBalanceBefore.toString(),
-        "Admission failure must roll back the deposit transfer"
+        web3.utils.toBN(challengerBalanceBefore)
+          .sub(web3.utils.toBN(await chessToken.balanceOf(player1)))
+          .toString(),
+        CHALLENGE_DEPOSIT,
+        "The unresolved challenge must retain the same escrowed deposit"
       );
 
       for (const arbitrator of [arb1, arb2, arb3]) {
@@ -384,7 +387,7 @@ contract("DisputeDAO", (accounts) => {
     });
 
     it("should refresh an expired selection target without releasing the challenge", async () => {
-      await lockAndChallenge(gameId, player1, { from: challenger });
+      await lockAndChallenge(gameId, { from: player1 });
       const target = web3.utils.toBN(await disputeDAO.panelSelectionBlock(1));
       const current = web3.utils.toBN(await web3.eth.getBlockNumber());
       const blocksToExpiry = target.add(web3.utils.toBN("257")).sub(current).toNumber();
@@ -406,7 +409,100 @@ contract("DisputeDAO", (accounts) => {
       assert.equal((await disputeDAO.getDispute(1)).state.toString(), "6");
     });
 
-    it("should fail closed on a last-look tier exit and recover only through Unresolved", async () => {
+    it("should release the selection lock and give a long-waiting FIFO entry a fresh timeout", async () => {
+      await disputeDAO.registerGame(2, player1, player2, stake, { from: gameManager });
+      await lockAndChallenge(gameId, { from: player1 });
+      await lockAndChallenge(2, { from: player2 });
+      const firstId = await disputeDAO.gameToDispute(gameId);
+      const secondId = await disputeDAO.gameToDispute(2);
+      const timeout = await disputeDAO.PANEL_SELECTION_TIMEOUT();
+      const firstTarget = web3.utils.toBN(await disputeDAO.panelSelectionBlock(firstId));
+      const blockhashWindow = web3.utils.toBN(await disputeDAO.BLOCKHASH_WINDOW());
+
+      await advanceTime(timeout.toNumber() + 1);
+      await expectRevert(
+        disputeDAO.markPanelUnavailable(firstId),
+        "an activated selection while its target blockhash remains recoverable"
+      );
+      while (
+        web3.utils.toBN(await web3.eth.getBlockNumber()).lte(firstTarget.add(blockhashWindow))
+      ) {
+        await mineBlock();
+      }
+      await expectRevert(
+        disputeDAO.refreshPanelSelection(firstId),
+        "refresh after the bounded recovery window"
+      );
+      await disputeDAO.markPanelUnavailable(firstId);
+
+      assert.equal((await arbitratorRegistry.activePanelSelection()).toString(), "0");
+      assert.equal((await disputeDAO.nextSelectionSequence()).toString(), "2");
+      const promotedAt = await disputeDAO.panelSelectionScheduledAt(secondId);
+      const latestBlock = await web3.eth.getBlock("latest");
+      assert.equal(promotedAt.toString(), latestBlock.timestamp.toString());
+      await expectRevert(
+        disputeDAO.markPanelUnavailable(secondId),
+        "a promoted entry before its own full timeout"
+      );
+
+      await disputeDAO.activatePanelSelection(secondId);
+      assert.isTrue(
+        web3.utils.toBN(await disputeDAO.panelSelectionBlock(secondId)).gt(web3.utils.toBN("0"))
+      );
+    });
+
+    it("should not time out an activated panel before its future entropy can be consumed", async () => {
+      await lockAndChallenge(gameId, { from: player1 });
+      const disputeId = await disputeDAO.gameToDispute(gameId);
+      const target = web3.utils.toBN(await disputeDAO.panelSelectionBlock(disputeId));
+      const timeout = await disputeDAO.PANEL_SELECTION_TIMEOUT();
+
+      // A timestamp jump can cross the seven-day recovery deadline while only
+      // mining one block. The committed future target must still win over a
+      // permissionless timeout attempt.
+      await advanceTime(timeout.toNumber() + 1);
+      await expectRevert(
+        disputeDAO.markPanelUnavailable(disputeId),
+        "timeout before recoverable future entropy is finalized"
+      );
+      while (web3.utils.toBN(await web3.eth.getBlockNumber()).lte(target)) await mineBlock();
+
+      await disputeDAO.finalizePanel(disputeId);
+      assert.equal((await disputeDAO.getDispute(disputeId)).state.toString(), "2");
+      assert.equal((await disputeDAO.disputeDeposits(disputeId)).toString(), CHALLENGE_DEPOSIT);
+    });
+
+    it("should immediately backstop a promoted FIFO head that became structurally impossible", async () => {
+      await disputeDAO.registerGame(2, player1, player2, stake, { from: gameManager });
+      await lockAndChallenge(gameId, { from: player1 });
+      await lockAndChallenge(2, { from: player2 });
+      const firstId = await disputeDAO.gameToDispute(gameId);
+      const secondId = await disputeDAO.gameToDispute(2);
+
+      // Finalizing the only three arbitrators on the first dispute promotes the
+      // second as a transiently unavailable FIFO head.
+      await finalizeScheduledPanel(firstId);
+      assert.equal((await disputeDAO.nextSelectionSequence()).toString(), "2");
+      assert.equal((await disputeDAO.panelSelectionBlock(secondId)).toString(), "0");
+
+      // A newly recorded relationship permanently removes one of the three
+      // potential candidates for this game. The remaining two can never meet
+      // the snapshotted three-address minimum, even after assignments clear.
+      await disputeDAO.registerGame(3, arb1, player1, stake, { from: gameManager });
+      const tx = await disputeDAO.activatePanelSelection(secondId);
+
+      const second = await disputeDAO.getDispute(secondId);
+      assert.equal(second.state.toString(), "7", "Structurally impossible head must use backstop");
+      assert.equal((await disputeDAO.nextSelectionSequence()).toString(), "3");
+      assert.equal((await arbitratorRegistry.activePanelSelection()).toString(), "0");
+      assert.equal((await disputeDAO.disputeDeposits(secondId)).toString(), CHALLENGE_DEPOSIT);
+      assert.isTrue(
+        tx.logs.some((log) => log.event === "StructuralPanelUnavailable"),
+        "The structural reason must be observable"
+      );
+    });
+
+    it("should block a last-look tier exit without invalidating the committed panel", async () => {
       const tierUpgrade = web3.utils.toWei("4000", "ether");
       await arbitratorRegistry.stake(tierUpgrade, { from: arb1 });
       await advanceTime(7 * 24 * 3600 + 1);
@@ -428,37 +524,23 @@ contract("DisputeDAO", (accounts) => {
         stake,
         { from: gameManager }
       );
-      await disputeDAO.challenge(lastLookGameId, player1, { from: challenger });
+      await disputeDAO.challenge(lastLookGameId, { from: player1 });
       const disputeId = await disputeDAO.gameToDispute(lastLookGameId);
       const target = web3.utils.toBN(await disputeDAO.panelSelectionBlock(disputeId));
       while (web3.utils.toBN(await web3.eth.getBlockNumber()).lt(target)) await mineBlock();
 
       // The target hash is now public. Moving from tier two back to tier one must
       // not let the arbitrator choose whether the known seed is used.
-      await arbitratorRegistry.unstake(tierUpgrade, { from: arb1 });
       await expectRevert(
-        disputeDAO.finalizePanel(disputeId),
-        "a tier and active-stake mutation after the seed"
+        arbitratorRegistry.unstake(tierUpgrade, { from: arb1 }),
+        "a stake mutation while population is committed"
       );
-      assert.equal((await disputeDAO.disputeDeposits(disputeId)).toString(), CHALLENGE_DEPOSIT);
-      assert.equal((await disputeDAO.getDispute(disputeId)).state.toString(), "6");
-
-      const current = web3.utils.toBN(await web3.eth.getBlockNumber());
-      const expiry = target.add(web3.utils.toBN("257"));
-      if (current.lt(expiry)) await mineBlocks(expiry.sub(current).toNumber());
-      await expectRevert(
-        disputeDAO.refreshPanelSelection(disputeId),
-        "a changed snapshot must not receive another entropy draw"
-      );
-
-      const timeout = await disputeDAO.PANEL_SELECTION_TIMEOUT();
-      await advanceTime(timeout.toNumber() + 1);
-      await disputeDAO.markPanelUnavailable(disputeId, { from: challenger });
-      assert.equal((await disputeDAO.getDispute(disputeId)).state.toString(), "7");
+      await disputeDAO.finalizePanel(disputeId);
+      assert.equal((await disputeDAO.getDispute(disputeId)).state.toString(), "2");
       assert.equal((await disputeDAO.disputeDeposits(disputeId)).toString(), CHALLENGE_DEPOSIT);
     });
 
-    it("should invalidate a panel when a matured pending top-up activates after the seed", async () => {
+    it("should block a matured top-up activation without invalidating the committed panel", async () => {
       const tierUpgrade = web3.utils.toWei("4000", "ether");
       await arbitratorRegistry.stake(tierUpgrade, { from: arb1 });
       await advanceTime(7 * 24 * 3600 + 1);
@@ -479,24 +561,24 @@ contract("DisputeDAO", (accounts) => {
         stake,
         { from: gameManager }
       );
-      await disputeDAO.challenge(activationGameId, player1, { from: challenger });
+      await disputeDAO.challenge(activationGameId, { from: player1 });
       const disputeId = await disputeDAO.gameToDispute(activationGameId);
       const target = web3.utils.toBN(await disputeDAO.panelSelectionBlock(disputeId));
       while (web3.utils.toBN(await web3.eth.getBlockNumber()).lt(target)) await mineBlock();
 
-      await arbitratorRegistry.activatePendingStake({ from: arb1 });
       await expectRevert(
-        disputeDAO.finalizePanel(disputeId),
-        "activation that changes snapshotted power and tier"
+        arbitratorRegistry.activatePendingStake({ from: arb1 }),
+        "activation while population is committed"
       );
-
-      assert.equal((await disputeDAO.getDispute(disputeId)).state.toString(), "6");
-      assert.equal(await disputeDAO.panelEntropy(disputeId), `0x${"0".repeat(64)}`);
+      await disputeDAO.finalizePanel(disputeId);
+      assert.equal((await disputeDAO.getDispute(disputeId)).state.toString(), "2");
       assert.equal((await disputeDAO.disputeDeposits(disputeId)).toString(), CHALLENGE_DEPOSIT);
     });
 
-    it("should snapshot panel and voting policy when the challenge deposit is locked", async () => {
-      await lockAndChallenge(gameId, player1, { from: challenger });
+    it("should snapshot policy at registration for the direct-manager fallback", async () => {
+      await lockGameBonds(gameId, stake);
+      const originalDeadline = await disputeDAO.challengeDeadline(1);
+      const balanceBefore = await chessToken.balanceOf(player1);
 
       await disputeDAO.setArbitrationSecurityParameters(
         15,
@@ -505,14 +587,20 @@ contract("DisputeDAO", (accounts) => {
         { from: admin }
       );
       await disputeDAO.setParameters(
-        48 * 3600,
+        1 * 3600,
         1 * 3600,
         2 * 3600,
         100,
         100,
-        CHALLENGE_DEPOSIT,
+        web3.utils.toWei("100", "ether"),
         { from: admin }
       );
+      await disputeDAO.setChallengeDepositBps(10000, { from: admin });
+
+      await disputeDAO.registerGame(2, player1, player2, stake, { from: gameManager });
+      const second = await disputeDAO.disputes(2);
+
+      await disputeDAO.challenge(gameId, { from: player1 });
 
       assert.equal((await disputeDAO.disputeMinimumPanelSize(1)).toString(), "3");
       assert.equal((await disputeDAO.disputeQuorumPercentage(1)).toString(), "66");
@@ -521,6 +609,26 @@ contract("DisputeDAO", (accounts) => {
       assert.equal((await disputeDAO.disputeRevealPeriod(1)).toString(), (24 * 3600).toString());
       assert.equal((await disputeDAO.commitPeriod()).toString(), (1 * 3600).toString());
       assert.equal((await disputeDAO.revealPeriod()).toString(), (2 * 3600).toString());
+      assert.equal((await disputeDAO.challengeDeadline(1)).toString(), originalDeadline.toString());
+      assert.equal(
+        (await disputeDAO.getRequiredChallengeDepositForGame(gameId)).toString(),
+        CHALLENGE_DEPOSIT,
+        "Deposit floor/rate changes must apply only to future registrations"
+      );
+      assert.equal(
+        web3.utils.toBN(balanceBefore)
+          .sub(web3.utils.toBN(await chessToken.balanceOf(player1)))
+          .toString(),
+        CHALLENGE_DEPOSIT
+      );
+
+      assert.equal(
+        web3.utils.toBN(await disputeDAO.challengeDeadline(2))
+          .sub(web3.utils.toBN(second.registeredAt))
+          .toString(),
+        (1 * 3600).toString(),
+        "New registrations must use the updated challenge window"
+      );
 
       const finalization = await finalizeScheduledPanel(1);
       const finalizedBlock = await web3.eth.getBlock(finalization.receipt.blockNumber);
@@ -529,47 +637,53 @@ contract("DisputeDAO", (accounts) => {
       assert.equal(
         web3.utils.toBN(storedDispute.commitDeadline).sub(finalizedAt).toString(),
         (24 * 3600).toString(),
-        "The first round must use the commit period snapshotted at challenge"
+        "The first round must use the commit period snapshotted at registration"
       );
       assert.equal(
         web3.utils.toBN(storedDispute.revealDeadline)
           .sub(web3.utils.toBN(storedDispute.commitDeadline))
           .toString(),
         (24 * 3600).toString(),
-        "Every round must use the reveal period snapshotted at challenge"
+        "Every round must use the reveal period snapshotted at registration"
       );
       assert.equal((await disputeDAO.getSelectedArbitrators(1)).length, 3);
       assert.equal((await disputeDAO.getEffectiveQuorum(1)).toString(), "3");
     });
 
     it("should reject challenge on non-pending game", async () => {
-      await lockAndChallenge(gameId, player1, { from: challenger });
+      await lockAndChallenge(gameId, { from: player1 });
 
       // Try to challenge again
       await chessToken.mintPlayToEarn(accounts[9], web3.utils.toWei("100", "ether"), { from: admin });
       await chessToken.approve(disputeDAO.address, web3.utils.toWei("100", "ether"), { from: accounts[9] });
 
       await expectRevert(
-        lockAndChallenge(gameId, player2, { from: accounts[9] }),
+        lockAndChallenge(gameId, { from: accounts[9] }),
         "a second challenge for the same game"
       );
     });
 
-    it("should reject if challenger has too many active challenges", async () => {
-      // Create 3 games and challenge all
+    it("should not strand a fourth bonded game behind a per-challenger cap", async () => {
+      // All four games already carry independent locked exposure. A global cap
+      // here would let an opponent strand the fourth game's challenge window.
       for (let i = 2; i <= 4; i++) {
         await disputeDAO.registerGame(i, player1, player2, stake, { from: gameManager });
       }
 
-      await lockAndChallenge(gameId, player1, { from: challenger });
-      await lockAndChallenge(2, player1, { from: challenger });
-      await lockAndChallenge(3, player1, { from: challenger });
+      await lockAndChallenge(gameId, { from: player1 });
+      await lockAndChallenge(2, { from: player1 });
+      await lockAndChallenge(3, { from: player1 });
+      await lockAndChallenge(4, { from: player1 });
 
-      // 4th challenge should fail
-      await expectRevert(
-        lockAndChallenge(4, player1, { from: challenger }),
-        "a fourth active challenge"
-      );
+      assert.equal((await disputeDAO.activeChallenges(player1)).toString(), "4");
+      assert.equal((await disputeDAO.selectionSequenceCounter()).toString(), "4");
+      for (let disputeId = 1; disputeId <= 4; disputeId++) {
+        assert.equal(
+          (await disputeDAO.disputeDeposits(disputeId)).toString(),
+          CHALLENGE_DEPOSIT,
+          `Dispute ${disputeId} must retain its independent deposit`
+        );
+      }
     });
 
     it("should scale required panel active stake with the registered game stake", async () => {
@@ -590,24 +704,162 @@ contract("DisputeDAO", (accounts) => {
 
       const requiredPanelActiveStake = await disputeDAO.getRequiredPanelCollateralForGame(highValueGameId);
       assert.equal(requiredPanelActiveStake.toString(), web3.utils.toWei("60000", "ether"));
+      assert.equal(
+        (await disputeDAO.getRequiredChallengeDepositForGame(highValueGameId)).toString(),
+        web3.utils.toWei("3000", "ether"),
+        "The challenge deposit must scale to 5% of locked CHESS exposure"
+      );
+
+      const requiredDeposit = await disputeDAO.getRequiredChallengeDepositForGame(highValueGameId);
+      await chessToken.approve(disputeDAO.address, requiredDeposit, { from: player1 });
+      const balanceBefore = await chessToken.balanceOf(player1);
+      const challengeTx = await disputeDAO.challenge(highValueGameId, { from: player1 });
+
+      assert.equal((await disputeDAO.getDispute(2)).state.toString(), "7");
+      assert.equal((await disputeDAO.disputeDeposits(2)).toString(), requiredDeposit.toString());
+      assert.equal((await disputeDAO.activeChallenges(player1)).toString(), "1");
+      assert.equal((await disputeDAO.selectionSequenceCounter()).toString(), "0");
+      assert.equal((await arbitratorRegistry.activePanelSelection()).toString(), "0");
+      assert.equal(
+        web3.utils.toBN(balanceBefore)
+          .sub(web3.utils.toBN(await chessToken.balanceOf(player1)))
+          .toString(),
+        requiredDeposit.toString(),
+        "A structurally unavailable challenge must remain escrowed for backstop"
+      );
+      assert.exists(
+        challengeTx.logs.find((log) => log.event === "StructuralPanelUnavailable"),
+        "The structural backstop reason should be observable"
+      );
 
       await expectRevert(
-        disputeDAO.challenge(highValueGameId, player1, { from: challenger }),
-        "a 3,000 CHESS pool securing a 60,000 CHESS exposure"
+        disputeDAO.resolveByBackstop(2, 1, { from: player2 }),
+        "a non-governance backstop decision"
+      );
+      await disputeDAO.resolveByBackstop(2, 1, { from: admin });
+      assert.equal((await disputeDAO.getDispute(2)).state.toString(), "4");
+      assert.equal((await disputeDAO.disputeDeposits(2)).toString(), "0");
+      assert.equal((await disputeDAO.activeChallenges(player1)).toString(), "0");
+    });
+
+    it("should cap same-tier capacity and route whale-dependent collateral to backstop", async () => {
+      const skewedRegistry = await ArbitratorRegistryHarness.new(chessToken.address, { from: admin });
+      const skewedDAO = await DisputeDAO.new(
+        chessToken.address,
+        bondingManager.address,
+        skewedRegistry.address,
+        { from: admin }
+      );
+      const registryRole = await skewedRegistry.DISPUTE_MANAGER_ROLE();
+      const gameRole = await skewedDAO.GAME_MANAGER_ROLE();
+      await skewedRegistry.grantRole(registryRole, skewedDAO.address, { from: admin });
+      await skewedRegistry.grantRole(registryRole, admin, { from: admin });
+      await skewedDAO.grantRole(gameRole, gameManager, { from: admin });
+      await skewedRegistry.fillTier1ToCountForTest(15, { from: admin });
+
+      const skewedGameId = 904;
+      const highStake = web3.utils.toWei("1", "ether");
+      await bondingManager.depositBond(
+        web3.utils.toWei("1000", "ether"),
+        { from: player1, value: web3.utils.toWei("1", "ether") }
+      );
+      await bondingManager.depositBond(
+        web3.utils.toWei("1000", "ether"),
+        { from: player2, value: web3.utils.toWei("1", "ether") }
+      );
+      await bondingManager.lockBondsForGame(
+        skewedGameId,
+        player1,
+        player2,
+        highStake,
+        { from: gameManager }
+      );
+      await skewedDAO.registerGame(
+        skewedGameId,
+        player1,
+        player2,
+        highStake,
+        { from: gameManager }
+      );
+
+      const tierCounts = await skewedRegistry.getTierCounts();
+      assert.equal(tierCounts.t1.toString(), "15", "The regression requires 15 eligible tier-one positions");
+      assert.equal(
+        (await skewedDAO.getRequiredPanelCollateralForGame(skewedGameId)).toString(),
+        web3.utils.toWei("6000", "ether"),
+        "The locked game exposure must exceed the five selectable tier-one stakes"
+      );
+
+      const capacity = await skewedRegistry.getPotentialSelectionCapacity(
+        1,
+        player1,
+        player2,
+        player1,
+        5,
+        0,
+        { from: admin }
+      );
+      assert.equal(capacity[0].toString(), "5", "Tier capacity must use the selection cap");
+      assert.equal(
+        capacity[1].toString(),
+        web3.utils.toWei("5000", "ether"),
+        "Admission must use collateral guaranteed by the selectable subset"
+      );
+
+      const requiredDeposit = await skewedDAO.getRequiredChallengeDepositForGame(skewedGameId);
+      await chessToken.approve(skewedDAO.address, requiredDeposit, { from: player1 });
+      const balanceBefore = await chessToken.balanceOf(player1);
+
+      // One same-tier whale now makes a lucky five-address draw sufficiently
+      // collateralized. Structural capacity must still use the worst selectable
+      // subset instead of letting a challenge retry until that whale is drawn.
+      await skewedRegistry.setTier1StakeForTest(
+        14,
+        web3.utils.toWei("4000", "ether"),
+        { from: admin }
+      );
+      const whaleCapacity = await skewedRegistry.getPotentialSelectionCapacity(
+        1,
+        player1,
+        player2,
+        player1,
+        5,
+        0,
+        { from: admin }
+      );
+      assert.equal(whaleCapacity[0].toString(), "5");
+      assert.equal(
+        whaleCapacity[1].toString(),
+        web3.utils.toWei("5000", "ether"),
+        "A lucky whale-dependent panel must not raise guaranteed collateral"
+      );
+
+      await skewedDAO.challenge(skewedGameId, { from: player1 });
+
+      assert.equal((await skewedDAO.getDispute(1)).state.toString(), "7");
+      assert.equal((await skewedDAO.activeChallenges(player1)).toString(), "1");
+      assert.equal((await skewedDAO.selectionSequenceCounter()).toString(), "0");
+      assert.equal((await skewedDAO.disputeDeposits(1)).toString(), requiredDeposit.toString());
+      assert.equal((await skewedRegistry.activePanelSelection()).toString(), "0");
+      assert.equal(
+        web3.utils.toBN(balanceBefore)
+          .sub(web3.utils.toBN(await chessToken.balanceOf(player1)))
+          .toString(),
+        requiredDeposit.toString()
       );
     });
 
     it("should fail closed before taking a deposit when either game bond is missing", async () => {
-      const challengerBalanceBefore = await chessToken.balanceOf(challenger);
+      const challengerBalanceBefore = await chessToken.balanceOf(player1);
 
       await expectRevert(
-        disputeDAO.challenge(gameId, player1, { from: challenger }),
+        disputeDAO.challenge(gameId, { from: player1 }),
         "missing GameBond records must never use a live oracle fallback"
       );
 
       assert.equal((await disputeDAO.disputeDeposits(1)).toString(), "0");
       assert.equal(
-        (await chessToken.balanceOf(challenger)).toString(),
+        (await chessToken.balanceOf(player1)).toString(),
         challengerBalanceBefore.toString()
       );
     });
@@ -619,11 +871,11 @@ contract("DisputeDAO", (accounts) => {
 
     beforeEach(async () => {
       await disputeDAO.registerGame(gameId, player1, player2, stake, { from: gameManager });
-      await lockAndChallenge(gameId, player1, { from: challenger });
+      await lockAndChallenge(gameId, { from: player1 });
     });
 
     it("should allow arbitrator to commit vote", async () => {
-      const vote = 2; // Cheat
+      const vote = 2; // WhiteCheat
       const salt = web3.utils.keccak256("secret_salt");
       const commitHash = await voteCommitment(1, vote, salt, arb1);
 
@@ -676,7 +928,7 @@ contract("DisputeDAO", (accounts) => {
     });
 
     it("should not close window if already challenged", async () => {
-      await lockAndChallenge(gameId, player1, { from: challenger });
+      await lockAndChallenge(gameId, { from: player1 });
 
       // Advance time
       await web3.currentProvider.send({
@@ -728,9 +980,9 @@ contract("DisputeDAO", (accounts) => {
     });
 
     it("does not turn a stale challenged dispute into a free Vote.None", async () => {
-      const challengerBalanceBefore = await chessToken.balanceOf(challenger);
+      const challengerBalanceBefore = await chessToken.balanceOf(player1);
       await disputeDAO.registerGame(gameId, player1, player2, stake, { from: gameManager });
-      await lockAndChallenge(gameId, player1, { from: challenger });
+      await lockAndChallenge(gameId, { from: player1 });
 
       await advanceTime(30 * 24 * 3600 + 1);
       await expectRevert(
@@ -738,7 +990,7 @@ contract("DisputeDAO", (accounts) => {
         "turning a stale challenged dispute into Vote.None"
       );
 
-      const challengerBalanceAfter = await chessToken.balanceOf(challenger);
+      const challengerBalanceAfter = await chessToken.balanceOf(player1);
       const reservedDeposit = await disputeDAO.disputeDeposits(1);
       const dispute = await disputeDAO.getDispute(1);
       assert.equal(
@@ -760,7 +1012,7 @@ contract("DisputeDAO", (accounts) => {
 
     it("should allow challenge within 48 hours", async () => {
       // Challenge immediately - should work
-      await lockAndChallenge(gameId, player1, { from: challenger });
+      await lockAndChallenge(gameId, { from: player1 });
 
       const dispute = await disputeDAO.getDispute(1);
       assert.equal(dispute.state.toString(), "6"); // Selecting
@@ -782,7 +1034,7 @@ contract("DisputeDAO", (accounts) => {
       }, () => {});
 
       await expectRevert(
-        lockAndChallenge(gameId, player1, { from: challenger }),
+        lockAndChallenge(gameId, { from: player1 }),
         "challenging after the window expires"
       );
     });
@@ -812,7 +1064,7 @@ contract("DisputeDAO", (accounts) => {
     });
 
     it("should return 0 remaining time after a challenge is submitted", async () => {
-      await lockAndChallenge(gameId, player1, { from: challenger });
+      await lockAndChallenge(gameId, { from: player1 });
 
       const remaining = await disputeDAO.getChallengeWindowRemaining(gameId);
       assert.equal(remaining.toString(), "0", "Once challenged, the pending challenge window should be closed");
@@ -829,7 +1081,7 @@ contract("DisputeDAO", (accounts) => {
     });
 
     it("should return false for isChallengeWindowOpen after challenge", async () => {
-      await lockAndChallenge(gameId, player1, { from: challenger });
+      await lockAndChallenge(gameId, { from: player1 });
 
       const isOpen = await disputeDAO.isChallengeWindowOpen(gameId);
       assert.equal(isOpen, false, "Should return false after challenge (state not Pending)");
@@ -842,15 +1094,14 @@ contract("DisputeDAO", (accounts) => {
 
     beforeEach(async () => {
       await disputeDAO.registerGame(gameId, player1, player2, stake, { from: gameManager });
-      await lockAndChallenge(gameId, player1, { from: challenger });
+      await lockAndChallenge(gameId, { from: player1 });
     });
 
     it("should return dispute info", async () => {
       const dispute = await disputeDAO.getDispute(1);
 
       assert.equal(dispute.gameId.toString(), gameId.toString());
-      assert.equal(dispute.challenger, challenger);
-      assert.equal(dispute.accusedPlayer, player1);
+      assert.equal(dispute.challenger, player1);
     });
 
     it("should return selected arbitrators", async () => {
@@ -1038,7 +1289,7 @@ contract("DisputeDAO", (accounts) => {
       await bondingManager.updatePrice(initialPrice, { from: admin });
       await bondingManager.lockBondsForGame(gameId, player1, player2, stake, { from: gameManager });
       await disputeDAO.registerGame(gameId, player1, player2, stake, { from: gameManager });
-      await lockAndChallenge(gameId, player1, { from: challenger });
+      await lockAndChallenge(gameId, { from: player1 });
       await finalizeScheduledPanel(1);
     });
 
@@ -1082,6 +1333,8 @@ contract("DisputeDAO", (accounts) => {
     it("should resolve a dispute with the bootstrap panel instead of escalating forever", async () => {
       const { disputeId } = await commitAndRevealVotes({ defaultVote: 2 });
       const selectedArbitrators = await disputeDAO.getSelectedArbitrators(disputeId);
+      const challengerBeforeResolution = await chessToken.balanceOf(player1);
+      const innocentBeforeResolution = await chessToken.balanceOf(player2);
 
       const assignmentsBefore = await arbitratorRegistry.activeAssignments(selectedArbitrators[0]);
       assert.equal(assignmentsBefore.toString(), "1", "The panel stake should remain locked");
@@ -1091,8 +1344,55 @@ contract("DisputeDAO", (accounts) => {
       const dispute = await disputeDAO.getDispute(disputeId);
       const assignmentsAfter = await arbitratorRegistry.activeAssignments(selectedArbitrators[0]);
       assert.equal(dispute.state.toString(), "4", "Dispute should resolve with the available bootstrap panel");
-      assert.equal(dispute.finalDecision.toString(), "2", "Decision should be Cheat");
+      assert.equal(dispute.finalDecision.toString(), "2", "Decision should be WhiteCheat");
       assert.equal(assignmentsAfter.toString(), "0", "Resolution should release the panel stake");
+      assert.equal(
+        (await chessToken.balanceOf(player1)).toString(),
+        challengerBeforeResolution.toString(),
+        "A challenger identified as the cheater must not recover the deposit"
+      );
+      assert.equal(
+        web3.utils.toBN(await chessToken.balanceOf(player2)).sub(web3.utils.toBN(innocentBeforeResolution)).toString(),
+        web3.utils.toWei("25", "ether"),
+        "The innocent opponent receives compensation from the forfeited deposit"
+      );
+      assert.isTrue((await bondingManager.gameBonds(gameId, player1)).slashed);
+    });
+
+    it("should refund and reward an innocent challenger only when the other player cheated", async () => {
+      const bonus = web3.utils.toWei("25", "ether");
+      await chessToken.transfer(disputeDAO.address, bonus, { from: treasury });
+      const { disputeId } = await commitAndRevealVotes({ defaultVote: 3 });
+      const challengerBeforeResolution = await chessToken.balanceOf(player1);
+
+      await disputeDAO.resolveDispute(disputeId);
+
+      assert.equal((await disputeDAO.getDispute(disputeId)).finalDecision.toString(), "3");
+      assert.equal(
+        web3.utils.toBN(await chessToken.balanceOf(player1)).sub(web3.utils.toBN(challengerBeforeResolution)).toString(),
+        web3.utils.toWei("75", "ether"),
+        "The innocent challenger receives the deposit plus the prefunded capped bonus"
+      );
+      assert.isTrue((await bondingManager.gameBonds(gameId, player2)).slashed);
+    });
+
+    it("should compensate only the non-challenging player when the game is legitimate", async () => {
+      const { disputeId } = await commitAndRevealVotes({ defaultVote: 1 });
+      const challengerBeforeResolution = await chessToken.balanceOf(player1);
+      const opponentBeforeResolution = await chessToken.balanceOf(player2);
+
+      await disputeDAO.resolveDispute(disputeId);
+
+      assert.equal((await disputeDAO.getDispute(disputeId)).finalDecision.toString(), "1");
+      assert.equal(
+        (await chessToken.balanceOf(player1)).toString(),
+        challengerBeforeResolution.toString(),
+        "A failed challenger receives no part of the deposit"
+      );
+      assert.equal(
+        web3.utils.toBN(await chessToken.balanceOf(player2)).sub(web3.utils.toBN(opponentBeforeResolution)).toString(),
+        web3.utils.toWei("25", "ether")
+      );
     });
 
     it("should use snapshotted supermajority when live governance parameters change", async () => {
@@ -1111,7 +1411,7 @@ contract("DisputeDAO", (accounts) => {
 
       const voteMap = {
         defaultVote: 2,
-        [selectedArbitrators[2]]: 3
+        [selectedArbitrators[2]]: 4
       };
 
       await commitAndRevealVotes(voteMap);
@@ -1120,7 +1420,7 @@ contract("DisputeDAO", (accounts) => {
       const dispute = await disputeDAO.getDispute(disputeId);
       const incorrectVoter = await arbitratorRegistry.getArbitratorInfo(selectedArbitrators[2]);
       assert.equal(dispute.state.toString(), "4", "Dispute should still resolve when two of three arbitrators agree");
-      assert.equal(dispute.finalDecision.toString(), "2", "Two cheat votes and one abstain should still produce a cheat decision");
+      assert.equal(dispute.finalDecision.toString(), "2", "Two WhiteCheat votes and one abstain should resolve WhiteCheat");
       assert.equal((await disputeDAO.disputeSupermajority(disputeId)).toString(), "66");
       assert.equal(incorrectVoter.stakedAmount.toString(), web3.utils.toWei("990", "ether"));
       assert.equal(incorrectVoter.reputation.toString(), "99");
@@ -1161,10 +1461,12 @@ contract("DisputeDAO", (accounts) => {
 
       const dispute = await disputeDAO.getDispute(disputeId);
       const nonRevealer = await arbitratorRegistry.getArbitratorInfo(selected[2]);
-      assert.equal(dispute.state.toString(), "6", "Missing minimum diversity must escalate");
+      assert.equal(dispute.state.toString(), "7", "An exhausted pool must go directly to backstop");
       assert.equal(dispute.escalationLevel.toString(), "1");
       assert.equal(dispute.finalDecision.toString(), "0");
       assert.equal((await disputeDAO.disputeDeposits(disputeId)).toString(), CHALLENGE_DEPOSIT);
+      assert.equal((await disputeDAO.selectionSequenceCounter()).toString(), "1");
+      assert.equal((await arbitratorRegistry.activePanelSelection()).toString(), "0");
       assert.equal(nonRevealer.stakedAmount.toString(), web3.utils.toWei("950", "ether"));
       assert.isFalse(nonRevealer.isActive);
       for (const arbitrator of selected) {
@@ -1187,9 +1489,11 @@ contract("DisputeDAO", (accounts) => {
       await disputeDAO.resolveDispute(disputeId, { from: challenger });
 
       const escalated = await disputeDAO.getDispute(disputeId);
-      assert.equal(escalated.state.toString(), "6", "A new future-entropy round must be scheduled");
+      assert.equal(escalated.state.toString(), "7", "An impossible next round must not enter the FIFO");
       assert.equal(escalated.escalationLevel.toString(), "1");
       assert.equal((await disputeDAO.disputeDeposits(disputeId)).toString(), CHALLENGE_DEPOSIT);
+      assert.equal((await disputeDAO.selectionSequenceCounter()).toString(), "1");
+      assert.equal((await arbitratorRegistry.activePanelSelection()).toString(), "0");
 
       for (const arbitrator of selectedArbitrators) {
         const status = await disputeDAO.getVoteStatus(disputeId, arbitrator);
@@ -1202,13 +1506,8 @@ contract("DisputeDAO", (accounts) => {
         assert.isTrue(await arbitratorRegistry.nonRevealPenalized(disputeId, arbitrator));
       }
 
-      await expectRevert(
-        finalizeScheduledPanel(disputeId),
-        "recycling slashed non-revealers into the same dispute"
-      );
-
       const stillOpen = await disputeDAO.getDispute(disputeId);
-      assert.equal(stillOpen.state.toString(), "6");
+      assert.equal(stillOpen.state.toString(), "7");
       assert.equal(stillOpen.finalDecision.toString(), "0");
     });
 
@@ -1218,28 +1517,21 @@ contract("DisputeDAO", (accounts) => {
       const voteMap = {
         defaultVote: 1,
         [selected[1]]: 2,
-        [selected[2]]: 3
+        [selected[2]]: 4
       };
 
       await commitAndRevealVotes(voteMap);
       await disputeDAO.resolveDispute(disputeId);
 
       const escalated = await disputeDAO.getDispute(disputeId);
-      assert.equal(escalated.state.toString(), "6");
+      assert.equal(escalated.state.toString(), "7");
       assert.equal(escalated.escalationLevel.toString(), "1");
+      assert.equal((await disputeDAO.selectionSequenceCounter()).toString(), "1");
+      assert.equal((await arbitratorRegistry.activePanelSelection()).toString(), "0");
       for (const arbitrator of selected) {
         assert.isTrue(await arbitratorRegistry.priorRoundExcluded(disputeId, arbitrator));
         assert.equal((await arbitratorRegistry.activeAssignments(arbitrator)).toString(), "0");
       }
-
-      await expectRevert(
-        finalizeScheduledPanel(disputeId),
-        "recycling a prior inconclusive panel"
-      );
-
-      const timeout = await disputeDAO.PANEL_SELECTION_TIMEOUT();
-      await advanceTime(timeout.toNumber() + 1);
-      await disputeDAO.markPanelUnavailable(disputeId, { from: challenger });
 
       const unresolved = await disputeDAO.getDispute(disputeId);
       const whiteBond = await bondingManager.gameBonds(gameId, player1);
@@ -1257,7 +1549,7 @@ contract("DisputeDAO", (accounts) => {
       );
 
       await expectRevert(
-        disputeDAO.resolveByBackstop(disputeId, 3, { from: admin }),
+        disputeDAO.resolveByBackstop(disputeId, 4, { from: admin }),
         "governance must not settle an unresolved dispute as Abstain"
       );
 
@@ -1266,7 +1558,7 @@ contract("DisputeDAO", (accounts) => {
       assert.equal(resolved.state.toString(), "4");
       assert.equal(resolved.finalDecision.toString(), "1");
       assert.equal((await disputeDAO.disputeDeposits(disputeId)).toString(), "0");
-      assert.equal((await disputeDAO.activeChallenges(challenger)).toString(), "0");
+      assert.equal((await disputeDAO.activeChallenges(player1)).toString(), "0");
     });
   });
 
@@ -1329,20 +1621,20 @@ contract("DisputeDAO", (accounts) => {
         gameStake,
         { from: gameManager }
       );
-      await chessToken.approve(cappedDAO.address, CHALLENGE_DEPOSIT, { from: challenger });
+      await chessToken.approve(cappedDAO.address, CHALLENGE_DEPOSIT, { from: player1 });
 
       const latestBlock = await web3.eth.getBlock("latest");
       const blockGasLimit = web3.utils.toBN(latestBlock.gasLimit);
       const operationalCeiling = blockGasLimit.mul(web3.utils.toBN("9")).div(web3.utils.toBN("10"));
       const scheduleGas = web3.utils.toBN(
-        await cappedDAO.challenge.estimateGas(gasGameId, player1, { from: challenger })
+        await cappedDAO.challenge.estimateGas(gasGameId, { from: player1 })
       );
       assert.isTrue(
         scheduleGas.lt(operationalCeiling),
         `Capped schedule gas ${scheduleGas} must stay below 90% of block limit ${blockGasLimit}`
       );
-      await cappedDAO.challenge(gasGameId, player1, {
-        from: challenger,
+      await cappedDAO.challenge(gasGameId, {
+        from: player1,
         gas: scheduleGas.mul(web3.utils.toBN("11")).div(web3.utils.toBN("10")).toNumber()
       });
 
@@ -1370,7 +1662,11 @@ contract("DisputeDAO", (accounts) => {
         escalationGas.lt(operationalCeiling),
         `Capped escalation gas ${escalationGas} must stay below 90% of block limit ${blockGasLimit}`
       );
-      assert.equal((await cappedDAO.panelSnapshotEligibleCount(1)).toString(), "384");
+      assert.equal(
+        (await cappedDAO.panelSnapshotEligibleCount(1)).toString(),
+        "15",
+        "Snapshot capacity must reflect five selectable candidates per tier"
+      );
       assert.equal((await cappedRegistry.totalArbitrators()).toString(), "384");
       assert.equal((await cappedRegistry.totalStaked()).toString(), web3.utils.toWei("3328000", "ether"));
       assert.equal(
@@ -1429,8 +1725,8 @@ contract("DisputeDAO", (accounts) => {
       const stake = web3.utils.toWei("0.1", "ether");
       await bondingManager.lockBondsForGame(gameId, player1, player2, stake, { from: gameManager });
       await weightedDAO.registerGame(gameId, player1, player2, stake, { from: gameManager });
-      await chessToken.approve(weightedDAO.address, CHALLENGE_DEPOSIT, { from: challenger });
-      await weightedDAO.challenge(gameId, player1, { from: challenger });
+      await chessToken.approve(weightedDAO.address, CHALLENGE_DEPOSIT, { from: player1 });
+      await weightedDAO.challenge(gameId, { from: player1 });
 
       const target = web3.utils.toBN(await weightedDAO.panelSelectionBlock(1));
       while (web3.utils.toBN(await web3.eth.getBlockNumber()).lt(target)) await mineBlock();
@@ -1464,7 +1760,8 @@ contract("DisputeDAO", (accounts) => {
       const resolved = await weightedDAO.getDispute(1);
       assert.equal(resolved.finalDecision.toString(), "1", "100,000 revealed honest CHESS exceeds the 66% power quorum");
       assert.equal(resolved.state.toString(), "4");
-      assert.equal(resolved.cheatVotes.toString(), "0");
+      assert.equal(resolved.whiteCheatVotes.toString(), "0");
+      assert.equal(resolved.blackCheatVotes.toString(), "0");
       assert.isTrue(web3.utils.toBN(resolved.legitVotes).gte(web3.utils.toBN(tier3).mul(web3.utils.toBN("5"))));
 
       const penalizedSybil = await weightedRegistry.getArbitratorInfo(sybils[0]);
@@ -1501,70 +1798,77 @@ contract("DisputeDAO", (accounts) => {
       }
     }
 
-    it("invalidates a pre-scheduled panel when a decoy dispute changes assignments", async () => {
+    it("serializes concurrent selections without invalidation and preserves the snapshot across registry activity", async () => {
+      const extraArbitrators = accounts.slice(10, 16);
+      assert.equal(extraArbitrators.length, 6, "The concurrency regression requires 16 accounts");
+      for (const arbitrator of extraArbitrators) {
+        await chessToken.mintPlayToEarn(arbitrator, TIER1_STAKE, { from: admin });
+        await chessToken.approve(arbitratorRegistry.address, TIER1_STAKE, { from: arbitrator });
+        await arbitratorRegistry.stake(TIER1_STAKE, { from: arbitrator });
+      }
       await advanceTime(7 * 24 * 60 * 60 + 1);
       await bondingManager.updatePrice(initialPrice, { from: admin });
       await bondingManager.lockBondsForGame(1, player1, player2, stake, { from: gameManager });
       await bondingManager.lockBondsForGame(2, player1, player2, stake, { from: gameManager });
       await disputeDAO.registerGame(1, player1, player2, stake, { from: gameManager });
       await disputeDAO.registerGame(2, player1, player2, stake, { from: gameManager });
-      await lockAndChallenge(1, player1, { from: challenger });
-      await lockAndChallenge(2, player2, { from: challenger });
+      await lockAndChallenge(1, { from: player1 });
+      await lockAndChallenge(2, { from: player2 });
 
       const disputeId1 = await disputeDAO.gameToDispute(1);
       const disputeId2 = await disputeDAO.gameToDispute(2);
-      const secondTarget = web3.utils.toBN(await disputeDAO.panelSelectionBlock(disputeId2));
-      while (web3.utils.toBN(await web3.eth.getBlockNumber()).lt(secondTarget)) await mineBlock();
-      // Finalize the decoy only after dispute two's target hash is public.
-      await disputeDAO.finalizePanel(disputeId1);
-
-      await expectRevert(
-        finalizeScheduledPanel(disputeId2),
-        "a decoy assignment created after the second snapshot"
+      assert.isTrue(
+        web3.utils.toBN(await disputeDAO.panelSelectionBlock(disputeId1)).gt(web3.utils.toBN("0")),
+        "The FIFO head must own the only active entropy target"
       );
-
-      const cheatRound = await commitVotes(disputeId1, 2, "cheat");
-      const reservedBeforeResolution = await disputeDAO.totalEscrowedDeposits();
       assert.equal(
-        reservedBeforeResolution.toString(),
-        web3.utils.toBN(CHALLENGE_DEPOSIT).mul(web3.utils.toBN("2")).toString()
+        (await disputeDAO.panelSelectionBlock(disputeId2)).toString(),
+        "0",
+        "The next dispute must remain queued without a grindable seed"
       );
 
+      await finalizeScheduledPanel(disputeId1);
+      const firstRound = await commitVotes(disputeId1, 2, "white-cheat");
+
+      await disputeDAO.activatePanelSelection(disputeId2);
+      const secondTarget = web3.utils.toBN(await disputeDAO.panelSelectionBlock(disputeId2));
+      assert.isTrue(secondTarget.gt(web3.utils.toBN("0")));
+
+      // A game recorded after the historical snapshot must not retroactively
+      // exclude a candidate, even when the timestamp is shared by nearby calls.
+      await disputeDAO.registerGame(3, firstRound.selectedArbitrators[0], player1, stake, {
+        from: gameManager
+      });
+
       await advanceTime(24 * 3600 + 1);
-      await revealVotes(disputeId1, cheatRound);
+      await revealVotes(disputeId1, firstRound);
       await advanceTime(24 * 3600 + 1);
 
-      await disputeDAO.resolveDispute(disputeId1, { from: challenger });
-
-      const reservedAfterFirstResolution = await disputeDAO.totalEscrowedDeposits();
-      const daoBalanceAfterFirstResolution = await chessToken.balanceOf(disputeDAO.address);
-      assert.equal(reservedAfterFirstResolution.toString(), CHALLENGE_DEPOSIT);
-      assert.equal(daoBalanceAfterFirstResolution.toString(), CHALLENGE_DEPOSIT);
-
-      // Releasing the decoy assignment must not make the old draw valid again:
-      // lastVoteTime and weekly quota still prove the population changed after seed.
+      // Resolution/release is deferred for the short committed-population window,
+      // rather than invalidating the second dispute's snapshot.
       await expectRevert(
-        disputeDAO.finalizePanel(disputeId2),
-        "retrying a permanently changed assignment snapshot"
+        disputeDAO.resolveDispute(disputeId1),
+        "release and reputation mutations while another snapshot is committed"
       );
 
-      const timeout = await disputeDAO.PANEL_SELECTION_TIMEOUT();
-      await advanceTime(timeout.toNumber() + 1);
-      await disputeDAO.markPanelUnavailable(disputeId2, { from: challenger });
-      assert.equal((await disputeDAO.getDispute(disputeId2)).state.toString(), "7");
-      assert.equal((await disputeDAO.disputeDeposits(disputeId2)).toString(), CHALLENGE_DEPOSIT);
+      while (web3.utils.toBN(await web3.eth.getBlockNumber()).lte(secondTarget)) await mineBlock();
+      await disputeDAO.finalizePanel(disputeId2);
+      assert.equal((await arbitratorRegistry.activePanelSelection()).toString(), "0");
 
-      await disputeDAO.resolveByBackstop(disputeId2, 1, { from: admin });
+      // Once entropy is consumed the lock is released and the earlier panel can
+      // settle normally. Its assignments never invalidated dispute two.
+      await disputeDAO.resolveDispute(disputeId1);
 
       const firstDispute = await disputeDAO.getDispute(disputeId1);
       const secondDispute = await disputeDAO.getDispute(disputeId2);
-      const finalReserve = await disputeDAO.totalEscrowedDeposits();
-      const finalBalance = await chessToken.balanceOf(disputeDAO.address);
-      assert.equal(firstDispute.state.toString(), "4", "The cheat dispute should resolve");
-      assert.equal(secondDispute.state.toString(), "4", "The backstop should settle the invalidated dispute");
-      assert.equal(finalReserve.toString(), "0", "No resolved deposit should remain reserved");
-      assert.equal(finalBalance.toString(), "0", "All deposits should be settled independently");
-      for (const arbitrator of cheatRound.selectedArbitrators) {
+      assert.equal(firstDispute.state.toString(), "4");
+      assert.equal(firstDispute.finalDecision.toString(), "2");
+      assert.equal(secondDispute.state.toString(), "2");
+      assert.isTrue((await disputeDAO.getSelectedArbitrators(disputeId2)).length >= 3);
+      assert.equal((await disputeDAO.disputeDeposits(disputeId1)).toString(), "0");
+      assert.equal((await disputeDAO.disputeDeposits(disputeId2)).toString(), CHALLENGE_DEPOSIT);
+      assert.equal((await disputeDAO.nextSelectionSequence()).toString(), "3");
+      for (const arbitrator of firstRound.selectedArbitrators) {
         assert.equal((await arbitratorRegistry.activeAssignments(arbitrator)).toString(), "0");
       }
     });

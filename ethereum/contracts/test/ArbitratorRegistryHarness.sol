@@ -10,6 +10,30 @@ import "../DAO/ArbitratorRegistry.sol";
 contract ArbitratorRegistryHarness is ArbitratorRegistry {
     constructor(address chessTokenAddress) ArbitratorRegistry(chessTokenAddress) {}
 
+    function fillTier1ToCountForTest(uint256 targetCount)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        require(targetCount <= MAX_ARBITRATORS_PER_TIER_POOL, "Target exceeds pool cap");
+        while (tier1Arbitrators.length < targetCount) {
+            address synthetic = address(uint160(0x100000 + tier1Arbitrators.length));
+            _seedEligibleSynthetic(synthetic, TIER1_MIN);
+            tier1Index[synthetic] = tier1Arbitrators.length;
+            tier1Arbitrators.push(synthetic);
+        }
+    }
+
+    function setTier1StakeForTest(uint256 index, uint256 activeStake)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        require(index < tier1Arbitrators.length, "Tier-one index out of bounds");
+        require(activeStake >= TIER1_MIN && activeStake < TIER1_MAX, "Invalid tier-one stake");
+        Arbitrator storage arb = arbitrators[tier1Arbitrators[index]];
+        arb.stakedAmount = activeStake;
+        arb.activatedStake = activeStake;
+    }
+
     function fillTier1ToCapForTest() external onlyRole(DEFAULT_ADMIN_ROLE) {
         while (tier1Arbitrators.length < MAX_ARBITRATORS_PER_TIER_POOL) {
             address synthetic = address(uint160(0x100000 + tier1Arbitrators.length));

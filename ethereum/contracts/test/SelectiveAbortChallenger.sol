@@ -5,7 +5,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 interface ISelectiveAbortDisputeDAO {
     function challengeDeposit() external view returns (uint256);
-    function challenge(uint256 gameId, address accusedPlayer) external;
+    function challenge(uint256 gameId) external;
     function gameToDispute(uint256 gameId) external view returns (uint256);
     function getSelectedArbitrators(uint256 disputeId) external view returns (address[] memory);
 }
@@ -23,14 +23,14 @@ contract SelectiveAbortChallenger {
         address daoAddress,
         address tokenAddress,
         uint256 gameId,
-        address accusedPlayer,
+        address,
         address requiredFirstArbitrator
     ) external {
         ISelectiveAbortDisputeDAO dao = ISelectiveAbortDisputeDAO(daoAddress);
         uint256 deposit = dao.challengeDeposit();
         require(IERC20(tokenAddress).approve(daoAddress, deposit), "Approve failed");
 
-        dao.challenge(gameId, accusedPlayer);
+        dao.challenge(gameId);
         uint256 disputeId = dao.gameToDispute(gameId);
         address[] memory panel = dao.getSelectedArbitrators(disputeId);
 

@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const {
+  assertHandoffPrincipalSeparation,
   assertFeeCapSufficient,
   formatUnits,
   isAddress,
@@ -51,6 +52,24 @@ test("environment validation selects only the requested RPC", () => {
   assert.equal(config.handoffGovernance, true);
   assert.equal(config.maxPriorityFeePerGas, 1_000_000);
   assert.equal(config.maxFeePerGas, 5_000_000_000);
+});
+
+test("handoff preflight isolates treasury and operational signers from the deployer", () => {
+  const config = validateEnvironment(VALID_ENV, "base_sepolia");
+  const deployer = "0x9999999999999999999999999999999999999999";
+  assert.doesNotThrow(() => assertHandoffPrincipalSeparation(config, deployer));
+
+  for (const field of ["treasuryWallet", "faucetSigner", "oracleUpdater"]) {
+    assert.throws(
+      () => assertHandoffPrincipalSeparation({ ...config, [field]: deployer }, deployer),
+      /must differ from the deployer/
+    );
+  }
+
+  assert.doesNotThrow(() => assertHandoffPrincipalSeparation(
+    { ...config, handoffGovernance: false, treasuryWallet: deployer },
+    deployer
+  ));
 });
 
 test("environment validation rejects an invalid Base priority fee", () => {

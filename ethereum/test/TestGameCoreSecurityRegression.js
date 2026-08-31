@@ -4,6 +4,7 @@ const ChessFactory = artifacts.require("ChessFactory");
 const ChessRulesEngine = artifacts.require("ChessRulesEngine");
 const ChessMediaLibrary = artifacts.require("ChessMediaLibrary");
 const FlakyPlayerRating = artifacts.require("FlakyPlayerRating");
+const FlakyRewardPool = artifacts.require("FlakyRewardPool");
 
 contract("ChessCore security regressions", (accounts) => {
   const [white, black, thirdParty] = accounts;
@@ -455,6 +456,45 @@ contract("ChessCore security regressions", (accounts) => {
 
       await game.retryRatingReport({ from: thirdParty });
       assert.equal((await flakyRating.successfulReports()).toString(), "1", "successful reports stay idempotent");
+    });
+  });
+
+  describe("reward delivery recovery", () => {
+    it("does not lock the principal prize and keeps a failed reward retryable", async () => {
+      const implementation = await ChessCore.new({ from: white });
+      const factory = await ChessFactory.new(implementation.address, { from: white });
+      const flakyReward = await FlakyRewardPool.new({ from: white });
+      await factory.setRewardPool(flakyReward.address, { from: white });
+
+      const creation = await factory.createChessGame(2, 0, { from: white, value: bet });
+      const gameAddress = creation.logs.find((log) => log.event === "GameCreated").args.gameAddress;
+      const game = await ChessCore.at(gameAddress);
+      await game.joinGameAsBlack({ from: black, value: bet });
+      await game.resign({ from: black });
+
+      await expectRevert(
+        game.retryRewardDistribution({ from: thirdParty }),
+        "a provisional result must not be rewarded before prize/dispute finalization"
+      );
+
+      const finalize = await game.finalizePrizes({ from: thirdParty });
+      assert.isTrue(finalize.logs.some((log) => log.event === "RewardDistributionFailed"));
+      assert.equal(
+        (await game.pendingPrize(white)).toString(),
+        (BigInt(bet) * 2n).toString(),
+        "A reward outage must not prevent allocating the principal ETH prize"
+      );
+
+      await flakyReward.setShouldFail(false, { from: white });
+      await game.retryRewardDistribution({ from: thirdParty });
+      assert.equal((await flakyReward.successfulDistributions()).toString(), "1");
+
+      await game.retryRewardDistribution({ from: thirdParty });
+      assert.equal(
+        (await flakyReward.successfulDistributions()).toString(),
+        "1",
+        "Successful reward delivery stays idempotent"
+      );
     });
   });
 });

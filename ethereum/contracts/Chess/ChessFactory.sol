@@ -116,6 +116,10 @@ contract ChessFactory {
         // If bonding is enabled, verify white player has sufficient bond
         if (bondingManager != address(0)) {
             require(
+                !BondingManager(payable(bondingManager)).paused(),
+                "Bonding manager paused"
+            );
+            require(
                 BondingManager(payable(bondingManager)).hasSufficientBond(msg.sender, msg.value),
                 "Insufficient bond - deposit more CHESS and ETH"
             );

@@ -1,5 +1,7 @@
 const ChessCore = artifacts.require("ChessCore");
 const ChessFactory = artifacts.require("ChessFactory");
+const ChessToken = artifacts.require("ChessToken");
+const BondingManager = artifacts.require("BondingManager");
 
 contract("ChessFactory", (accounts) => {
   let chessFactory;
@@ -93,5 +95,31 @@ contract("ChessFactory", (accounts) => {
     } catch (error) {
       assert.include(error.message, "revert");
     }
+  });
+
+  it("should reject new games while the bonding circuit breaker is paused", async () => {
+    const token = await ChessToken.new(accounts[1], accounts[2], { from: accounts[0] });
+    const manager = await BondingManager.new(
+      token.address,
+      web3.utils.toWei("0.001", "ether"),
+      { from: accounts[0] }
+    );
+    const guardedFactory = await ChessFactory.new(chessCoreImpl.address, { from: accounts[0] });
+    await guardedFactory.setBondingManager(manager.address, { from: accounts[0] });
+    await manager.updatePrice(web3.utils.toWei("0.002", "ether"), { from: accounts[0] });
+    assert.isTrue(await manager.circuitBreakerTripped(), "The oracle move should trip the circuit breaker");
+    assert.isTrue(await manager.paused(), "A tripped circuit breaker should pause bonding");
+
+    const before = await guardedFactory.totalChessGames();
+    try {
+      await guardedFactory.createChessGame(2, 0, {
+        from: accounts[0],
+        value: web3.utils.toWei("0.001", "ether")
+      });
+      assert.fail("Should have reverted while bonding is paused");
+    } catch (error) {
+      assert.include(error.message, "revert");
+    }
+    assert.equal((await guardedFactory.totalChessGames()).toString(), before.toString());
   });
 });

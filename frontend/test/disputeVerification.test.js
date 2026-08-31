@@ -7,8 +7,11 @@ import {
 	assertExactChallengeTerms,
 	createDisputeContextGuard,
 	ensureExactTokenAllowance,
+	getWholeGameChallengeArguments,
 	readPanelActiveStake,
+	readDisputeChallengeEconomics,
 	readDisputeIdForGame,
+	readWholeGameChallengeTerms,
 	sendBoundContractTransaction,
 	verifiedDisputeRecordContextMatches,
 	verifyCanonicalDisputeContext,
@@ -262,6 +265,95 @@ test('challenge submission fails closed if the live deposit or exact allowance c
 		() => assertExactChallengeTerms(50, 50, 51),
 		/Exact challenge allowance changed before submission/
 	);
+});
+
+test('whole-game challenge terms require the exact ABI, dynamic deposit, and a live participant', async () => {
+	assert.deepEqual(getWholeGameChallengeArguments(0), [0]);
+	let requestedSignature = '';
+	let requestedGameId = null;
+	const dao = {
+		interface: {
+			getFunction(signature) {
+				requestedSignature = signature;
+				if (signature !== 'challenge(uint256)') throw new Error('wrong signature');
+			}
+		},
+		async getRequiredChallengeDepositForGame(gameId) {
+			requestedGameId = gameId;
+			return ethers.utils.parseEther('75');
+		},
+		async gameWhitePlayer() { return addresses.account; },
+		async gameBlackPlayer() { return addresses.gameAddress; }
+	};
+
+	const terms = await readWholeGameChallengeTerms({
+		dao,
+		gameId: 0,
+		account: addresses.account
+	});
+	assert.equal(requestedSignature, 'challenge(uint256)');
+	assert.equal(requestedGameId, 0);
+	assert.equal(ethers.utils.formatEther(terms.requiredDeposit), '75.0');
+	assert.equal(terms.whitePlayer, ethers.utils.getAddress(addresses.account));
+
+	await assert.rejects(
+		readWholeGameChallengeTerms({ dao, gameId: 0, account: addresses.registryAddress }),
+		/Only a participant/
+	);
+	await assert.rejects(
+		readWholeGameChallengeTerms({
+			dao: {
+				...dao,
+				interface: { getFunction: () => { throw new Error('legacy challenge(uint256,address)'); } }
+			},
+			gameId: 0,
+			account: addresses.account
+		}),
+		/does not support whole-game challenges/
+	);
+});
+
+test('pending challenge economics fail closed when live bonds cannot price the deposit', async () => {
+	const dao = {
+		interface: { getFunction: () => ({ name: 'challenge' }) },
+		gameWhitePlayer: async () => addresses.account,
+		gameBlackPlayer: async () => addresses.gameAddress,
+		getRequiredChallengeDepositForGame: async () => {
+			throw new Error('Bond not available');
+		},
+		disputeDeposits: async () => 0
+	};
+	await assert.rejects(
+		readDisputeChallengeEconomics({ dao, gameId: 0, disputeId: 3, state: 1 }),
+		/Unable to verify whole-game challenge terms/
+	);
+});
+
+test('resolved dispute remains readable after bonds disappear and uses zero escrow', async () => {
+	let dynamicDepositReads = 0;
+	const dao = {
+		interface: { getFunction: () => ({ name: 'challenge' }) },
+		gameWhitePlayer: async () => addresses.account,
+		gameBlackPlayer: async () => addresses.gameAddress,
+		getRequiredChallengeDepositForGame: async () => {
+			dynamicDepositReads += 1;
+			throw new Error('Bond already released or slashed');
+		},
+		disputeDeposits: async (disputeId) => {
+			assert.equal(disputeId, 3);
+			return 0;
+		}
+	};
+	const economics = await readDisputeChallengeEconomics({
+		dao,
+		gameId: 0,
+		disputeId: 3,
+		state: 4
+	});
+	assert.equal(dynamicDepositReads, 0);
+	assert.equal(economics.requiredDeposit, null);
+	assert.equal(economics.escrowedDeposit.isZero(), true);
+	assert.equal(economics.whitePlayer, ethers.utils.getAddress(addresses.account));
 });
 
 function boundTransactionFixture({ sendError } = {}) {

@@ -4,15 +4,19 @@ import { ethers } from 'ethers';
 import { loadContractAbi } from '../contracts/loadAbi.js';
 import { getTransactionFeeOverrides } from '../utils/transactionFees.js';
 import { computeVoteCommitHash } from '../utils/voteCommit.js';
+import { Vote, getVoteLabel } from '../utils/disputeModel.js';
 import {
 	TRANSACTION_BROADCAST,
 	assertExactChallengeTerms,
 	createDisputeContextGuard,
 	ensureExactTokenAllowance,
+	getWholeGameChallengeArguments,
 	normalizeDisputeGameId,
 	normalizeDisputeId,
 	readPanelActiveStake,
+	readDisputeChallengeEconomics,
 	readDisputeIdForGame,
+	readWholeGameChallengeTerms,
 	sendBoundContractTransaction,
 	verifiedDisputeContextMatches,
 	verifiedDisputeRecordContextMatches,
@@ -293,12 +297,7 @@ export const DisputeState = {
 	Unresolved: 7
 };
 
-export const Vote = {
-	None: 0,
-	Legit: 1,
-	Cheat: 2,
-	Abstain: 3
-};
+export { Vote, getVoteLabel };
 
 const disputeInitialState = {
 	loading: false,
@@ -317,7 +316,8 @@ const disputeInitialState = {
 async function loadDisputeDetails(bundle, disputeId, context = {}) {
 	const normalizedDisputeId = normalizeDisputeId(disputeId);
 	const [disputeData, arbitrators, effectiveQuorum, panelSecurity, selectionBlock,
-		selectionScheduledAt, panelSelectionTimeout, voteCommit, arbitratorInfo, fullDispute] = await Promise.all([
+		selectionScheduledAt, panelSelectionTimeout, selectionSequence, nextSelectionSequence,
+		voteCommit, arbitratorInfo, fullDispute] = await Promise.all([
 		bundle.dao.getDispute(normalizedDisputeId),
 		bundle.dao.getSelectedArbitrators(normalizedDisputeId),
 		bundle.dao.getEffectiveQuorum(normalizedDisputeId),
@@ -325,6 +325,8 @@ async function loadDisputeDetails(bundle, disputeId, context = {}) {
 		bundle.dao.panelSelectionBlock(normalizedDisputeId),
 		bundle.dao.panelSelectionScheduledAt(normalizedDisputeId),
 		bundle.dao.PANEL_SELECTION_TIMEOUT(),
+		bundle.dao.panelSelectionSequence(normalizedDisputeId),
+		bundle.dao.nextSelectionSequence(),
 		bundle.dao.votes(normalizedDisputeId, bundle.verification.account),
 		bundle.registry.getArbitratorInfo(bundle.verification.account),
 		bundle.dao.disputes(normalizedDisputeId)
@@ -344,6 +346,13 @@ async function loadDisputeDetails(bundle, disputeId, context = {}) {
 		gameId: resolvedGameId,
 		gameAddress: context.gameVerification?.gameAddress || context.gameAddress
 	});
+	const disputeState = asNumber(disputeData.state);
+	const challengeEconomics = await readDisputeChallengeEconomics({
+		dao: bundle.dao,
+		gameId: resolvedGameId,
+		disputeId: normalizedDisputeId,
+		state: disputeState
+	});
 	const { panelActiveStake, requiredPanelActiveStake } = readPanelActiveStake(panelSecurity);
 
 	const verification = {
@@ -356,10 +365,12 @@ async function loadDisputeDetails(bundle, disputeId, context = {}) {
 		id: normalizedDisputeId,
 		gameId: resolvedGameId,
 		challenger: disputeData.challenger,
-		accusedPlayer: disputeData.accusedPlayer,
-		state: asNumber(disputeData.state),
+		whitePlayer: challengeEconomics.whitePlayer,
+		blackPlayer: challengeEconomics.blackPlayer,
+		state: disputeState,
 		legitVotes: formatVotingPower(disputeData.legitVotes),
-		cheatVotes: formatVotingPower(disputeData.cheatVotes),
+		whiteCheatVotes: formatVotingPower(disputeData.whiteCheatVotes),
+		blackCheatVotes: formatVotingPower(disputeData.blackCheatVotes),
 		abstainVotes: formatVotingPower(fullDispute.abstainVotes),
 		hasAbstainVotes: !fullDispute.abstainVotes.isZero(),
 		totalVotes: asNumber(panelSecurity.revealedArbitrators),
@@ -371,6 +382,9 @@ async function loadDisputeDetails(bundle, disputeId, context = {}) {
 		panelSelectionBlock: asNumber(selectionBlock),
 		panelSelectionScheduledAt: asNumber(selectionScheduledAt),
 		panelSelectionTimeout: asNumber(panelSelectionTimeout),
+		panelSelectionSequence: asNumber(selectionSequence),
+		nextSelectionSequence: asNumber(nextSelectionSequence),
+		panelSelectionIsHead: !selectionSequence.isZero() && selectionSequence.eq(nextSelectionSequence),
 		totalPanelVotingPower: formatVotingPower(panelSecurity.totalVotingPower),
 		requiredVotingPower: formatVotingPower(panelSecurity.minimumRevealedVotingPower),
 		revealedVotingPower: formatVotingPower(panelSecurity.revealedPower),
@@ -381,6 +395,10 @@ async function loadDisputeDetails(bundle, disputeId, context = {}) {
 		commitDeadline: asNumber(fullDispute.commitDeadline),
 		revealDeadline: asNumber(fullDispute.revealDeadline),
 		gameStake: ethers.utils.formatEther(fullDispute.gameStake),
+		requiredChallengeDeposit: challengeEconomics.requiredDeposit
+			? ethers.utils.formatEther(challengeEconomics.requiredDeposit)
+			: null,
+		escrowedChallengeDeposit: ethers.utils.formatEther(challengeEconomics.escrowedDeposit),
 		challengeWindowOpen: Boolean(context.challengeWindowOpen),
 		challengeWindowRemaining: context.challengeWindowRemaining ?? 0,
 		context: verification,
@@ -534,6 +552,47 @@ function createDisputeStore() {
 		fetchParams,
 		getDisputeByGame,
 		getDispute,
+		async watchResolution(gameId, gameAddress, onResolved) {
+			if (typeof onResolved !== 'function') {
+				throw new Error('Resolution watcher callback is required');
+			}
+			const normalizedGameId = normalizeDisputeGameId(gameId);
+			const target = `watch:${normalizedGameId}:${String(gameAddress || '').toLowerCase()}`;
+			const expectedContextKey = readContextKey(target);
+			const bundle = await getVerifiedContracts();
+			await verifyCanonicalDisputeGame({
+				provider: bundle.wallet.provider,
+				verification: bundle.verification,
+				gameId: normalizedGameId,
+				gameAddress
+			});
+			const disputeId = await readDisputeIdForGame(bundle.dao, normalizedGameId);
+			if (disputeId === null) return () => {};
+
+			const filter = bundle.dao.filters.DisputeResolved(disputeId);
+			const listener = (...args) => {
+				const event = args.at(-1);
+				if (readContextKey(target) !== expectedContextKey) return;
+				Promise.resolve(onResolved({
+					disputeId,
+					event,
+					removed: Boolean(event?.removed)
+				})).catch(() => {});
+			};
+			bundle.dao.on(filter, listener);
+			try {
+				// Close the read-to-subscribe race: a resolution mined after the
+				// panel snapshot but before `.on` is visible in this post-check.
+				const current = await bundle.dao.getDispute(disputeId);
+				if (asNumber(current.state ?? current[2]) === DisputeState.Resolved) {
+					await onResolved({ disputeId, event: null, removed: false });
+				}
+			} catch (error) {
+				bundle.dao.off(filter, listener);
+				throw error;
+			}
+			return () => bundle.dao.off(filter, listener);
+		},
 		async getVoteCommitHash(disputeId, expectedContext) {
 			const normalizedDisputeId = normalizeDisputeId(disputeId);
 			const initial = await getVerifiedContracts();
@@ -559,25 +618,29 @@ function createDisputeStore() {
 			return finalHash.toLowerCase();
 		},
 
-		challenge(gameId, accusedPlayer, expectedContext) {
+		challenge(gameId, expectedContext) {
 			return runAction(async () => {
 				const normalizedGameId = normalizeDisputeGameId(gameId);
-				if (!ethers.utils.isAddress(accusedPlayer) || accusedPlayer === ethers.constants.AddressZero) {
-					throw new Error('Invalid accused player');
-				}
 				const assertBoundContext = async (freshBundle) => {
 					assertActiveLoadedContext(expectedContext);
 					if (freshBundle) {
 						await verifyExpectedGame(freshBundle, expectedContext, normalizedGameId);
 					}
 				};
+				const readBoundChallengeTerms = async (bundle) => {
+					await assertBoundContext(bundle);
+					const terms = await readWholeGameChallengeTerms({
+						dao: bundle.dao,
+						gameId: normalizedGameId,
+						account: bundle.verification.account
+					});
+					return terms.requiredDeposit;
+				};
 				await assertBoundContext();
 				const initial = await getVerifiedContracts();
-				await verifyExpectedGame(initial, expectedContext, normalizedGameId);
-				let challengeDeposit = await initial.dao.challengeDeposit();
+				let challengeDeposit = await readBoundChallengeTerms(initial);
 				const assertApprovalAmount = (expectedDeposit) => async (freshBundle) => {
-					await assertBoundContext(freshBundle);
-					const liveDeposit = await freshBundle.dao.challengeDeposit();
+					const liveDeposit = await readBoundChallengeTerms(freshBundle);
 					if (!liveDeposit.eq(expectedDeposit)) {
 						throw new Error('Challenge deposit changed before approval');
 					}
@@ -590,7 +653,7 @@ function createDisputeStore() {
 				);
 
 				let finalBundle = await getSameVerifiedContracts(initial, { includeFees: true });
-				let finalDeposit = await finalBundle.dao.challengeDeposit();
+				let finalDeposit = await readBoundChallengeTerms(finalBundle);
 				if (!finalDeposit.eq(challengeDeposit)) {
 					challengeDeposit = finalDeposit;
 					await setExactAllowance(
@@ -600,12 +663,11 @@ function createDisputeStore() {
 						assertApprovalAmount(challengeDeposit)
 					);
 					finalBundle = await getSameVerifiedContracts(initial, { includeFees: true });
-					finalDeposit = await finalBundle.dao.challengeDeposit();
+					finalDeposit = await readBoundChallengeTerms(finalBundle);
 					if (!finalDeposit.eq(challengeDeposit)) {
 						throw new Error('Challenge deposit changed while preparing the transaction');
 					}
 				}
-				await verifyExpectedGame(finalBundle, expectedContext, normalizedGameId);
 				const allowance = await finalBundle.token.allowance(
 					finalBundle.verification.account, finalBundle.verification.daoAddress
 				);
@@ -616,17 +678,14 @@ function createDisputeStore() {
 					finalBundle,
 					finalBundle.dao,
 					'challenge',
-					[normalizedGameId, ethers.utils.getAddress(accusedPlayer)],
+					getWholeGameChallengeArguments(normalizedGameId),
 					{
 						assertBoundContext: async (freshBundle) => {
-							await assertBoundContext(freshBundle);
-							const [liveDeposit, liveAllowance] = await Promise.all([
-								freshBundle.dao.challengeDeposit(),
-								freshBundle.token.allowance(
-									freshBundle.verification.account,
-									freshBundle.verification.daoAddress
-								)
-							]);
+							const liveDeposit = await readBoundChallengeTerms(freshBundle);
+							const liveAllowance = await freshBundle.token.allowance(
+								freshBundle.verification.account,
+								freshBundle.verification.daoAddress
+							);
 							assertExactChallengeTerms(finalDeposit, liveDeposit, liveAllowance);
 						}
 					}
@@ -639,6 +698,19 @@ function createDisputeStore() {
 			return runAction(async () => {
 				await executeDisputeWrite(
 					'finalizePanel',
+					[normalizeDisputeId(disputeId)],
+					disputeId,
+					expectedContext,
+					() => assertActiveLoadedContext(expectedContext)
+				);
+				return true;
+			});
+		},
+
+		activatePanelSelection(disputeId, expectedContext) {
+			return runAction(async () => {
+				await executeDisputeWrite(
+					'activatePanelSelection',
 					[normalizeDisputeId(disputeId)],
 					disputeId,
 					expectedContext,
@@ -955,16 +1027,6 @@ export function getStateLabel(state) {
 		case DisputeState.Escalated: return 'Escalated';
 		case DisputeState.Selecting: return 'Selecting Panel';
 		case DisputeState.Unresolved: return 'Governance Backstop Required';
-		default: return 'Unknown';
-	}
-}
-
-export function getVoteLabel(vote) {
-	switch (vote) {
-		case Vote.None: return 'No Vote';
-		case Vote.Legit: return 'Legitimate';
-		case Vote.Cheat: return 'Cheating';
-		case Vote.Abstain: return 'Abstain';
 		default: return 'Unknown';
 	}
 }

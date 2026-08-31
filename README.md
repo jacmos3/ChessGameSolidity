@@ -4,7 +4,7 @@ MyChess.onchain is a decentralized chess platform with on-chain game state, hybr
 
 ![Solidity](https://img.shields.io/badge/Solidity-0.8.24-blue)
 ![Frontend](https://img.shields.io/badge/Frontend-SvelteKit%202-orange)
-![Contract baseline](https://img.shields.io/badge/Contract%20baseline-423%20passed-informational)
+![Contract baseline](https://img.shields.io/badge/Contract%20baseline-459%20passed-informational)
 
 ## Overview
 
@@ -24,8 +24,8 @@ At a high level, the system does four things:
 
 ## Current Status
 
-- The final remediation verification passed `423/423` Truffle cases across four isolated Ganache batches, including the capped-population escalation gas path.
-- Deployment-script checks passed `22/22`; frontend utility tests passed `53/53`; the production build, governance-handoff migration/verifiers, EIP-170 gate, and deterministic ABI drift check also passed.
+- The final remediation verification passed `459/459` Truffle cases across four isolated Ganache batches, including arbitration concurrency, whole-game adjudication, reward/rating authorization, and capped-population gas regressions.
+- Deployment-script checks passed `50/50`; the frontend runner passed `93/93` tests; the production build, governance-handoff migration/verifiers, EIP-170 gate, and deterministic ABI drift check also passed.
 - `ChessCore` uses EIP-1167 clones. Heavy rule evaluation lives in one `ChessRulesEngine` deployed by the implementation and shared by the clones through the implementation's immutable reference.
 - The frontend is configured for static/IPFS deployment and now lazy-loads ABI-only artifacts.
 - Solidity compilation is pinned to `solc 0.8.24`, generates validated Truffle-compatible artifacts, and enforces the EIP-170 bytecode limit.
@@ -39,7 +39,8 @@ Important limitations:
 
 - arbitrator selection commits a challenge before using a future block hash, but it is not VRF-backed; block producers or the Base sequencer can still influence availability, censor finalization, and have limited influence over entropy
 - panel formation and dispute recovery require active keepers; an unavailable panel or three inconclusive rounds moves the case to a timelocked governance backstop while funds remain locked
-- a selected candidate can invalidate a fail-closed panel snapshot by changing stake, tier, or assignment state; the recovery path is timeout plus governance backstop, not a permissionless retry against changed eligibility
+- panel selection is FIFO and keeper-dependent; transient assignment/cooldown pressure can delay the head for up to seven days, while a structurally insufficient pool moves the dispute to the timelocked backstop
+- a sustained stream of funded participant challenges can congest the FIFO even though each entry is bounded and cannot silently confirm the provisional result
 - stake-weighted Schelling voting raises the cost of address-based Sybil attacks but does not prove that a majority is correct, and it retains whale-influence and herding risks
 - ratings use a bounded linear approximation of the Elo expected-score curve; `PlayerRating.getTopPlayers()` is a pagination helper, not a sorted on-chain leaderboard
 - faucet eligibility and the CHESS/ETH price feed still depend on trusted, separately rotatable off-chain signers
@@ -48,7 +49,7 @@ Important limitations:
 - timeout presets use timestamp deadlines: `Finney` is 1 hour, `Buterin` is 7 hours, and `Nakamoto` is 7 days
 - `legacy/` is retained for historical reference only and must not be used to build or deploy the protocol
 
-The implemented controls, ABI migration requirements, and residual risks are tracked in [`docs/SECURITY_REMEDIATION.md`](docs/SECURITY_REMEDIATION.md).
+The current remediation controls, external-auditor-style review, ABI migration requirements, and residual risks are tracked in [`docs/SECURITY_REMEDIATION_ROUND2.md`](docs/SECURITY_REMEDIATION_ROUND2.md). The older [`docs/SECURITY_REMEDIATION.md`](docs/SECURITY_REMEDIATION.md) is the historical round-one record.
 
 ## Architecture
 
@@ -72,7 +73,7 @@ ChessToken --> ChessGovernor --> ChessTimelock --> protocol administration
 
 `ChessFactory` records every new clone in the O(1) `isDeployedGame` registry and registers it with the bonding, dispute, rating, and reward components. The frontend accepts only games belonging to the configured factory on the connected chain. With canonical dispute wiring enabled, a game finalizes only after its challenge window has expired or its dispute has been resolved; prize allocation uses a pull-payment flow.
 
-A challenged dispute follows `Pending -> Selecting -> Challenged -> Revealing`. Inconclusive panels return to `Selecting` for a bounded next round. An unavailable panel or exhausted rounds enters `Unresolved`; only the timelocked administrator can then choose `Legit` or `Cheat`.
+A challenged dispute follows `Pending -> Selecting -> Challenged -> Revealing`. Inconclusive panels return to `Selecting` for a bounded next round. An unavailable panel or exhausted rounds enters `Unresolved`; only the timelocked administrator can then choose `Legit`, `WhiteCheat`, or `BlackCheat`.
 
 ## Feature Set
 
@@ -96,12 +97,12 @@ A challenged dispute follows `Pending -> Selecting -> Challenged -> Revealing`. 
 - domain-separated commit-reveal arbitrator voting
 - challenge-first selection using future block entropy, with refresh and unavailable-panel recovery
 - stake-weighted tallies with separate address-count and voting-power quorum snapshots
-- per-dispute snapshots of panel policy, quorum, supermajority, and commit/reveal durations taken when the challenge deposit is locked
+- per-game snapshots of challenge economics, panel policy, quorum, supermajority, and commit/reveal durations taken atomically when Black joins and both player bonds are locked
 - panel collateral tied to both players' locked CHESS bonds, one active assignment per stake position, and quota reservation at selection
 - up to 3 arbitration rounds, using as many as 5, 7, and 9 eligible arbitrators per populated tier
 - 5% active-stake slash for non-reveal and 1% for a revealed vote contrary to the final decision
 - seven-day activation delay for top-ups and exclusion of prior-round arbitrators
-- slashing and challenger compensation on `Cheat` verdicts
+- side-specific slashing on `WhiteCheat` / `BlackCheat`, with challenger compensation forbidden when the challenger is the cheating side
 - arbitrator reputation tracking
 - per-dispute deposit escrow and assignment-based stake locks for selected arbitrators
 
@@ -249,6 +250,8 @@ TREASURY_WALLET=
 FAUCET_SIGNER=
 ORACLE_UPDATER=
 GOVERNANCE_HANDOFF=true
+# Copy the SHA-256 printed by the migration before public verification.
+DEPLOYMENT_MANIFEST_SHA256=
 ```
 
 ```bash
@@ -262,11 +265,13 @@ npm run verify:deployment -- --network base_sepolia
 
 Public RPC values must be valid HTTPS URLs. `BASE_MAX_PRIORITY_FEE_PER_GAS_WEI` defaults to `1000000` (`0.001 gwei`) and cannot exceed `0.1 gwei`; the total EIP-1559 max fee is capped at `5 gwei`. These limits prevent accidental or malicious overpayment but can deliberately make deployment unavailable during a fee spike. `FAUCET_SIGNER` authorizes eligible faucet beneficiaries and may be either an EOA or an ERC-1271 contract wallet. `ORACLE_UPDATER` receives only `ORACLE_ROLE` and must submit a fresh CHESS/ETH price at least once every seven days; stale prices block bond calculation and new bonded games.
 
-The preflight compiles the canonical sources, enforces EIP-170, derives only the public deployer address, verifies the RPC chain, checks the deployer's native balance, and validates operational addresses. It never prints the mnemonic or sends a transaction. The post-deployment verifier reads `deployments/latest-<network>.json` and fails on missing bytecode, incorrect links, missing roles, unexpected ownership, or a dispute policy other than the canonical defaults: minimum panel size `3`, minimum panel active stake `3,000 CHESS`, bond coverage `10,000` bps, voting-power quorum `66%`, and decision supermajority `66%`.
+The preflight compiles the canonical sources, enforces EIP-170, derives only the public deployer address, verifies the RPC chain, checks the deployer's native balance, and validates operational addresses. It never prints the mnemonic or sends a transaction. For a public verification, copy the migration's printed SHA-256 into `DEPLOYMENT_MANIFEST_SHA256` and provide the same four principal addresses as independent environment anchors.
+
+The post-deployment verifier pins every read and log scan to one finalized block, rechecks that block before success, authenticates top-level creation transactions, constructor arguments, linked initcode, deployed runtime, and canonical EIP-1167 clones. It also enforces exact current and historical role membership, no scheduled timelock operation or governance proposal, pristine treasury governance state, clean operational genesis, untouched oracle history, zero reward activity, and the canonical dispute policy: minimum panel size `3`, minimum panel active stake `3,000 CHESS`, bond coverage `10,000` bps, voting-power quorum `66%`, and decision supermajority `66%`.
 
 > **Migration warning:** this remediation changes contract interfaces, state semantics, and clone membership. It is not an in-place upgrade. Deploy the complete coordinated suite, resolve or explicitly account for all positions in the old deployment, regenerate ABIs, and switch every frontend address atomically. Do not mix old and new protocol addresses.
 
-The `base` profile automatically transfers ownership and admin roles to `ChessTimelock`, then removes deployer privileges. Base Sepolia keeps the deployer as admin unless `GOVERNANCE_HANDOFF=true` is set. When handoff is enabled, `FAUCET_SIGNER` and `ORACLE_UPDATER` must both differ from the deployer.
+The `base` profile automatically transfers ownership and admin roles to `ChessTimelock`, then removes deployer privileges. Base Sepolia keeps the deployer as admin unless `GOVERNANCE_HANDOFF=true` is set. When handoff is enabled, `TREASURY_WALLET`, `FAUCET_SIGNER`, and `ORACLE_UPDATER` must differ from the deployer. For mainnet, the treasury must be an independently controlled, out-of-band verified multisig; code cannot prove the owners, threshold, or absence of undisclosed offline signatures.
 
 Verify a handoff against the selected network:
 
@@ -340,7 +345,7 @@ Open the URL shown by Vite, typically `http://127.0.0.1:3000/`.
 
 ### Contract Suite
 
-The final remediation baseline passed `423/423` Truffle cases in four fresh Ganache batches (`123 + 59 + 109 + 132`). The command below compiles, checks every deployed bytecode against EIP-170, runs deployment-script tests, runs the isolated contract batches, and exercises the real deployment migration plus both post-deployment verifiers with governance handoff enabled:
+The final remediation baseline passed `459/459` Truffle cases in four fresh Ganache batches (`124 + 60 + 133 + 142`). The command below compiles, checks every deployed bytecode against EIP-170, runs deployment-script tests, runs the isolated contract batches, and exercises the real deployment migration plus both post-deployment verifiers with governance handoff enabled:
 
 ```bash
 cd ethereum
@@ -355,7 +360,7 @@ LOCAL_RPC_PORT=8545 npm test -- --compile-none
 
 With gas reporting, set `REPORT_GAS=true` on that monolithic command. The isolated `test:ci` runner is preferred because the full suite creates enough chain state to destabilize a single long-lived provider.
 
-The verified baselines are `423/423` Truffle cases, `22/22` deployment-script tests, and `53/53` frontend utility tests. The frontend production build, governance-handoff migration/verifiers, fresh ABI extraction, and deterministic ABI drift check also pass. Security regressions cover canonical game/factory/protocol verification, route/account/chain races, exact token allowance and challenge terms, commit-secret recovery, custom-board canonicalization and the full `int8` piece domain, endgame/castling/repetition edge cases, rating retries, challenge selective-abort, future-entropy recovery, collateral and weighted quorum, non-reveal/incorrect-vote slashing and backstop behavior, assignment concurrency, rolling oracle/reset limits, deployment policy, HTTPS RPC validation, and fee caps.
+The verified baselines are `459/459` Truffle cases, `50/50` deployment-script tests, and `93/93` frontend tests. The frontend production build, governance-handoff migration/verifiers, fresh ABI extraction, and deterministic ABI drift check also pass. Security regressions cover canonical game/factory/protocol verification, route/account/chain races, exact token allowance and challenge terms, whole-game settlement, promoted FIFO-head activation, commit-secret recovery, custom-board canonicalization and the full `int8` piece domain, endgame/castling/repetition edge cases, rating/reward eligibility, challenge selective-abort, FIFO future-entropy recovery, collateral and weighted quorum, non-reveal/incorrect-vote slashing and backstop behavior, assignment concurrency, rolling oracle/reset limits, deployment provenance/genesis policy, HTTPS RPC validation, and fee caps.
 
 ### Frontend Build
 
@@ -478,7 +483,8 @@ Settlement guidance:
 ### DisputeDAO
 
 ```solidity
-function challenge(uint256 gameId, address accusedPlayer) external;
+function challenge(uint256 gameId) external;
+function activatePanelSelection(uint256 disputeId) external;
 function finalizePanel(uint256 disputeId) external;
 function refreshPanelSelection(uint256 disputeId) external;
 function markPanelUnavailable(uint256 disputeId) external;
@@ -506,7 +512,7 @@ function getPanelSecurity(uint256 disputeId) external view returns (
 );
 ```
 
-The default challenge window is 48 hours, followed by future-block panel selection and 24-hour commit and reveal periods. `challenge()` makes the deposit and dispute irrevocable before panel entropy is visible and snapshots the panel policy, quorum, supermajority, commit duration, and reveal duration. Every later round uses those snapshotted durations even if governance changes the global parameters. `finalizePanel()` snapshots stake/time voting power and reserves assignments. Both revealed-address quorum and revealed-power quorum must pass; tallies are voting power rather than address count. `panelActiveStake` is the selected panel's active stake, not an assertion that the whole amount can be slashed for an incorrect outcome.
+The default challenge window is 48 hours, followed by future-block panel selection and 24-hour commit and reveal periods. Production games snapshot challenge economics, panel policy, quorum, supermajority, and commit/reveal durations when Black joins and both player bonds become locked. `challenge()` is participant-only, reserves the snapshotted deposit, and asks arbitrators to adjudicate the whole game rather than a challenger-selected accused player. FIFO activation commits the head to future entropy; `finalizePanel()` snapshots stake/time voting power and reserves assignments. Both revealed-address quorum and revealed-power quorum must pass; tallies are voting power rather than address count. `panelActiveStake` is the selected panel's active stake, not an assertion that the whole amount can be slashed for an incorrect outcome.
 
 A vote commitment is:
 
@@ -521,7 +527,7 @@ keccak256(abi.encode(
 ))
 ```
 
-Insufficient quorum or supermajority triggers a fresh, larger panel and excludes the prior round. After three inconclusive rounds, or a seven-day panel-selection failure, the dispute becomes `Unresolved`; deposits and game bonds stay reserved until timelocked governance calls `resolveByBackstop()` with `Legit` or `Cheat`.
+Insufficient quorum or supermajority triggers a fresh, larger panel and excludes the prior round. After three inconclusive rounds, structural panel failure, or a seven-day transient selection failure, the dispute becomes `Unresolved`; deposits and game bonds stay reserved until timelocked governance calls `resolveByBackstop()` with `Legit`, `WhiteCheat`, or `BlackCheat`.
 
 For dispute and arbitrator writes, the frontend verifies bytecode and the mutual factory/DAO/bonding/token/registry links, binds the canonical factory game ID and game address, and rechecks those links plus the wallet route after transaction population and immediately before `sendTransaction`. A challenge also rechecks the live deposit and exact DAO allowance at that final boundary.
 
@@ -537,18 +543,23 @@ Material oracle changes must be at least 15 minutes apart and stay within a roll
 
 ### RewardPool faucet
 
-Faucet claims require an off-chain authorization bound to the pool address, chain ID, and beneficiary:
+Faucet claims require an expiring, epoch- and nonce-bound off-chain authorization:
 
 ```javascript
-const digest = ethers.utils.solidityKeccak256(
-  ["address", "uint256", "address"],
-  [rewardPool.address, chainId, beneficiary]
+const deadline = Math.floor(Date.now() / 1000) + 15 * 60;
+const epoch = await rewardPool.rewardEligibilityEpoch();
+const nonce = await rewardPool.faucetNonces(beneficiary);
+const domain = await rewardPool.FAUCET_AUTHORIZATION_DOMAIN();
+const encoded = ethers.utils.defaultAbiCoder.encode(
+  ["bytes32", "address", "uint256", "address", "uint256", "uint256", "uint256"],
+  [domain, rewardPool.address, chainId, beneficiary, epoch, nonce, deadline]
 );
+const digest = ethers.utils.keccak256(encoded);
 const authorization = await faucetSigner.signMessage(ethers.utils.arrayify(digest));
-await rewardPool.connect(beneficiary).claimFaucet(authorization);
+await rewardPool.connect(beneficiary).claimFaucet(deadline, authorization);
 ```
 
-An authorization cannot be replayed for another beneficiary, chain, or `RewardPool`. Eligibility remains a trusted off-chain policy enforced by `FAUCET_SIGNER`.
+An authorization cannot be replayed across purpose, beneficiary, signer epoch, nonce, chain, or `RewardPool`, and expires at `deadline`. Game-reward eligibility uses a separate v2 domain and nonce. Eligibility remains a trusted off-chain policy enforced by `FAUCET_SIGNER`.
 
 ## Frontend Stack
 
@@ -580,7 +591,8 @@ Known limitations:
 - no formal external audit yet
 - the Truffle deployment stack contains deprecated transitive dependencies with unresolved npm advisories; do not treat a clean contract test run as a supply-chain audit
 - future-block arbitrator selection is not VRF-backed and still depends on block-production and keeper liveness
-- fail-closed selection snapshots can be invalidated by a candidate's stake, tier, or assignment change; after such a liveness veto the permissionless recovery is the timeout to `Unresolved`
+- FIFO selection and its registry mutation lock remove last-look snapshot invalidation, but transient assignment/cooldown exhaustion still depends on keepers and can delay the head until the seven-day `Unresolved` timeout
+- funded participant challenges can congest the FIFO; deposits and participant-only access raise the cost but do not prove resistance to coordinated Sybil-controlled games
 - aggregate eligible population is not proof that the deterministically chosen tier mix will meet panel-size and active-stake coverage requirements; selection may still time out to the backstop
 - panel collateral reports active stake, while only 5%/1% is actually slashed for non-reveal/incorrect outcome; stake-weighted voting still has whale and herding risk
 - `Unresolved` cases hold funds until timelocked governance acts

@@ -70,6 +70,7 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
         bytes32 entropy;
         uint256 snapshotRound;
         uint256 snapshotTimestamp;
+        uint256 snapshotGameRecordSequence;
         bytes32 expectedFingerprint;
         address snapshotManager;
     }
@@ -79,9 +80,16 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
         address player1;
         address player2;
         address extraExcluded;
+        uint256 countPerTier;
         uint256 snapshotRound;
         uint256 snapshotTimestamp;
+        uint256 snapshotGameRecordSequence;
         address snapshotManager;
+    }
+
+    struct GameCheckpoint {
+        uint256 sequence;
+        uint256 timestamp;
     }
 
     struct SnapshotAccumulator {
@@ -108,6 +116,13 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
 
     // Recent opponents tracking (for exclusion)
     mapping(address => mapping(address => uint256)) public lastGameWith; // player => opponent => timestamp
+    mapping(address => mapping(address => GameCheckpoint[])) private gameHistory;
+    uint256 public gameRecordSequence;
+
+    // Exactly one FIFO-head population may be committed at a time. Voluntary
+    // mutations that can alter that committed population are blocked only until
+    // its future entropy is consumed or the bounded selection timeout expires.
+    uint256 public activePanelSelection;
 
     // Stats
     uint256 public totalStaked;
@@ -140,11 +155,18 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
         uint256 amount
     );
     event ArbitratorExcludedFromDispute(uint256 indexed disputeId, address indexed arbitrator);
+    event PanelSelectionLocked(uint256 indexed disputeId);
+    event PanelSelectionUnlocked(uint256 indexed disputeId);
 
     constructor(address _chessToken) {
         require(_chessToken.code.length > 0, "Token must be contract");
         chessToken = ChessToken(_chessToken);
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+    }
+
+    modifier whenPanelSelectionUnlocked() {
+        require(activePanelSelection == 0, "Panel selection lock active");
+        _;
     }
 
     /**
@@ -203,7 +225,7 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
      * @dev Activation resets the aggregate age bonus. This is deliberately
      *      conservative: newly activated stake can never inherit historical age.
      */
-    function activatePendingStake() external nonReentrant {
+    function activatePendingStake() external nonReentrant whenPanelSelectionUnlocked {
         Arbitrator storage arb = arbitrators[msg.sender];
         uint256 amount = arb.pendingStake;
         require(amount > 0, "No pending stake");
@@ -245,7 +267,7 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
      * @notice Unstake CHESS (partial or full)
      * @param amount Amount to unstake
      */
-    function unstake(uint256 amount) external nonReentrant {
+    function unstake(uint256 amount) external nonReentrant whenPanelSelectionUnlocked {
         Arbitrator storage arb = arbitrators[msg.sender];
         bool wasActive = arb.isActive;
         require(amount > 0, "Amount must be > 0");
@@ -342,32 +364,62 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
         return arb.activatedStake * (100 + timeBonus) / 100;
     }
 
+    function lockPanelSelection(uint256 disputeId)
+        external
+        onlyRole(DISPUTE_MANAGER_ROLE)
+    {
+        require(disputeId != 0, "Invalid dispute");
+        require(activePanelSelection == 0, "Panel selection already locked");
+        activePanelSelection = disputeId;
+        emit PanelSelectionLocked(disputeId);
+    }
+
+    function unlockPanelSelection(uint256 disputeId)
+        external
+        onlyRole(DISPUTE_MANAGER_ROLE)
+    {
+        require(activePanelSelection == disputeId, "Selection lock mismatch");
+        activePanelSelection = 0;
+        emit PanelSelectionUnlocked(disputeId);
+    }
+
     /**
-     * @notice Fingerprint the complete bounded tier population before future entropy exists
-     * @dev The fingerprint commits to pool membership/order and every field that can alter
-     *      eligibility, voting power, active stake, exclusions, cooldown, or assignment
-     *      quota. Eligibility is evaluated at the returned timestamp, not at finalization.
+     * @notice Fingerprint the eligible bounded population before future entropy exists
+     * @dev The order-independent fingerprint commits to every eligible member and their
+     *      active position. Game relationships use a historical record sequence; voluntary
+     *      stake and panel-settlement mutations are locked until entropy is consumed.
+     *      Capacity is capped per tier and collateral is the lowest guaranteed selectable sum.
      */
     function getSelectionSnapshot(
         uint256 disputeId,
         address player1,
         address player2,
         address extraExcluded,
+        uint256 countPerTier,
         uint256 snapshotRound
     ) external view onlyRole(DISPUTE_MANAGER_ROLE) returns (
         bytes32 fingerprint,
         uint256 eligibleCount,
         uint256 eligibleActiveStake,
-        uint256 snapshotTimestamp
+        uint256 snapshotTimestamp,
+        uint256 snapshotGameRecordSequence
     ) {
+        require(activePanelSelection == disputeId, "Selection lock mismatch");
+        require(
+            countPerTier > 0 && countPerTier <= MAX_ARBITRATORS_PER_TIER_POOL,
+            "Invalid tier selection count"
+        );
         snapshotTimestamp = block.timestamp;
+        snapshotGameRecordSequence = gameRecordSequence;
         SnapshotRequest memory request = SnapshotRequest({
             disputeId: disputeId,
             player1: player1,
             player2: player2,
             extraExcluded: extraExcluded,
+            countPerTier: countPerTier,
             snapshotRound: snapshotRound,
             snapshotTimestamp: snapshotTimestamp,
+            snapshotGameRecordSequence: snapshotGameRecordSequence,
             snapshotManager: msg.sender
         });
         SnapshotAccumulator memory snapshot = _buildSelectionSnapshot(request);
@@ -375,7 +427,60 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
             snapshot.fingerprint,
             snapshot.eligibleCount,
             snapshot.eligibleActiveStake,
-            snapshotTimestamp
+            snapshotTimestamp,
+            snapshotGameRecordSequence
+        );
+    }
+
+    /**
+     * @notice Capacity after currently active assignments have been released
+     * @dev Used for challenge admission. It ignores transient assignment/cooldown
+     *      state but keeps maturity, reputation, relationship and prior-round rules.
+     *      Per-tier count and stake use the same conservative bounds as live selection.
+     */
+    function getPotentialSelectionCapacity(
+        uint256 disputeId,
+        address player1,
+        address player2,
+        address extraExcluded,
+        uint256 countPerTier,
+        uint256 snapshotRound
+    ) external view onlyRole(DISPUTE_MANAGER_ROLE) returns (
+        uint256 eligibleCount,
+        uint256 eligibleActiveStake
+    ) {
+        require(
+            countPerTier > 0 && countPerTier <= MAX_ARBITRATORS_PER_TIER_POOL,
+            "Invalid tier selection count"
+        );
+        SnapshotRequest memory request = SnapshotRequest({
+            disputeId: disputeId,
+            player1: player1,
+            player2: player2,
+            extraExcluded: extraExcluded,
+            countPerTier: countPerTier,
+            snapshotRound: snapshotRound,
+            snapshotTimestamp: block.timestamp,
+            snapshotGameRecordSequence: gameRecordSequence,
+            snapshotManager: msg.sender
+        });
+        (eligibleCount, eligibleActiveStake) = _scanPotentialCapacity(
+            tier1Arbitrators,
+            request,
+            eligibleCount,
+            eligibleActiveStake
+        );
+        (eligibleCount, eligibleActiveStake) = _scanPotentialCapacity(
+            tier2Arbitrators,
+            request,
+            eligibleCount,
+            eligibleActiveStake
+        );
+        (eligibleCount, eligibleActiveStake) = _scanPotentialCapacity(
+            tier3Arbitrators,
+            request,
+            eligibleCount,
+            eligibleActiveStake
         );
     }
 
@@ -389,17 +494,26 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
         address player1,
         address player2,
         address extraExcluded,
+        uint256 countPerTier,
         uint256 snapshotRound,
         uint256 snapshotTimestamp,
+        uint256 snapshotGameRecordSequence,
         bytes32 expectedFingerprint
     ) external view onlyRole(DISPUTE_MANAGER_ROLE) returns (bool) {
+        require(activePanelSelection == disputeId, "Selection lock mismatch");
+        require(
+            countPerTier > 0 && countPerTier <= MAX_ARBITRATORS_PER_TIER_POOL,
+            "Invalid tier selection count"
+        );
         SnapshotRequest memory request = SnapshotRequest({
             disputeId: disputeId,
             player1: player1,
             player2: player2,
             extraExcluded: extraExcluded,
+            countPerTier: countPerTier,
             snapshotRound: snapshotRound,
             snapshotTimestamp: snapshotTimestamp,
+            snapshotGameRecordSequence: snapshotGameRecordSequence,
             snapshotManager: msg.sender
         });
         return _buildSelectionSnapshot(request).fingerprint == expectedFingerprint;
@@ -407,9 +521,9 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
 
     /**
      * @notice Select and reserve arbitrators using entropy captured by DisputeDAO
-     * @dev The caller must supply entropy from a future block plus the population
-     *      fingerprint captured before that block. Any membership, active stake, tier,
-     *      cooldown, quota, reputation, exclusion, or assignment mutation fails closed.
+     * @dev The caller must supply entropy from a future block plus the eligible-set
+     *      fingerprint captured before that block. The FIFO lock and historical relationship
+     *      checkpoint keep that fingerprint stable without coupling concurrent disputes.
      */
     function selectArbitrators(
         uint256 disputeId,
@@ -420,8 +534,10 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
         bytes32 entropy,
         uint256 snapshotRound,
         uint256 snapshotTimestamp,
+        uint256 snapshotGameRecordSequence,
         bytes32 expectedFingerprint
     ) external onlyRole(DISPUTE_MANAGER_ROLE) returns (address[] memory selected) {
+        require(activePanelSelection == disputeId, "Selection lock mismatch");
         SelectionRequest memory request;
         request.disputeId = disputeId;
         request.player1 = player1;
@@ -431,6 +547,7 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
         request.entropy = entropy;
         request.snapshotRound = snapshotRound;
         request.snapshotTimestamp = snapshotTimestamp;
+        request.snapshotGameRecordSequence = snapshotGameRecordSequence;
         request.expectedFingerprint = expectedFingerprint;
         request.snapshotManager = msg.sender;
         return _selectArbitrators(request);
@@ -441,6 +558,10 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
         returns (address[] memory selected)
     {
         require(request.count > 0, "Count must be > 0");
+        require(
+            request.count <= MAX_ARBITRATORS_PER_TIER_POOL,
+            "Count exceeds tier pool cap"
+        );
         require(request.entropy != bytes32(0), "Entropy required");
         require(request.expectedFingerprint != bytes32(0), "Snapshot required");
 
@@ -481,6 +602,7 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
     function releaseArbitrators(uint256 disputeId, address[] calldata panel)
         external
         onlyRole(DISPUTE_MANAGER_ROLE)
+        whenPanelSelectionUnlocked
     {
         for (uint256 i = 0; i < panel.length;) {
             address arbitrator = panel[i];
@@ -502,6 +624,7 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
     function updateReputation(address arbitrator, bool votedWithMajority)
         external
         onlyRole(DISPUTE_MANAGER_ROLE)
+        whenPanelSelectionUnlocked
     {
         // An arbitrator can be deactivated by another dispute after having been
         // validly assigned here. Reputation settlement must never block fund release.
@@ -516,6 +639,7 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
     function slashForNonReveal(uint256 disputeId, address arbitrator)
         external
         onlyRole(DISPUTE_MANAGER_ROLE)
+        whenPanelSelectionUnlocked
         returns (uint256 slashAmount)
     {
         require(disputeAssignments[disputeId][arbitrator], "Assignment not found");
@@ -533,6 +657,7 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
     function slashForIncorrectVote(uint256 disputeId, address arbitrator)
         external
         onlyRole(DISPUTE_MANAGER_ROLE)
+        whenPanelSelectionUnlocked
         returns (uint256 slashAmount)
     {
         require(disputeAssignments[disputeId][arbitrator], "Assignment not found");
@@ -550,6 +675,7 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
     function excludeArbitratorsForDispute(uint256 disputeId, address[] calldata panel)
         external
         onlyRole(DISPUTE_MANAGER_ROLE)
+        whenPanelSelectionUnlocked
     {
         for (uint256 i = 0; i < panel.length;) {
             priorRoundExcluded[disputeId][panel[i]] = true;
@@ -588,8 +714,15 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
      * @notice Record game between players (for future exclusion)
      */
     function recordGame(address player1, address player2) external onlyRole(DISPUTE_MANAGER_ROLE) {
+        gameRecordSequence++;
         lastGameWith[player1][player2] = block.timestamp;
         lastGameWith[player2][player1] = block.timestamp;
+        GameCheckpoint memory checkpoint = GameCheckpoint({
+            sequence: gameRecordSequence,
+            timestamp: block.timestamp
+        });
+        gameHistory[player1][player2].push(checkpoint);
+        gameHistory[player2][player1].push(checkpoint);
     }
 
     /**
@@ -614,7 +747,14 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
         address player2,
         address extra
     ) internal view returns (bool) {
-        return _shouldExcludeAt(arbitrator, player1, player2, extra, block.timestamp);
+        return _shouldExcludeAt(
+            arbitrator,
+            player1,
+            player2,
+            extra,
+            block.timestamp,
+            gameRecordSequence
+        );
     }
 
     function _shouldExcludeAt(
@@ -622,17 +762,51 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
         address player1,
         address player2,
         address extra,
-        uint256 timestamp
+        uint256 timestamp,
+        uint256 snapshotGameRecordSequence
     ) internal view returns (bool) {
         if (arbitrator == player1 || arbitrator == player2) return true;
         if (extra != address(0) && arbitrator == extra) return true;
 
-        uint256 thirtyDaysAgo = timestamp > 30 days ? timestamp - 30 days : 0;
-        if (lastGameWith[arbitrator][player1] > thirtyDaysAgo) return true;
-        if (lastGameWith[arbitrator][player2] > thirtyDaysAgo) return true;
-        if (extra != address(0) && lastGameWith[arbitrator][extra] > thirtyDaysAgo) return true;
+        if (_playedRecentlyAt(arbitrator, player1, timestamp, snapshotGameRecordSequence)) return true;
+        if (_playedRecentlyAt(arbitrator, player2, timestamp, snapshotGameRecordSequence)) return true;
+        if (
+            extra != address(0) &&
+            _playedRecentlyAt(arbitrator, extra, timestamp, snapshotGameRecordSequence)
+        ) return true;
 
         return false;
+    }
+
+    function _playedRecentlyAt(
+        address player,
+        address opponent,
+        uint256 timestamp,
+        uint256 snapshotGameRecordSequence
+    )
+        internal
+        view
+        returns (bool)
+    {
+        GameCheckpoint[] storage history = gameHistory[player][opponent];
+        uint256 low;
+        uint256 high = history.length;
+
+        // Find the first record created after the historical snapshot. The
+        // sequence disambiguates transactions sharing the same block timestamp.
+        while (low < high) {
+            uint256 mid = low + ((high - low) / 2);
+            if (history[mid].sequence <= snapshotGameRecordSequence) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        if (low == 0) return false;
+
+        uint256 lastAtOrBeforeSnapshot = history[low - 1].timestamp;
+        uint256 thirtyDaysAgo = timestamp > 30 days ? timestamp - 30 days : 0;
+        return lastAtOrBeforeSnapshot > thirtyDaysAgo;
     }
 
     // Internal functions
@@ -647,8 +821,10 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
             player1: request.player1,
             player2: request.player2,
             extraExcluded: request.extraExcluded,
+            countPerTier: request.count,
             snapshotRound: request.snapshotRound,
             snapshotTimestamp: request.snapshotTimestamp,
+            snapshotGameRecordSequence: request.snapshotGameRecordSequence,
             snapshotManager: request.snapshotManager
         });
     }
@@ -666,7 +842,9 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
                 request.player1,
                 request.player2,
                 request.extraExcluded,
-                request.snapshotTimestamp
+                request.countPerTier,
+                request.snapshotTimestamp,
+                request.snapshotGameRecordSequence
             )
         );
         snapshot.fingerprint = keccak256(
@@ -674,10 +852,7 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
                 SELECTION_SNAPSHOT_DOMAIN,
                 block.chainid,
                 address(this),
-                disputeContext,
-                tier1Arbitrators.length,
-                tier2Arbitrators.length,
-                tier3Arbitrators.length
+                disputeContext
             )
         );
 
@@ -692,27 +867,118 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
         SnapshotAccumulator memory snapshot,
         uint256 tier
     ) internal view returns (SnapshotAccumulator memory) {
+        uint256[] memory lowestStakes = new uint256[](request.countPerTier);
+        uint256 capacityCount;
+        uint256 guaranteedStake;
+
         for (uint256 poolIndex = 0; poolIndex < pool.length;) {
             address candidate = pool[poolIndex];
-            snapshot.fingerprint = keccak256(
-                abi.encode(
-                    snapshot.fingerprint,
-                    tier,
-                    poolIndex,
-                    candidate,
-                    _candidatePositionFingerprint(candidate),
-                    _candidateEligibilityFingerprint(candidate, request)
-                )
-            );
-
             if (_isSnapshotEligible(candidate, request)) {
-                snapshot.eligibleCount++;
-                snapshot.eligibleActiveStake += arbitrators[candidate].activatedStake;
+                // Commit only the eligible set, not array order or transient state
+                // of already-assigned arbitrators. Selection ranks by address hash,
+                // so pool compaction cannot change the result.
+                bytes32 memberFingerprint = keccak256(
+                    abi.encode(tier, candidate, _candidatePositionFingerprint(candidate))
+                );
+                snapshot.fingerprint = bytes32(
+                    uint256(snapshot.fingerprint) ^ uint256(memberFingerprint)
+                );
+                (capacityCount, guaranteedStake) = _trackLowestStake(
+                    lowestStakes,
+                    capacityCount,
+                    guaranteedStake,
+                    arbitrators[candidate].activatedStake
+                );
             }
 
             unchecked { ++poolIndex; }
         }
+        // Selection can reserve at most countPerTier candidates from this tier.
+        // Using the lowest-stake eligible subset makes the collateral figure a
+        // guarantee for every entropy-selected panel, not an optimistic total.
+        snapshot.eligibleCount += capacityCount;
+        snapshot.eligibleActiveStake += guaranteedStake;
         return snapshot;
+    }
+
+    function _scanPotentialCapacity(
+        address[] storage pool,
+        SnapshotRequest memory request,
+        uint256 eligibleCount,
+        uint256 eligibleActiveStake
+    ) internal view returns (uint256, uint256) {
+        uint256[] memory lowestStakes = new uint256[](request.countPerTier);
+        uint256 capacityCount;
+        uint256 guaranteedStake;
+
+        for (uint256 i = 0; i < pool.length;) {
+            address candidate = pool[i];
+            if (_isPotentiallyEligible(candidate, request)) {
+                (capacityCount, guaranteedStake) = _trackLowestStake(
+                    lowestStakes,
+                    capacityCount,
+                    guaranteedStake,
+                    arbitrators[candidate].activatedStake
+                );
+            }
+            unchecked { ++i; }
+        }
+        return (
+            eligibleCount + capacityCount,
+            eligibleActiveStake + guaranteedStake
+        );
+    }
+
+    function _isPotentiallyEligible(
+        address candidate,
+        SnapshotRequest memory request
+    ) internal view returns (bool) {
+        Arbitrator storage arb = arbitrators[candidate];
+        return
+            arb.isActive &&
+            arb.reputation >= MIN_REPUTATION &&
+            _getVotingPowerAt(arb, request.snapshotTimestamp) > 0 &&
+            !_shouldExcludeAt(
+                candidate,
+                request.player1,
+                request.player2,
+                request.extraExcluded,
+                request.snapshotTimestamp,
+                request.snapshotGameRecordSequence
+            ) &&
+            !nonRevealPenalized[request.disputeId][candidate] &&
+            !priorRoundExcluded[request.disputeId][candidate];
+    }
+
+    /**
+     * @dev Maintain the bounded set of lowest stakes seen in a tier.
+     *      The sum is the minimum collateral any entropy-selected subset of the
+     *      same size can contain, so admission cannot depend on a lucky retry.
+     */
+    function _trackLowestStake(
+        uint256[] memory lowestStakes,
+        uint256 used,
+        uint256 total,
+        uint256 candidateStake
+    ) internal pure returns (uint256, uint256) {
+        uint256 insertAt;
+        if (used < lowestStakes.length) {
+            insertAt = used;
+            used++;
+            total += candidateStake;
+        } else if (candidateStake < lowestStakes[used - 1]) {
+            insertAt = used - 1;
+            total = total - lowestStakes[insertAt] + candidateStake;
+        } else {
+            return (used, total);
+        }
+
+        while (insertAt > 0 && candidateStake < lowestStakes[insertAt - 1]) {
+            lowestStakes[insertAt] = lowestStakes[insertAt - 1];
+            unchecked { --insertAt; }
+        }
+        lowestStakes[insertAt] = candidateStake;
+        return (used, total);
     }
 
     function _candidatePositionFingerprint(address candidate) internal view returns (bytes32) {
@@ -741,23 +1007,6 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
         );
     }
 
-    function _candidateEligibilityFingerprint(
-        address candidate,
-        SnapshotRequest memory request
-    ) internal view returns (bytes32) {
-        return keccak256(
-            abi.encode(
-                activeAssignments[candidate],
-                disputeAssignments[request.disputeId][candidate],
-                nonRevealPenalized[request.disputeId][candidate],
-                priorRoundExcluded[request.disputeId][candidate],
-                lastGameWith[candidate][request.player1],
-                lastGameWith[candidate][request.player2],
-                lastGameWith[candidate][request.extraExcluded]
-            )
-        );
-    }
-
     function _isSnapshotEligible(address candidate, SnapshotRequest memory request)
         internal
         view
@@ -769,9 +1018,11 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
                 request.player1,
                 request.player2,
                 request.extraExcluded,
-                request.snapshotTimestamp
+                request.snapshotTimestamp,
+                request.snapshotGameRecordSequence
             ) &&
             _canVoteAt(candidate, request.snapshotTimestamp) &&
+            _getVotingPowerAt(arbitrators[candidate], request.snapshotTimestamp) > 0 &&
             !disputeAssignments[request.disputeId][candidate] &&
             !nonRevealPenalized[request.disputeId][candidate] &&
             !priorRoundExcluded[request.disputeId][candidate];
@@ -866,22 +1117,13 @@ contract ArbitratorRegistry is AccessControl, ReentrancyGuard {
         // cannot reshuffle the honest candidates after entropy becomes knowable.
         uint256 selectedFromTier = 0;
         uint256[] memory selectedScores = new uint256[](request.count);
+        SnapshotRequest memory snapshotRequest = _snapshotRequest(request);
 
         for (uint256 poolIndex = 0; poolIndex < pool.length;) {
             address candidate = pool[poolIndex];
 
             if (
-                !_shouldExcludeAt(
-                    candidate,
-                    request.player1,
-                    request.player2,
-                    request.extraExcluded,
-                    request.snapshotTimestamp
-                ) &&
-                _canVoteAt(candidate, request.snapshotTimestamp) &&
-                !disputeAssignments[request.disputeId][candidate] &&
-                !nonRevealPenalized[request.disputeId][candidate] &&
-                !priorRoundExcluded[request.disputeId][candidate] &&
+                _isSnapshotEligible(candidate, snapshotRequest) &&
                 !_isAlreadySelected(selected, startIndex, candidate)
             ) {
                 uint256 score = uint256(keccak256(abi.encode(request.entropy, salt, candidate)));

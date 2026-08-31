@@ -63,6 +63,120 @@ export function normalizeDisputeId(disputeId) {
 	return normalized;
 }
 
+export function getWholeGameChallengeArguments(gameId) {
+	return [normalizeDisputeGameId(gameId)];
+}
+
+function assertWholeGameChallengeCapability(dao) {
+	if (!dao?.interface?.getFunction ||
+		typeof dao.gameWhitePlayer !== 'function' ||
+		typeof dao.gameBlackPlayer !== 'function') {
+		throw new Error('Configured DisputeDAO does not support whole-game challenges');
+	}
+	try {
+		dao.interface.getFunction('challenge(uint256)');
+	} catch {
+		throw new Error('Configured DisputeDAO does not support whole-game challenges');
+	}
+}
+
+export async function readWholeGameParticipants({ dao, gameId, account }) {
+	const normalizedGameId = normalizeDisputeGameId(gameId);
+	assertWholeGameChallengeCapability(dao);
+
+	let values;
+	try {
+		values = await Promise.all([
+			dao.gameWhitePlayer(normalizedGameId),
+			dao.gameBlackPlayer(normalizedGameId)
+		]);
+	} catch {
+		throw new Error('Unable to verify whole-game participants on-chain');
+	}
+
+	try {
+		const [whiteValue, blackValue] = values;
+		const whitePlayer = normalizeProtocolAddress(whiteValue, 'Registered White player');
+		const blackPlayer = normalizeProtocolAddress(blackValue, 'Registered Black player');
+
+		if (account !== undefined) {
+			const normalizedAccount = normalizeProtocolAddress(account, 'Wallet account');
+			if (normalizedAccount !== whitePlayer && normalizedAccount !== blackPlayer) {
+				throw new Error('Only a participant in this game may request review');
+			}
+		}
+
+		return { whitePlayer, blackPlayer };
+	} catch (error) {
+		if (error?.message === 'Only a participant in this game may request review') throw error;
+		throw new Error('DisputeDAO returned invalid whole-game participants');
+	}
+}
+
+async function readRequiredWholeGameChallengeDeposit(dao, gameId) {
+	if (typeof dao?.getRequiredChallengeDepositForGame !== 'function') {
+		throw new Error('Configured DisputeDAO does not support whole-game challenges');
+	}
+	const normalizedGameId = normalizeDisputeGameId(gameId);
+	let requiredDepositValue;
+	try {
+		requiredDepositValue = await dao.getRequiredChallengeDepositForGame(normalizedGameId);
+	} catch {
+		// A pending challenge must fail closed if current bond-backed economics
+		// cannot be verified. Historical records use their reserved escrow instead.
+		throw new Error('Unable to verify whole-game challenge terms on-chain');
+	}
+	try {
+		const requiredDeposit = ethers.BigNumber.from(requiredDepositValue);
+		if (requiredDeposit.lte(0)) throw new Error('invalid challenge deposit');
+		return requiredDeposit;
+	} catch {
+		throw new Error('DisputeDAO returned invalid whole-game challenge terms');
+	}
+}
+
+export async function readWholeGameChallengeTerms({ dao, gameId, account }) {
+	const normalizedGameId = normalizeDisputeGameId(gameId);
+	const [participants, requiredDeposit] = await Promise.all([
+		readWholeGameParticipants({ dao, gameId: normalizedGameId, account }),
+		readRequiredWholeGameChallengeDeposit(dao, normalizedGameId)
+	]);
+	return { requiredDeposit, ...participants };
+}
+
+export async function readDisputeChallengeEconomics({ dao, gameId, disputeId, state }) {
+	const participants = await readWholeGameParticipants({ dao, gameId });
+	const normalizedState = Number(state);
+	if (!Number.isSafeInteger(normalizedState) || normalizedState < 0) {
+		throw new Error('Invalid dispute state');
+	}
+
+	// Pending is the only state in which opening a challenge still depends on
+	// live game bonds. Once challenged, the exact deposit is already escrowed;
+	// settlement may validly release or slash the underlying bonds.
+	if (normalizedState === 1) {
+		const requiredDeposit = await readRequiredWholeGameChallengeDeposit(dao, gameId);
+		return {
+			...participants,
+			requiredDeposit,
+			escrowedDeposit: ethers.constants.Zero
+		};
+	}
+
+	if (typeof dao?.disputeDeposits !== 'function') {
+		throw new Error('Configured DisputeDAO does not expose challenge escrow');
+	}
+	let escrowedDeposit;
+	try {
+		escrowedDeposit = ethers.BigNumber.from(
+			await dao.disputeDeposits(normalizeDisputeId(disputeId))
+		);
+	} catch {
+		throw new Error('Unable to verify challenge escrow on-chain');
+	}
+	return { ...participants, requiredDeposit: null, escrowedDeposit };
+}
+
 export function normalizeDisputeProtocolContext({
 	chainId,
 	factoryAddress,

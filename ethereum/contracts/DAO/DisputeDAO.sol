@@ -36,7 +36,8 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
     // Voting parameters
     uint256 public quorumPercentage = 66; // Revealed panel voting power required
     uint256 public supermajority = 66;    // 66% for decision
-    uint256 public challengeDeposit = 50 * 10**18; // 50 CHESS
+    uint256 public challengeDeposit = 50 * 10**18; // Minimum 50 CHESS
+    uint256 public challengeDepositBps = 500; // 5% of both players' locked CHESS bonds
     uint256 public minimumPanelSize = 3;
     // Legacy ABI name: this is a minimum panel active-stake floor, not fully
     // slashable collateral for a subjective majority verdict.
@@ -44,7 +45,7 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
     uint256 public arbitrationCoverageBps = 10_000; // 100% of both players' CHESS game bonds
 
     // Vote options
-    enum Vote { None, Legit, Cheat, Abstain }
+    enum Vote { None, Legit, WhiteCheat, BlackCheat, Abstain }
 
     // Dispute states
     enum DisputeState {
@@ -61,8 +62,6 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
     struct Dispute {
         uint256 gameId;
         address challenger;
-        address accusedPlayer;
-        address otherPlayer;
         uint256 gameStake;
 
         DisputeState state;
@@ -74,7 +73,8 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         uint256 requiredArbitratorCount;
 
         uint256 legitVotes;
-        uint256 cheatVotes;
+        uint256 whiteCheatVotes;
+        uint256 blackCheatVotes;
         uint256 abstainVotes;
 
         Vote finalDecision;
@@ -88,6 +88,23 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         bytes32 commitHash;
         bool revealed;
         Vote vote;
+    }
+
+    struct DisputeEconomics {
+        uint256 minimumPanelCollateral;
+        uint256 arbitrationCoverageBps;
+        uint256 challengeDeposit;
+        uint256 challengeDepositBps;
+    }
+
+    struct GameArbitrationPolicy {
+        uint256 challengeWindow;
+        uint256 minimumPanelSize;
+        uint256 quorumPercentage;
+        uint256 supermajority;
+        uint256 commitPeriod;
+        uint256 revealPeriod;
+        DisputeEconomics economics;
     }
 
     // Storage
@@ -114,15 +131,24 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
     // no proxy/storage migration path, so this policy snapshot ships by redeploy.
     mapping(uint256 => uint256) public disputeCommitPeriod;
     mapping(uint256 => uint256) public disputeRevealPeriod;
+    mapping(uint256 => uint256) public challengeDeadline;
+    mapping(uint256 => DisputeEconomics) private disputeEconomics;
+    mapping(uint256 => bool) public gamePolicyPrepared;
+    mapping(uint256 => bytes32) private gamePolicyPlayers;
+    mapping(uint256 => GameArbitrationPolicy) private gameArbitrationPolicies;
     mapping(uint256 => uint256) public panelSelectionScheduledAt;
     mapping(uint256 => bytes32) public panelPopulationFingerprint;
     mapping(uint256 => uint256) public panelSnapshotTimestamp;
     mapping(uint256 => uint256) public panelSnapshotEligibleCount;
     mapping(uint256 => uint256) public panelSnapshotEligibleActiveStake;
+    mapping(uint256 => uint256) public panelSnapshotGameRecordSequence;
+    mapping(uint256 => uint256) public panelSelectionSequence;
+    mapping(uint256 => uint256) public selectionSequenceDispute;
 
     uint256 public disputeCounter;
+    uint256 public selectionSequenceCounter;
+    uint256 public nextSelectionSequence = 1;
     uint256 public totalEscrowedDeposits;
-    uint256 public constant MAX_ACTIVE_CHALLENGES = 3;
     uint256 public constant MAX_DISPUTE_DURATION = 30 days;
     uint256 public constant PANEL_SELECTION_DELAY_BLOCKS = 2;
     uint256 public constant BLOCKHASH_WINDOW = 256;
@@ -138,10 +164,16 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
 
     // Events
     event GameRegistered(uint256 indexed gameId, address white, address black, uint256 stake);
-    event DisputeCreated(uint256 indexed disputeId, uint256 indexed gameId, address challenger, address accused);
+    event DisputeCreated(uint256 indexed disputeId, uint256 indexed gameId, address challenger);
     event VoteCommitted(uint256 indexed disputeId, address indexed arbitrator);
     event VoteRevealed(uint256 indexed disputeId, address indexed arbitrator, Vote vote);
-    event DisputeResolved(uint256 indexed disputeId, Vote decision, uint256 legitVotes, uint256 cheatVotes);
+    event DisputeResolved(
+        uint256 indexed disputeId,
+        Vote decision,
+        uint256 legitVotes,
+        uint256 whiteCheatVotes,
+        uint256 blackCheatVotes
+    );
     event DisputeEscalated(uint256 indexed disputeId, uint256 newLevel);
     event ChallengeWindowClosed(uint256 indexed gameId);
     event RewardDistributed(uint256 indexed disputeId, address indexed recipient, uint256 amount);
@@ -176,6 +208,21 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
     );
     event DisputeRequiresBackstop(uint256 indexed disputeId, uint256 escalationLevel);
     event BackstopDecision(uint256 indexed disputeId, Vote decision);
+    event PanelSelectionQueued(uint256 indexed disputeId, uint256 indexed sequence);
+    event ChallengeEconomicsUpdated(uint256 minimumDeposit, uint256 exposureBps);
+    event StructuralPanelUnavailable(
+        uint256 indexed disputeId,
+        uint256 availableCount,
+        uint256 availableActiveStake,
+        uint256 requiredCount,
+        uint256 requiredActiveStake
+    );
+    event GameArbitrationPrepared(
+        uint256 indexed gameId,
+        address indexed white,
+        address indexed black,
+        uint256 requiredPanelActiveStake
+    );
 
     constructor(
         address _chessToken,
@@ -238,8 +285,6 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         disputes[disputeId] = Dispute({
             gameId: gameId,
             challenger: address(0),
-            accusedPlayer: address(0),
-            otherPlayer: address(0),
             gameStake: stake,
             state: DisputeState.Pending,
             registeredAt: block.timestamp,  // Track when challenge window opens
@@ -248,7 +293,8 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
             revealDeadline: 0,
             requiredArbitratorCount: 0,
             legitVotes: 0,
-            cheatVotes: 0,
+            whiteCheatVotes: 0,
+            blackCheatVotes: 0,
             abstainVotes: 0,
             finalDecision: Vote.None,
             resolved: false,
@@ -260,6 +306,40 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         gameWhitePlayer[gameId] = white;
         gameBlackPlayer[gameId] = black;
 
+        // Production games snapshot every mutable arbitration rule atomically
+        // with their bond locks at Black's join. This prevents governance from
+        // changing the challenge window, deposit or required panel while a
+        // funded game is in progress. Direct unit/legacy managers can only use
+        // the registration-time fallback when no factory is configured.
+        if (gamePolicyPrepared[gameId]) {
+            require(
+                gamePolicyPlayers[gameId] == keccak256(abi.encode(white, black)),
+                "Prepared game players mismatch"
+            );
+            GameArbitrationPolicy storage policy = gameArbitrationPolicies[gameId];
+            challengeDeadline[disputeId] = block.timestamp + policy.challengeWindow;
+            disputeMinimumPanelSize[disputeId] = policy.minimumPanelSize;
+            disputeQuorumPercentage[disputeId] = policy.quorumPercentage;
+            disputeSupermajority[disputeId] = policy.supermajority;
+            disputeCommitPeriod[disputeId] = policy.commitPeriod;
+            disputeRevealPeriod[disputeId] = policy.revealPeriod;
+            disputeEconomics[disputeId] = policy.economics;
+        } else {
+            require(chessFactory == address(0), "Game policy not prepared");
+            challengeDeadline[disputeId] = block.timestamp + challengeWindow;
+            disputeMinimumPanelSize[disputeId] = minimumPanelSize;
+            disputeQuorumPercentage[disputeId] = quorumPercentage;
+            disputeSupermajority[disputeId] = supermajority;
+            disputeCommitPeriod[disputeId] = commitPeriod;
+            disputeRevealPeriod[disputeId] = revealPeriod;
+            disputeEconomics[disputeId] = DisputeEconomics({
+                minimumPanelCollateral: minimumPanelCollateral,
+                arbitrationCoverageBps: arbitrationCoverageBps,
+                challengeDeposit: challengeDeposit,
+                challengeDepositBps: challengeDepositBps
+            });
+        }
+
         // Record game in arbitrator registry for exclusion tracking
         arbitratorRegistry.recordGame(white, black);
 
@@ -267,11 +347,13 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
     }
 
     /**
-     * @notice Challenge a game (accuse player of cheating)
+     * @notice Ask the panel to adjudicate the complete game record
+     * @dev Only a participant may challenge. The challenger cannot choose who the
+     *      panel is allowed to punish: arbitrators independently decide whether the
+     *      game is legitimate, White cheated, or Black cheated.
      * @param gameId Game to challenge
-     * @param accusedPlayer Player being accused
      */
-    function challenge(uint256 gameId, address accusedPlayer) external nonReentrant {
+    function challenge(uint256 gameId) external nonReentrant {
         uint256 disputeId = gameToDispute[gameId];
         require(disputeId != 0, "Game not registered");
 
@@ -279,40 +361,94 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         address white = gameWhitePlayer[gameId];
         address black = gameBlackPlayer[gameId];
         require(dispute.state == DisputeState.Pending, "Not in challenge window");
-        require(activeChallenges[msg.sender] < MAX_ACTIVE_CHALLENGES, "Too many active challenges");
-        require(accusedPlayer == white || accusedPlayer == black, "Accused not in game");
+        require(msg.sender == white || msg.sender == black, "Only game participant");
 
-        uint256 disputeRequiredPower = _requiredPanelPower(gameId, white, black);
+        uint256 gameBondExposure = _gameBondExposure(gameId, white, black);
+        uint256 disputeRequiredPower =
+            _requiredPanelPowerForDispute(disputeId, gameBondExposure);
         disputeRequiredPanelCollateral[disputeId] = disputeRequiredPower;
-        disputeMinimumPanelSize[disputeId] = minimumPanelSize;
-        disputeQuorumPercentage[disputeId] = quorumPercentage;
-        disputeSupermajority[disputeId] = supermajority;
-        disputeCommitPeriod[disputeId] = commitPeriod;
-        disputeRevealPeriod[disputeId] = revealPeriod;
 
-        // Enforce challenge window (48 hours from registration)
-        require(
-            block.timestamp <= dispute.registeredAt + challengeWindow,
-            "Challenge window expired"
-        );
-
-        // Transfer challenge deposit (using SafeERC20)
-        uint256 depositAmount = challengeDeposit;
-        chessToken.safeTransferFrom(msg.sender, address(this), depositAmount);
-        disputeDeposits[disputeId] = depositAmount;
-        totalEscrowedDeposits += depositAmount;
-        emit ChallengeDepositReserved(disputeId, depositAmount);
+        // The deadline is snapshotted at registration. Governance changes apply
+        // only to future games and cannot shorten a participant's live window.
+        require(block.timestamp <= challengeDeadline[disputeId], "Challenge window expired");
 
         dispute.challenger = msg.sender;
-        dispute.accusedPlayer = accusedPlayer;
-        dispute.otherPlayer = (accusedPlayer == white) ? black : white;
         dispute.state = DisputeState.Selecting;
         dispute.challengedAt = block.timestamp;
 
-        activeChallenges[msg.sender]++;
-        _schedulePanelSelection(disputeId, true);
+        // A participant's valid challenge is never rejected merely because the
+        // arbitration pool deteriorated after the game began. Structurally
+        // unavailable cases reserve the same deposit and go directly to the
+        // timelocked backstop without blocking the global selection FIFO.
+        (uint256 potentialCount, uint256 potentialActiveStake) =
+            _potentialPanelCapacity(disputeId, white, black, msg.sender, 0);
+        bool structurallyAvailable =
+            potentialCount >= disputeMinimumPanelSize[disputeId] &&
+            potentialActiveStake >= disputeRequiredPanelCollateral[disputeId];
 
-        emit DisputeCreated(disputeId, gameId, msg.sender, accusedPlayer);
+        uint256 depositAmount =
+            _requiredChallengeDepositForDispute(disputeId, gameBondExposure);
+        chessToken.safeTransferFrom(msg.sender, address(this), depositAmount);
+        disputeDeposits[disputeId] = depositAmount;
+        totalEscrowedDeposits += depositAmount;
+        activeChallenges[msg.sender]++;
+        emit ChallengeDepositReserved(disputeId, depositAmount);
+
+        if (structurallyAvailable) {
+            // A structurally viable but currently assigned/cooling-down pool is
+            // a transient condition and remains protected by FIFO + timeout.
+            _schedulePanelSelection(disputeId);
+        } else {
+            _enterUnresolved(disputeId);
+            emit StructuralPanelUnavailable(
+                disputeId,
+                potentialCount,
+                potentialActiveStake,
+                disputeMinimumPanelSize[disputeId],
+                disputeRequiredPanelCollateral[disputeId]
+            );
+        }
+
+        emit DisputeCreated(disputeId, gameId, msg.sender);
+    }
+
+    /**
+     * @notice Revert unless the just-locked game exposure has a structurally viable panel
+     * @dev Called atomically by an authorized ChessCore clone during Black's join.
+     *      Transient assignments and cooldowns are ignored; maturity, reputation,
+     *      relationship exclusions and guaranteed selectable stake are enforced.
+     */
+    function prepareGameArbitration(
+        uint256 gameId,
+        address white,
+        address black
+    ) external onlyRole(GAME_MANAGER_ROLE) {
+        require(!gamePolicyPrepared[gameId], "Game policy already prepared");
+        require(white != address(0) && black != address(0) && white != black, "Invalid players");
+        uint256 gameBondExposure = _gameBondExposure(gameId, white, black);
+        uint256 requiredActiveStake = _requiredPanelPower(gameBondExposure);
+        (uint256 potentialCount, uint256 potentialActiveStake) =
+            _potentialPanelCapacity(0, white, black, address(0), 0);
+
+        require(potentialCount >= minimumPanelSize, "Eligible arbitrator pool too small");
+        require(potentialActiveStake >= requiredActiveStake, "Eligible arbitrator stake too low");
+
+        gamePolicyPrepared[gameId] = true;
+        gamePolicyPlayers[gameId] = keccak256(abi.encode(white, black));
+        GameArbitrationPolicy storage policy = gameArbitrationPolicies[gameId];
+        policy.challengeWindow = challengeWindow;
+        policy.minimumPanelSize = minimumPanelSize;
+        policy.quorumPercentage = quorumPercentage;
+        policy.supermajority = supermajority;
+        policy.commitPeriod = commitPeriod;
+        policy.revealPeriod = revealPeriod;
+        policy.economics = DisputeEconomics({
+            minimumPanelCollateral: minimumPanelCollateral,
+            arbitrationCoverageBps: arbitrationCoverageBps,
+            challengeDeposit: challengeDeposit,
+            challengeDepositBps: challengeDepositBps
+        });
+        emit GameArbitrationPrepared(gameId, white, black, requiredActiveStake);
     }
 
     /**
@@ -323,18 +459,26 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
     function refreshPanelSelection(uint256 disputeId) external {
         Dispute storage dispute = disputes[disputeId];
         require(dispute.state == DisputeState.Selecting, "Panel not pending");
+        require(_isSelectionHead(disputeId), "Selection is queued");
+        require(panelSelectionBlock[disputeId] != 0, "Selection not activated");
         require(panelEntropy[disputeId] == bytes32(0), "Entropy already captured");
+        require(
+            block.timestamp <= panelSelectionScheduledAt[disputeId] + PANEL_SELECTION_TIMEOUT,
+            "Selection timed out"
+        );
 
         uint256 previousTarget = panelSelectionBlock[disputeId];
         require(block.number > previousTarget + BLOCKHASH_WINDOW, "Blockhash still available");
         require(
             arbitratorRegistry.selectionSnapshotMatches(
                 disputeId,
-                dispute.accusedPlayer,
-                dispute.otherPlayer,
+                gameWhitePlayer[dispute.gameId],
+                gameBlackPlayer[dispute.gameId],
                 dispute.challenger,
+                _requestedArbitratorsPerTier(dispute.escalationLevel),
                 dispute.escalationLevel,
                 panelSnapshotTimestamp[disputeId],
+                panelSnapshotGameRecordSequence[disputeId],
                 panelPopulationFingerprint[disputeId]
             ),
             "Selection snapshot changed"
@@ -350,21 +494,78 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
     }
 
     /**
+     * @notice Activate the FIFO head once enough unassigned arbitrators are available
+     * @dev A queued dispute has no entropy target. Snapshotting only at the head keeps
+     *      concurrent disputes from invalidating one another or selecting around a
+     *      seed that is already public.
+     */
+    function activatePanelSelection(uint256 disputeId) external {
+        Dispute storage dispute = disputes[disputeId];
+        require(dispute.state == DisputeState.Selecting, "Panel not pending");
+        require(_isSelectionHead(disputeId), "Selection is queued");
+        require(panelSelectionBlock[disputeId] == 0, "Selection already activated");
+        require(
+            block.timestamp <= panelSelectionScheduledAt[disputeId] + PANEL_SELECTION_TIMEOUT,
+            "Selection timed out"
+        );
+        if (_activatePanelSelection(disputeId)) return;
+
+        // The current selectable set may be temporarily depleted by assignments
+        // or cooldowns, in which case the bounded recovery timeout remains useful.
+        // If the potential population itself has fallen below the snapshotted
+        // requirements, waiting cannot repair this entry: move it to the same
+        // timelocked backstop immediately and let the next FIFO item progress.
+        (uint256 potentialCount, uint256 potentialActiveStake) =
+            _potentialPanelCapacity(
+                disputeId,
+                gameWhitePlayer[dispute.gameId],
+                gameBlackPlayer[dispute.gameId],
+                dispute.challenger,
+                dispute.escalationLevel
+            );
+        if (
+            potentialCount < disputeMinimumPanelSize[disputeId] ||
+            potentialActiveStake < disputeRequiredPanelCollateral[disputeId]
+        ) {
+            _enterUnresolved(disputeId);
+            emit StructuralPanelUnavailable(
+                disputeId,
+                potentialCount,
+                potentialActiveStake,
+                disputeMinimumPanelSize[disputeId],
+                disputeRequiredPanelCollateral[disputeId]
+            );
+            _advanceSelectionQueue(disputeId);
+            return;
+        }
+
+        revert("Available panel pending");
+    }
+
+    /**
      * @notice Move a selection that could not form a viable panel to governance backstop
      * @dev This never fabricates Vote.None and never releases the challenge deposit.
      *      Anyone can trigger the timeout; only the timelocked admin can decide the case.
-     *      Fail-closed snapshots trade grinding resistance for liveness: a member can
-     *      deliberately change active stake/tier/assignment state and invalidate a round.
-     *      The bounded timeout is the recovery path; there is no safe entropy refresh.
+     *      The FIFO head holds a short registry mutation lock, so an arbitrator cannot
+     *      invalidate the population with a last-look stake change. The bounded timeout
+     *      releases that lock and advances the queue if entropy is never consumed.
      */
     function markPanelUnavailable(uint256 disputeId) external {
         Dispute storage dispute = disputes[disputeId];
         require(dispute.state == DisputeState.Selecting, "Panel not pending");
+        require(_isSelectionHead(disputeId), "Selection is queued");
         require(
             block.timestamp > panelSelectionScheduledAt[disputeId] + PANEL_SELECTION_TIMEOUT,
             "Selection recovery active"
         );
+        uint256 targetBlock = panelSelectionBlock[disputeId];
+        require(
+            targetBlock == 0 || block.number > targetBlock + BLOCKHASH_WINDOW,
+            "Selection entropy recoverable"
+        );
+        _releaseSelectionLock(disputeId);
         _enterUnresolved(disputeId);
+        _advanceSelectionQueue(disputeId);
     }
 
     /**
@@ -377,6 +578,8 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
     function finalizePanel(uint256 disputeId) external nonReentrant {
         Dispute storage dispute = disputes[disputeId];
         require(dispute.state == DisputeState.Selecting, "Panel not pending");
+        require(_isSelectionHead(disputeId), "Selection is queued");
+        require(panelSelectionBlock[disputeId] != 0, "Selection not activated");
         require(panelEntropy[disputeId] == bytes32(0), "Entropy already captured");
         require(dispute.selectedArbitrators.length == 0, "Panel already selected");
 
@@ -395,10 +598,8 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
             )
         );
 
-        uint256 requestedPerTier = INITIAL_ARBITRATORS_PER_TIER + (dispute.escalationLevel * 2);
-        if (requestedPerTier > MAX_ARBITRATORS_PER_TIER) {
-            requestedPerTier = MAX_ARBITRATORS_PER_TIER;
-        }
+        uint256 requestedPerTier =
+            _requestedArbitratorsPerTier(dispute.escalationLevel);
 
         address[] memory arbitrators = _selectScheduledPanel(
             disputeId,
@@ -439,6 +640,9 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
             dispute.commitDeadline + disputeRevealPeriod[disputeId];
         dispute.state = DisputeState.Challenged;
 
+        _releaseSelectionLock(disputeId);
+        _advanceSelectionQueue(disputeId);
+
         emit PanelEntropyCaptured(disputeId, dispute.escalationLevel, entropy);
         emit PanelSelected(
             disputeId,
@@ -458,13 +662,14 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
     ) internal returns (address[] memory) {
         return arbitratorRegistry.selectArbitrators(
             disputeId,
-            dispute.accusedPlayer,
-            dispute.otherPlayer,
+            gameWhitePlayer[dispute.gameId],
+            gameBlackPlayer[dispute.gameId],
             dispute.challenger,
             requestedPerTier,
             entropy,
             dispute.escalationLevel,
             panelSnapshotTimestamp[disputeId],
+            panelSnapshotGameRecordSequence[disputeId],
             panelPopulationFingerprint[disputeId]
         );
     }
@@ -511,7 +716,7 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
     /**
      * @notice Reveal a previously committed vote
      * @param disputeId Dispute identifier
-     * @param vote The vote (1=Legit, 2=Cheat, 3=Abstain)
+     * @param vote The vote (1=Legit, 2=WhiteCheat, 3=BlackCheat, 4=Abstain)
      * @param salt The salt used in commit
      */
     function revealVote(uint256 disputeId, Vote vote, bytes32 salt) external {
@@ -543,8 +748,10 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         // Count the stake/time-weight snapshot, not one address as one vote.
         if (vote == Vote.Legit) {
             dispute.legitVotes += power;
-        } else if (vote == Vote.Cheat) {
-            dispute.cheatVotes += power;
+        } else if (vote == Vote.WhiteCheat) {
+            dispute.whiteCheatVotes += power;
+        } else if (vote == Vote.BlackCheat) {
+            dispute.blackCheatVotes += power;
         } else if (vote == Vote.Abstain) {
             dispute.abstainVotes += power;
         }
@@ -571,7 +778,7 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         ) {
             dispute.resolved = true;
             dispute.state = DisputeState.Resolved;
-            emit DisputeResolved(disputeId, Vote.None, 0, 0);
+            emit DisputeResolved(disputeId, Vote.None, 0, 0, 0);
             return;
         }
 
@@ -599,15 +806,19 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
 
         // Check for supermajority
         uint256 legitPercent = (dispute.legitVotes * PERCENTAGE_BASE) / totalVotes;
-        uint256 cheatPercent = (dispute.cheatVotes * PERCENTAGE_BASE) / totalVotes;
+        uint256 whiteCheatPercent =
+            (dispute.whiteCheatVotes * PERCENTAGE_BASE) / totalVotes;
+        uint256 blackCheatPercent =
+            (dispute.blackCheatVotes * PERCENTAGE_BASE) / totalVotes;
 
         uint256 resolutionSupermajority = disputeSupermajority[disputeId];
-        if (cheatPercent >= resolutionSupermajority) {
-            // CHEAT: Accused is guilty
-            dispute.finalDecision = Vote.Cheat;
-            _handleCheatDecision(disputeId);
+        if (whiteCheatPercent >= resolutionSupermajority) {
+            dispute.finalDecision = Vote.WhiteCheat;
+            _handleCheatDecision(disputeId, gameWhitePlayer[dispute.gameId]);
+        } else if (blackCheatPercent >= resolutionSupermajority) {
+            dispute.finalDecision = Vote.BlackCheat;
+            _handleCheatDecision(disputeId, gameBlackPlayer[dispute.gameId]);
         } else if (legitPercent >= resolutionSupermajority) {
-            // LEGIT: Accused is innocent
             dispute.finalDecision = Vote.Legit;
             _handleLegitDecision(disputeId);
         } else {
@@ -624,7 +835,13 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         _updateArbitratorReputations(disputeId);
         _releaseRoundPanel(disputeId);
 
-        emit DisputeResolved(disputeId, dispute.finalDecision, dispute.legitVotes, dispute.cheatVotes);
+        emit DisputeResolved(
+            disputeId,
+            dispute.finalDecision,
+            dispute.legitVotes,
+            dispute.whiteCheatVotes,
+            dispute.blackCheatVotes
+        );
     }
 
     /**
@@ -640,7 +857,7 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
 
         // Enforce that challenge window has actually expired
         require(
-            block.timestamp > dispute.registeredAt + challengeWindow,
+            block.timestamp > challengeDeadline[disputeId],
             "Challenge window still open"
         );
 
@@ -662,7 +879,7 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         Dispute storage dispute = disputes[disputeId];
         if (dispute.state != DisputeState.Pending) return false;
 
-        return block.timestamp <= dispute.registeredAt + challengeWindow;
+        return block.timestamp <= challengeDeadline[disputeId];
     }
 
     /**
@@ -677,7 +894,7 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         Dispute storage dispute = disputes[disputeId];
         if (dispute.state != DisputeState.Pending) return 0;
 
-        uint256 deadline = dispute.registeredAt + challengeWindow;
+        uint256 deadline = challengeDeadline[disputeId];
         if (block.timestamp >= deadline) return 0;
 
         return deadline - block.timestamp;
@@ -685,11 +902,18 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
 
     // Internal functions
 
-    function _handleCheatDecision(uint256 disputeId) internal {
+    function _handleCheatDecision(uint256 disputeId, address cheater) internal {
         Dispute storage dispute = disputes[disputeId];
 
         // Slash cheater's bond (burned)
-        bondingManager.slashBond(dispute.gameId, dispute.accusedPlayer);
+        bondingManager.slashBond(dispute.gameId, cheater);
+
+        // A participant who asks for adjudication and is then identified as the
+        // cheater must not recover or profit from the challenge deposit.
+        if (cheater == dispute.challenger) {
+            _forfeitDepositToOpponent(disputeId);
+            return;
+        }
 
         uint256 depositAmount = _consumeChallengeDeposit(disputeId);
         uint256 balance = chessToken.balanceOf(address(this));
@@ -708,19 +932,21 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
     }
 
     function _handleLegitDecision(uint256 disputeId) internal {
+        _forfeitDepositToOpponent(disputeId);
+    }
+
+    function _forfeitDepositToOpponent(uint256 disputeId) internal {
         Dispute storage dispute = disputes[disputeId];
-
         uint256 depositAmount = _consumeChallengeDeposit(disputeId);
+        address white = gameWhitePlayer[dispute.gameId];
+        address black = gameBlackPlayer[dispute.gameId];
+        address innocent = dispute.challenger == white ? black : white;
 
-        // Challenger loses deposit
-        // 50% to accused (compensation) - using SafeERC20
-        uint256 accusedCompensation = depositAmount / 2;
-        chessToken.safeTransfer(dispute.accusedPlayer, accusedCompensation);
-        emit RewardDistributed(disputeId, dispute.accusedPlayer, accusedCompensation);
+        uint256 compensation = depositAmount / 2;
+        chessToken.safeTransfer(innocent, compensation);
+        emit RewardDistributed(disputeId, innocent, compensation);
 
-        // 50% burned (deflationary)
-        uint256 remaining = depositAmount - accusedCompensation;
-        chessToken.burn(remaining);
+        chessToken.burn(depositAmount - compensation);
     }
 
     function _escalate(uint256 disputeId) internal {
@@ -739,7 +965,8 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         // number of inconclusive panels may be retried; exhaustion keeps all funds
         // reserved and moves the dispute to the timelocked governance backstop.
         dispute.legitVotes = 0;
-        dispute.cheatVotes = 0;
+        dispute.whiteCheatVotes = 0;
+        dispute.blackCheatVotes = 0;
         dispute.abstainVotes = 0;
         dispute.commitDeadline = 0;
         dispute.revealDeadline = 0;
@@ -751,47 +978,102 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
             return;
         }
 
-        _schedulePanelSelection(disputeId, false);
+        // Excluding the prior panel can make a later round structurally
+        // impossible even though the initial challenge was viable. Do not occupy
+        // the FIFO head for the full recovery timeout when no selectable subset
+        // can ever satisfy the snapshotted policy.
+        (uint256 potentialCount, uint256 potentialActiveStake) =
+            _potentialPanelCapacity(
+                disputeId,
+                gameWhitePlayer[dispute.gameId],
+                gameBlackPlayer[dispute.gameId],
+                dispute.challenger,
+                dispute.escalationLevel
+            );
+        if (
+            potentialCount < disputeMinimumPanelSize[disputeId] ||
+            potentialActiveStake < disputeRequiredPanelCollateral[disputeId]
+        ) {
+            _enterUnresolved(disputeId);
+            emit StructuralPanelUnavailable(
+                disputeId,
+                potentialCount,
+                potentialActiveStake,
+                disputeMinimumPanelSize[disputeId],
+                disputeRequiredPanelCollateral[disputeId]
+            );
+            emit DisputeEscalated(disputeId, dispute.escalationLevel);
+            return;
+        }
+
+        _schedulePanelSelection(disputeId);
 
         emit DisputeEscalated(disputeId, dispute.escalationLevel);
     }
 
-    function _schedulePanelSelection(uint256 disputeId, bool requireViableSnapshot) internal {
+    function _schedulePanelSelection(uint256 disputeId) internal returns (bool activated) {
         Dispute storage dispute = disputes[disputeId];
         dispute.state = DisputeState.Selecting;
         panelEntropy[disputeId] = bytes32(0);
+
+        selectionSequenceCounter++;
+        uint256 sequence = selectionSequenceCounter;
+        panelSelectionSequence[disputeId] = sequence;
+        selectionSequenceDispute[sequence] = disputeId;
+        panelSelectionScheduledAt[disputeId] = block.timestamp;
+        panelSelectionBlock[disputeId] = 0;
+        emit PanelSelectionQueued(disputeId, sequence);
+
+        // The first item can commit its population and future entropy target now.
+        // Later items remain inert until they become the FIFO head.
+        if (sequence == nextSelectionSequence) {
+            return _activatePanelSelection(disputeId);
+        }
+        return false;
+    }
+
+    function _activatePanelSelection(uint256 disputeId) internal returns (bool activated) {
+        Dispute storage dispute = disputes[disputeId];
+        require(_isSelectionHead(disputeId), "Selection is queued");
+        require(panelSelectionBlock[disputeId] == 0, "Selection already activated");
+
+        arbitratorRegistry.lockPanelSelection(disputeId);
 
         (
             bytes32 populationFingerprint,
             uint256 eligibleCount,
             uint256 eligibleActiveStake,
-            uint256 eligibilityTimestamp
+            uint256 eligibilityTimestamp,
+            uint256 snapshotGameRecordSequence
         ) = arbitratorRegistry.getSelectionSnapshot(
             disputeId,
-            dispute.accusedPlayer,
-            dispute.otherPlayer,
+            gameWhitePlayer[dispute.gameId],
+            gameBlackPlayer[dispute.gameId],
             dispute.challenger,
+            _requestedArbitratorsPerTier(dispute.escalationLevel),
             dispute.escalationLevel
         );
         panelPopulationFingerprint[disputeId] = populationFingerprint;
         panelSnapshotTimestamp[disputeId] = eligibilityTimestamp;
         panelSnapshotEligibleCount[disputeId] = eligibleCount;
         panelSnapshotEligibleActiveStake[disputeId] = eligibleActiveStake;
+        panelSnapshotGameRecordSequence[disputeId] = snapshotGameRecordSequence;
 
-        if (requireViableSnapshot) {
-            require(
-                eligibleCount >= disputeMinimumPanelSize[disputeId],
-                "Eligible arbitrator pool too small"
-            );
-            require(
-                eligibleActiveStake >= disputeRequiredPanelCollateral[disputeId],
-                "Eligible arbitrator stake too low"
-            );
+        if (
+            eligibleCount < disputeMinimumPanelSize[disputeId] ||
+            eligibleActiveStake < disputeRequiredPanelCollateral[disputeId]
+        ) {
+            arbitratorRegistry.unlockPanelSelection(disputeId);
+            delete panelPopulationFingerprint[disputeId];
+            delete panelSnapshotTimestamp[disputeId];
+            delete panelSnapshotEligibleCount[disputeId];
+            delete panelSnapshotEligibleActiveStake[disputeId];
+            delete panelSnapshotGameRecordSequence[disputeId];
+            return false;
         }
 
         uint256 targetBlock = block.number + PANEL_SELECTION_DELAY_BLOCKS;
         panelSelectionBlock[disputeId] = targetBlock;
-        panelSelectionScheduledAt[disputeId] = block.timestamp;
         emit PanelPopulationSnapshotted(
             disputeId,
             dispute.escalationLevel,
@@ -801,6 +1083,32 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
             eligibleActiveStake
         );
         emit PanelSelectionScheduled(disputeId, dispute.escalationLevel, targetBlock);
+        return true;
+    }
+
+    function _isSelectionHead(uint256 disputeId) internal view returns (bool) {
+        uint256 sequence = panelSelectionSequence[disputeId];
+        return sequence != 0 && sequence == nextSelectionSequence;
+    }
+
+    function _releaseSelectionLock(uint256 disputeId) internal {
+        if (panelSelectionBlock[disputeId] != 0) {
+            arbitratorRegistry.unlockPanelSelection(disputeId);
+        }
+    }
+
+    function _advanceSelectionQueue(uint256 disputeId) internal {
+        require(_isSelectionHead(disputeId), "Selection is queued");
+        delete selectionSequenceDispute[nextSelectionSequence];
+        nextSelectionSequence++;
+
+        uint256 promotedDisputeId = selectionSequenceDispute[nextSelectionSequence];
+        if (promotedDisputeId != 0) {
+            // Waiting behind another dispute never consumes this entry's bounded
+            // recovery window. Every promoted head receives a full opportunity to
+            // activate/finalize before governance backstop becomes available.
+            panelSelectionScheduledAt[promotedDisputeId] = block.timestamp;
+        }
     }
 
     function _enterUnresolved(uint256 disputeId) internal {
@@ -817,11 +1125,11 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         return ((value * percentage) + (PERCENTAGE_BASE - 1)) / PERCENTAGE_BASE;
     }
 
-    function _requiredPanelPower(
+    function _gameBondExposure(
         uint256 gameId,
         address white,
         address black
-    ) internal view returns (uint256) {
+    ) internal view returns (uint256 gameBondExposure) {
         (, uint256 whiteChess, , bool whiteReleased, bool whiteSlashed) =
             bondingManager.gameBonds(gameId, white);
         (, uint256 blackChess, , bool blackReleased, bool blackSlashed) =
@@ -829,14 +1137,83 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
 
         require(whiteChess > 0 && !whiteReleased && !whiteSlashed, "White game bond unavailable");
         require(blackChess > 0 && !blackReleased && !blackSlashed, "Black game bond unavailable");
-        uint256 gameBondExposure = whiteChess + blackChess;
+        return whiteChess + blackChess;
+    }
 
+    function _requiredPanelPower(uint256 gameBondExposure) internal view returns (uint256) {
         uint256 proportionalFloor =
             ((gameBondExposure * arbitrationCoverageBps) + (BPS_DENOMINATOR - 1)) /
             BPS_DENOMINATOR;
         return proportionalFloor > minimumPanelCollateral
             ? proportionalFloor
             : minimumPanelCollateral;
+    }
+
+    function _requiredPanelPowerForDispute(
+        uint256 disputeId,
+        uint256 gameBondExposure
+    ) internal view returns (uint256) {
+        DisputeEconomics storage policy = disputeEconomics[disputeId];
+        uint256 proportionalFloor =
+            ((gameBondExposure * policy.arbitrationCoverageBps) + (BPS_DENOMINATOR - 1)) /
+            BPS_DENOMINATOR;
+        return proportionalFloor > policy.minimumPanelCollateral
+            ? proportionalFloor
+            : policy.minimumPanelCollateral;
+    }
+
+    function _requiredChallengeDeposit(uint256 gameBondExposure)
+        internal
+        view
+        returns (uint256)
+    {
+        uint256 proportionalDeposit =
+            ((gameBondExposure * challengeDepositBps) + (BPS_DENOMINATOR - 1)) /
+            BPS_DENOMINATOR;
+        return proportionalDeposit > challengeDeposit
+            ? proportionalDeposit
+            : challengeDeposit;
+    }
+
+    function _requiredChallengeDepositForDispute(
+        uint256 disputeId,
+        uint256 gameBondExposure
+    ) internal view returns (uint256) {
+        DisputeEconomics storage policy = disputeEconomics[disputeId];
+        uint256 proportionalDeposit =
+            ((gameBondExposure * policy.challengeDepositBps) + (BPS_DENOMINATOR - 1)) /
+            BPS_DENOMINATOR;
+        return proportionalDeposit > policy.challengeDeposit
+            ? proportionalDeposit
+            : policy.challengeDeposit;
+    }
+
+    function _potentialPanelCapacity(
+        uint256 disputeId,
+        address white,
+        address black,
+        address extraExcluded,
+        uint256 escalationLevel
+    ) internal view returns (uint256 eligibleCount, uint256 eligibleActiveStake) {
+        return arbitratorRegistry.getPotentialSelectionCapacity(
+            disputeId,
+            white,
+            black,
+            extraExcluded,
+            _requestedArbitratorsPerTier(escalationLevel),
+            escalationLevel
+        );
+    }
+
+    function _requestedArbitratorsPerTier(uint256 escalationLevel)
+        internal
+        pure
+        returns (uint256 requestedPerTier)
+    {
+        requestedPerTier = INITIAL_ARBITRATORS_PER_TIER + (escalationLevel * 2);
+        if (requestedPerTier > MAX_ARBITRATORS_PER_TIER) {
+            return MAX_ARBITRATORS_PER_TIER;
+        }
     }
 
     function _consumeChallengeDeposit(uint256 disputeId) internal returns (uint256 amount) {
@@ -908,10 +1285,7 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
             }
 
             // Check if voted with majority
-            bool votedWithMajority = (
-                (dispute.finalDecision == Vote.Cheat && voteCommit.vote == Vote.Cheat) ||
-                (dispute.finalDecision == Vote.Legit && voteCommit.vote == Vote.Legit)
-            );
+            bool votedWithMajority = voteCommit.vote == dispute.finalDecision;
 
             if (votedWithMajority) {
                 arbitratorRegistry.updateReputation(arbitrator, true);
@@ -936,10 +1310,10 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
     function getDispute(uint256 disputeId) external view returns (
         uint256 gameId,
         address challenger,
-        address accusedPlayer,
         DisputeState state,
         uint256 legitVotes,
-        uint256 cheatVotes,
+        uint256 whiteCheatVotes,
+        uint256 blackCheatVotes,
         Vote finalDecision,
         uint256 escalationLevel
     ) {
@@ -947,10 +1321,10 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         return (
             d.gameId,
             d.challenger,
-            d.accusedPlayer,
             d.state,
             d.legitVotes,
-            d.cheatVotes,
+            d.whiteCheatVotes,
+            d.blackCheatVotes,
             d.finalDecision,
             d.escalationLevel
         );
@@ -995,11 +1369,25 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
     {
         uint256 disputeId = gameToDispute[gameId];
         require(disputeId != 0, "Game not registered");
-        return _requiredPanelPower(
+        return _requiredPanelPowerForDispute(disputeId, _gameBondExposure(
             gameId,
             gameWhitePlayer[gameId],
             gameBlackPlayer[gameId]
-        );
+        ));
+    }
+
+    function getRequiredChallengeDepositForGame(uint256 gameId)
+        external
+        view
+        returns (uint256 requiredDeposit)
+    {
+        uint256 disputeId = gameToDispute[gameId];
+        require(disputeId != 0, "Game not registered");
+        return _requiredChallengeDepositForDispute(disputeId, _gameBondExposure(
+            gameId,
+            gameWhitePlayer[gameId],
+            gameBlackPlayer[gameId]
+        ));
     }
 
     /**
@@ -1016,11 +1404,18 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         require(disputeId > 0 && disputeId <= disputeCounter, "Dispute not found");
         Dispute storage dispute = disputes[disputeId];
         require(dispute.state == DisputeState.Unresolved, "Backstop not required");
-        require(decision == Vote.Legit || decision == Vote.Cheat, "Invalid backstop decision");
+        require(
+            decision == Vote.Legit ||
+            decision == Vote.WhiteCheat ||
+            decision == Vote.BlackCheat,
+            "Invalid backstop decision"
+        );
 
         dispute.finalDecision = decision;
-        if (decision == Vote.Cheat) {
-            _handleCheatDecision(disputeId);
+        if (decision == Vote.WhiteCheat) {
+            _handleCheatDecision(disputeId, gameWhitePlayer[dispute.gameId]);
+        } else if (decision == Vote.BlackCheat) {
+            _handleCheatDecision(disputeId, gameBlackPlayer[dispute.gameId]);
         } else {
             _handleLegitDecision(disputeId);
         }
@@ -1030,7 +1425,13 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         activeChallenges[dispute.challenger]--;
 
         emit BackstopDecision(disputeId, decision);
-        emit DisputeResolved(disputeId, decision, dispute.legitVotes, dispute.cheatVotes);
+        emit DisputeResolved(
+            disputeId,
+            decision,
+            dispute.legitVotes,
+            dispute.whiteCheatVotes,
+            dispute.blackCheatVotes
+        );
     }
 
     /**
@@ -1088,12 +1489,25 @@ contract DisputeDAO is AccessControl, ReentrancyGuard {
         quorumPercentage = _quorumPercentage;
         supermajority = _supermajority;
         challengeDeposit = _challengeDeposit;
+        emit ChallengeEconomicsUpdated(_challengeDeposit, challengeDepositBps);
         emit ArbitrationSecurityParametersUpdated(
             _quorumPercentage,
             minimumPanelSize,
             minimumPanelCollateral,
             arbitrationCoverageBps
         );
+    }
+
+    function setChallengeDepositBps(uint256 _challengeDepositBps)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        require(
+            _challengeDepositBps >= 100 && _challengeDepositBps <= BPS_DENOMINATOR,
+            "Invalid challenge deposit rate"
+        );
+        challengeDepositBps = _challengeDepositBps;
+        emit ChallengeEconomicsUpdated(challengeDeposit, _challengeDepositBps);
     }
 
     /**

@@ -164,6 +164,20 @@ function validateEnvironment(env, networkName) {
   };
 }
 
+function assertHandoffPrincipalSeparation(config, deployer) {
+  if (!config.handoffGovernance) return;
+  const deployerAddress = deployer.toLowerCase();
+  if (config.treasuryWallet.toLowerCase() === deployerAddress) {
+    throw new Error("TREASURY_WALLET must differ from the deployer when governance handoff is enabled");
+  }
+  if (config.faucetSigner.toLowerCase() === deployerAddress) {
+    throw new Error("FAUCET_SIGNER must differ from the deployer when governance handoff is enabled");
+  }
+  if (config.oracleUpdater.toLowerCase() === deployerAddress) {
+    throw new Error("ORACLE_UPDATER must differ from the deployer when governance handoff is enabled");
+  }
+}
+
 async function run() {
   dotenv.config({ path: path.join(__dirname, "..", ".env"), quiet: true });
 
@@ -172,14 +186,8 @@ async function run() {
   const deployer = deriveDeployer(process.env.MNEMONIC.trim(), config.rpcUrl);
   const warnings = [];
 
-  if (config.handoffGovernance) {
-    if (config.faucetSigner.toLowerCase() === deployer.toLowerCase()) {
-      throw new Error("FAUCET_SIGNER must differ from the deployer when governance handoff is enabled");
-    }
-    if (config.oracleUpdater.toLowerCase() === deployer.toLowerCase()) {
-      throw new Error("ORACLE_UPDATER must differ from the deployer when governance handoff is enabled");
-    }
-  } else {
+  assertHandoffPrincipalSeparation(config, deployer);
+  if (!config.handoffGovernance) {
     warnings.push("Governance handoff is disabled; the deployer will retain protocol administration");
   }
 
@@ -235,6 +243,7 @@ async function run() {
 
 module.exports = {
   NETWORKS,
+  assertHandoffPrincipalSeparation,
   assertFeeCapSufficient,
   formatUnits,
   isAddress,
