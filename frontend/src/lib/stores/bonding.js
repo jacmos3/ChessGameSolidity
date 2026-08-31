@@ -1,10 +1,17 @@
 import { writable, derived, get } from 'svelte/store';
-import { wallet } from './wallet.js';
+import { wallet, contractAddress } from './wallet.js';
 import { ethers } from 'ethers';
 import { loadContractAbi } from '../contracts/loadAbi.js';
 import { getTransactionFeeOverrides } from '../utils/transactionFees.js';
+import { isExactTokenAllowance, parseExactTokenAllowance } from '../utils/tokenAllowance.js';
+import {
+	bindTransactionToVerifiedAccount,
+	createGenerationGuard,
+	sendBoundContractTransaction,
+	verifiedBondingContextMatches,
+	verifyCanonicalBondingContext
+} from '../utils/gameVerification.js';
 
-// BondingManager contract addresses per network
 const BONDING_MANAGER_ADDRESSES = {
 	1337: import.meta.env.VITE_BONDING_MANAGER_LOCAL || '',
 	5777: import.meta.env.VITE_BONDING_MANAGER_LOCAL || '',
@@ -12,7 +19,6 @@ const BONDING_MANAGER_ADDRESSES = {
 	8453: import.meta.env.VITE_BONDING_MANAGER_BASE || ''
 };
 
-// ChessToken contract addresses per network
 const CHESS_TOKEN_ADDRESSES = {
 	1337: import.meta.env.VITE_CHESS_TOKEN_LOCAL || '',
 	5777: import.meta.env.VITE_CHESS_TOKEN_LOCAL || '',
@@ -23,68 +29,144 @@ const CHESS_TOKEN_ADDRESSES = {
 const getBondingManagerAbi = () => loadContractAbi('BondingManager');
 const getChessTokenAbi = () => loadContractAbi('ChessToken');
 
-// Bonding state store
+function getConfiguredAddress(addresses, chainId) {
+	const configured = addresses[Number(chainId)] || '';
+	if (!ethers.utils.isAddress(configured)) return null;
+	const normalized = ethers.utils.getAddress(configured);
+	return normalized === ethers.constants.AddressZero ? null : normalized;
+}
+
+function parseTokenAmountOrZero(amount) {
+	const normalized = String(amount ?? '').trim();
+	return ethers.utils.parseEther(normalized === '' ? '0' : normalized);
+}
+
 function createBondingStore() {
-	const { subscribe, set, update } = writable({
+	const initialState = {
 		loading: false,
 		error: null,
-		// User's bond balances
 		chessDeposited: '0',
 		ethDeposited: '0',
 		chessLocked: '0',
 		ethLocked: '0',
 		chessAvailable: '0',
 		ethAvailable: '0',
-		// Token balances
 		chessBalance: '0',
 		chessAllowance: '0',
-		// Current CHESS/ETH price
 		chessPrice: '0',
-		// Requirements
 		chessMultiplier: '0',
 		ethMultiplier: '0',
 		minBondEthValue: '0',
-		// System paused status
-		isPaused: false
-	});
+		isPaused: false,
+		verification: null
+	};
+	const { subscribe, set, update } = writable(initialState);
+	const requestGuard = createGenerationGuard();
+
+	function configuredContext(walletSnapshot = get(wallet)) {
+		return {
+			factoryAddress: get(contractAddress),
+			bondingAddress: getConfiguredAddress(BONDING_MANAGER_ADDRESSES, walletSnapshot.chainId),
+			tokenAddress: getConfiguredAddress(CHESS_TOKEN_ADDRESSES, walletSnapshot.chainId)
+		};
+	}
+
+	async function getVerifiedContracts({ includeFees = false } = {}) {
+		const walletSnapshot = get(wallet);
+		const configured = configuredContext(walletSnapshot);
+		if (!walletSnapshot.provider || !walletSnapshot.signer || !walletSnapshot.account) {
+			throw new Error('Wallet not connected');
+		}
+		if (!configured.factoryAddress || !configured.bondingAddress || !configured.tokenAddress) {
+			throw new Error('Bonding not available on this network');
+		}
+
+		const [bondingManagerAbi, chessTokenAbi, feeOverrides] = await Promise.all([
+			getBondingManagerAbi(),
+			getChessTokenAbi(),
+			includeFees
+				? getTransactionFeeOverrides(walletSnapshot.provider, walletSnapshot.chainId)
+				: Promise.resolve({})
+		]);
+		const verification = await verifyCanonicalBondingContext({
+			provider: walletSnapshot.provider,
+			signer: walletSnapshot.signer,
+			account: walletSnapshot.account,
+			chainId: walletSnapshot.chainId,
+			factoryAddress: configured.factoryAddress,
+			bondingAddress: configured.bondingAddress,
+			tokenAddress: configured.tokenAddress
+		});
+
+		const currentWallet = get(wallet);
+		const currentConfigured = configuredContext(currentWallet);
+		const currentContext = {
+			verified: true,
+			chainId: currentWallet.chainId,
+			account: currentWallet.account,
+			...currentConfigured
+		};
+		if (!verifiedBondingContextMatches(verification, currentContext)) {
+			throw new Error('Wallet or bonding context changed while verifying the transaction');
+		}
+
+		return {
+			wallet: walletSnapshot,
+			verification,
+			bondingManager: new ethers.Contract(
+				verification.bondingAddress,
+				bondingManagerAbi,
+				walletSnapshot.signer
+			),
+			chessToken: new ethers.Contract(
+				verification.tokenAddress,
+				chessTokenAbi,
+				walletSnapshot.signer
+			),
+			transactionOverrides: bindTransactionToVerifiedAccount(feeOverrides, verification)
+		};
+	}
+
+	function requireSameOperationContext(initial, current) {
+		if (!verifiedBondingContextMatches(initial.verification, current.verification)) {
+			throw new Error('Wallet or bonding context changed during the operation');
+		}
+	}
+
+	function sendVerifiedBondingTransaction(context, contract, method, args = [], extraOverrides = {}) {
+		return sendBoundContractTransaction({
+			contract,
+			method,
+			args,
+			overrides: { ...context.transactionOverrides, ...extraOverrides },
+			provider: context.wallet.provider,
+			signer: context.wallet.signer,
+			verification: context.verification,
+			assertCurrentContext: () => {
+				const currentWallet = get(wallet);
+				const liveContext = {
+					verified: true,
+					chainId: currentWallet.chainId,
+					account: currentWallet.account,
+					...configuredContext(currentWallet)
+				};
+				if (!verifiedBondingContextMatches(context.verification, liveContext)) {
+					throw new Error('Wallet or bonding context changed before sending the transaction');
+				}
+			}
+		});
+	}
 
 	return {
 		subscribe,
 
-		/**
-		 * Fetch all bonding data for the connected user
-		 */
 		async fetchBondData() {
-			const $wallet = get(wallet);
-			if (!$wallet.signer || !$wallet.chainId) return;
-
-			const bondingAddress = BONDING_MANAGER_ADDRESSES[$wallet.chainId];
-			const tokenAddress = CHESS_TOKEN_ADDRESSES[$wallet.chainId];
-
-			if (!bondingAddress || !tokenAddress) {
-				update(s => ({ ...s, error: 'Bonding not available on this network' }));
-				return;
-			}
-
-			update(s => ({ ...s, loading: true, error: null }));
+			const generation = requestGuard.begin();
+			update(state => ({ ...state, loading: true, error: null }));
 
 			try {
-				const [bondingManagerAbi, chessTokenAbi] = await Promise.all([
-					getBondingManagerAbi(),
-					getChessTokenAbi()
-				]);
-				const bondingManager = new ethers.Contract(
-					bondingAddress,
-					bondingManagerAbi,
-					$wallet.signer
-				);
-				const chessToken = new ethers.Contract(
-					tokenAddress,
-					chessTokenAbi,
-					$wallet.signer
-				);
-
-				// Fetch all data in parallel
+				const initial = await getVerifiedContracts();
+				const account = initial.verification.account;
 				const [
 					bond,
 					available,
@@ -96,16 +178,21 @@ function createBondingStore() {
 					minBondEthValue,
 					isPaused
 				] = await Promise.all([
-					bondingManager.bonds($wallet.account),
-					bondingManager.getAvailableBond($wallet.account),
-					chessToken.balanceOf($wallet.account),
-					chessToken.allowance($wallet.account, bondingAddress),
-					bondingManager.chessEthPrice(),
-					bondingManager.chessMultiplier(),
-					bondingManager.ethMultiplier(),
-					bondingManager.minBondEthValue(),
-					bondingManager.paused()
+					initial.bondingManager.bonds(account),
+					initial.bondingManager.getAvailableBond(account),
+					initial.chessToken.balanceOf(account),
+					initial.chessToken.allowance(account, initial.verification.bondingAddress),
+					initial.bondingManager.chessEthPrice(),
+					initial.bondingManager.chessMultiplier(),
+					initial.bondingManager.ethMultiplier(),
+					initial.bondingManager.minBondEthValue(),
+					initial.bondingManager.paused()
 				]);
+				if (!requestGuard.isCurrent(generation)) return;
+
+				const finalContext = await getVerifiedContracts();
+				requireSameOperationContext(initial, finalContext);
+				if (!requestGuard.isCurrent(generation)) return;
 
 				set({
 					loading: false,
@@ -122,337 +209,231 @@ function createBondingStore() {
 					chessMultiplier: chessMultiplier.toString(),
 					ethMultiplier: ethMultiplier.toString(),
 					minBondEthValue: ethers.utils.formatEther(minBondEthValue),
-					isPaused
+					isPaused,
+					verification: finalContext.verification
 				});
-
-			} catch (err) {
-				console.error('Error fetching bond data:', err);
-				update(s => ({ ...s, loading: false, error: err.message }));
+			} catch (error) {
+				if (!requestGuard.isCurrent(generation)) return;
+				set({ ...initialState, error: error.message });
 			}
 		},
 
-		/**
-		 * Calculate required bond for a given bet amount
-		 */
 		async calculateRequiredBond(betAmountEth) {
-			const $wallet = get(wallet);
-			if (!$wallet.signer || !$wallet.chainId) return null;
-
-			const bondingAddress = BONDING_MANAGER_ADDRESSES[$wallet.chainId];
-			if (!bondingAddress) return null;
-
 			try {
-				const bondingManagerAbi = await getBondingManagerAbi();
-				const bondingManager = new ethers.Contract(
-					bondingAddress,
-					bondingManagerAbi,
-					$wallet.signer
-				);
-
-				const betWei = ethers.utils.parseEther(betAmountEth.toString());
-				const required = await bondingManager.calculateRequiredBond(betWei);
-
+				const initial = await getVerifiedContracts();
+				const betWei = ethers.utils.parseEther(String(betAmountEth).trim());
+				const required = await initial.bondingManager.calculateRequiredBond(betWei);
+				const finalContext = await getVerifiedContracts();
+				requireSameOperationContext(initial, finalContext);
 				return {
 					chessRequired: ethers.utils.formatEther(required.chessRequired),
 					ethRequired: ethers.utils.formatEther(required.ethRequired)
 				};
-			} catch (err) {
-				console.error('Error calculating required bond:', err);
+			} catch (error) {
+				console.error('Error calculating required bond:', error);
 				return null;
 			}
 		},
 
-		/**
-		 * Check if user has sufficient bond for a bet amount
-		 */
 		async hasSufficientBond(betAmountEth) {
-			const $wallet = get(wallet);
-			if (!$wallet.signer || !$wallet.chainId) return false;
-
-			const bondingAddress = BONDING_MANAGER_ADDRESSES[$wallet.chainId];
-			if (!bondingAddress) return true; // No bonding on this network
-
 			try {
-				const bondingManagerAbi = await getBondingManagerAbi();
-				const bondingManager = new ethers.Contract(
-					bondingAddress,
-					bondingManagerAbi,
-					$wallet.signer
+				const initial = await getVerifiedContracts();
+				const betWei = ethers.utils.parseEther(String(betAmountEth).trim());
+				const result = await initial.bondingManager.hasSufficientBond(
+					initial.verification.account,
+					betWei
 				);
-
-				const betWei = ethers.utils.parseEther(betAmountEth.toString());
-				return await bondingManager.hasSufficientBond($wallet.account, betWei);
-			} catch (err) {
-				console.error('Error checking bond sufficiency:', err);
+				const finalContext = await getVerifiedContracts();
+				requireSameOperationContext(initial, finalContext);
+				return result;
+			} catch (error) {
+				console.error('Error checking bond sufficiency:', error);
 				return false;
 			}
 		},
 
-		/**
-		 * Approve CHESS token spending (approves max for convenience)
-		 */
 		async approveChess(amount) {
-			const $wallet = get(wallet);
-			if (!$wallet.signer || !$wallet.chainId) {
-				throw new Error('Wallet not connected');
+			const exactAmount = parseExactTokenAllowance(amount);
+			const initial = await getVerifiedContracts();
+			const account = initial.verification.account;
+			const spender = initial.verification.bondingAddress;
+			const currentAllowance = await initial.chessToken.allowance(account, spender);
+
+			if (isExactTokenAllowance(currentAllowance, exactAmount)) {
+				await this.fetchBondData();
+				return;
 			}
 
-			const bondingAddress = BONDING_MANAGER_ADDRESSES[$wallet.chainId];
-			const tokenAddress = CHESS_TOKEN_ADDRESSES[$wallet.chainId];
-
-			if (!bondingAddress || !tokenAddress) {
-				throw new Error('Bonding not available on this network');
-			}
-
-			console.log('Approving CHESS tokens...');
-			console.log('ChessToken address:', tokenAddress);
-			console.log('BondingManager address (spender):', bondingAddress);
-			console.log('User address:', $wallet.account);
-
-			const chessTokenAbi = await getChessTokenAbi();
-			const chessToken = new ethers.Contract(
-				tokenAddress,
-				chessTokenAbi,
-				$wallet.signer
-			);
-
-			// Check current allowance before approval
-			const currentAllowance = await chessToken.allowance($wallet.account, bondingAddress);
-			console.log('Current allowance before approval:', ethers.utils.formatEther(currentAllowance));
-
-			// Approve max amount for convenience (no need to re-approve each time)
-			const maxAmount = ethers.constants.MaxUint256;
-			console.log('Sending approval transaction for MaxUint256...');
-
-			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
-			const tx = await chessToken.approve(bondingAddress, maxAmount, feeOverrides);
-			console.log('Transaction submitted:', tx.hash);
-
-			const receipt = await tx.wait();
-			console.log('Transaction confirmed in block:', receipt.blockNumber);
-
-			// Verify the approval actually worked
-			const newAllowance = await chessToken.allowance($wallet.account, bondingAddress);
-			console.log('New allowance after approval:', ethers.utils.formatEther(newAllowance));
-
-			if (newAllowance.isZero()) {
-				throw new Error('Approval transaction confirmed but allowance is still 0. This should not happen - please check the console logs and report this issue.');
-			}
-
-			// Refresh data
-			await this.fetchBondData();
-		},
-
-		/**
-		 * Deposit bond (CHESS and/or ETH)
-		 */
-		async depositBond(chessAmount, ethAmount) {
-			const $wallet = get(wallet);
-			if (!$wallet.signer || !$wallet.chainId) {
-				throw new Error('Wallet not connected');
-			}
-
-			const bondingAddress = BONDING_MANAGER_ADDRESSES[$wallet.chainId];
-			const tokenAddress = CHESS_TOKEN_ADDRESSES[$wallet.chainId];
-			if (!bondingAddress) {
-				throw new Error('Bonding not available on this network');
-			}
-
-			console.log('Depositing bond...');
-			console.log('BondingManager address:', bondingAddress);
-			console.log('ChessToken address:', tokenAddress);
-
-			const chessWei = ethers.utils.parseEther(chessAmount.toString());
-			const ethWei = ethers.utils.parseEther(ethAmount.toString());
-
-			console.log('CHESS to deposit:', chessAmount, '(', chessWei.toString(), 'wei)');
-			console.log('ETH to deposit:', ethAmount, '(', ethWei.toString(), 'wei)');
-
-			// Pre-check allowance if depositing CHESS
-			if (chessWei.gt(0)) {
-				const chessTokenAbi = await getChessTokenAbi();
-				const chessToken = new ethers.Contract(
-					tokenAddress,
-					chessTokenAbi,
-					$wallet.signer
+			if (!currentAllowance.isZero()) {
+				const revocation = await getVerifiedContracts({ includeFees: true });
+				requireSameOperationContext(initial, revocation);
+				const revokeTx = await sendVerifiedBondingTransaction(
+					revocation,
+					revocation.chessToken,
+					'approve',
+					[spender, ethers.constants.Zero]
 				);
+				await revokeTx.wait();
 
-				const allowance = await chessToken.allowance($wallet.account, bondingAddress);
-				console.log('Current CHESS allowance:', ethers.utils.formatEther(allowance));
-
-				if (allowance.lt(chessWei)) {
-					throw new Error(`Insufficient CHESS allowance. You have approved ${ethers.utils.formatEther(allowance)} CHESS but trying to deposit ${chessAmount} CHESS. Please click "Approve CHESS" first.`);
+				const revoked = await getVerifiedContracts();
+				requireSameOperationContext(initial, revoked);
+				const revokedAllowance = await revoked.chessToken.allowance(account, spender);
+				if (!revokedAllowance.isZero()) {
+					throw new Error('Approval reset confirmed but the previous allowance is still active.');
 				}
+			}
 
-				const balance = await chessToken.balanceOf($wallet.account);
-				console.log('CHESS balance:', ethers.utils.formatEther(balance));
+			const approval = await getVerifiedContracts({ includeFees: true });
+			requireSameOperationContext(initial, approval);
+			const tx = await sendVerifiedBondingTransaction(
+				approval,
+				approval.chessToken,
+				'approve',
+				[spender, exactAmount]
+			);
+			await tx.wait();
 
+			const confirmed = await getVerifiedContracts();
+			requireSameOperationContext(initial, confirmed);
+			const newAllowance = await confirmed.chessToken.allowance(account, spender);
+			if (!isExactTokenAllowance(newAllowance, exactAmount)) {
+				throw new Error('Approval transaction confirmed but the exact requested allowance was not set.');
+			}
+			await this.fetchBondData();
+		},
+
+		async revokeChessApproval() {
+			const initial = await getVerifiedContracts({ includeFees: true });
+			const account = initial.verification.account;
+			const spender = initial.verification.bondingAddress;
+			const tx = await sendVerifiedBondingTransaction(
+				initial,
+				initial.chessToken,
+				'approve',
+				[spender, ethers.constants.Zero]
+			);
+			await tx.wait();
+
+			const confirmed = await getVerifiedContracts();
+			requireSameOperationContext(initial, confirmed);
+			const newAllowance = await confirmed.chessToken.allowance(account, spender);
+			if (!newAllowance.isZero()) {
+				throw new Error('Revocation transaction confirmed but the allowance is still active.');
+			}
+			await this.fetchBondData();
+		},
+
+		async depositBond(chessAmount, ethAmount) {
+			const chessWei = parseTokenAmountOrZero(chessAmount);
+			const ethWei = parseTokenAmountOrZero(ethAmount);
+			if (chessWei.lt(0) || ethWei.lt(0)) throw new Error('Deposit amounts cannot be negative');
+			if (chessWei.isZero() && ethWei.isZero()) throw new Error('Must deposit something');
+
+			const initial = await getVerifiedContracts();
+			const account = initial.verification.account;
+			const spender = initial.verification.bondingAddress;
+			if (chessWei.gt(0)) {
+				const [allowance, balance] = await Promise.all([
+					initial.chessToken.allowance(account, spender),
+					initial.chessToken.balanceOf(account)
+				]);
+				if (!allowance.eq(chessWei)) {
+					throw new Error(
+						`CHESS allowance must exactly match the deposit. Current allowance: ${ethers.utils.formatEther(allowance)} CHESS.`
+					);
+				}
 				if (balance.lt(chessWei)) {
-					throw new Error(`Insufficient CHESS balance. You have ${ethers.utils.formatEther(balance)} CHESS but trying to deposit ${chessAmount} CHESS.`);
+					throw new Error(`Insufficient CHESS balance. You have ${ethers.utils.formatEther(balance)} CHESS.`);
 				}
 			}
 
-			const bondingManagerAbi = await getBondingManagerAbi();
-			const bondingManager = new ethers.Contract(
-				bondingAddress,
-				bondingManagerAbi,
-				$wallet.signer
+			const submission = await getVerifiedContracts({ includeFees: true });
+			requireSameOperationContext(initial, submission);
+			if (chessWei.gt(0)) {
+				const finalAllowance = await submission.chessToken.allowance(account, spender);
+				if (!finalAllowance.eq(chessWei)) {
+					throw new Error('CHESS allowance changed before deposit; approve the exact amount again.');
+				}
+			}
+			const tx = await sendVerifiedBondingTransaction(
+				submission,
+				submission.bondingManager,
+				'depositBond',
+				[chessWei],
+				{ value: ethWei }
 			);
-
-			console.log('Sending deposit transaction...');
-			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
-			const tx = await bondingManager.depositBond(chessWei, { ...feeOverrides, value: ethWei });
-			console.log('Transaction submitted:', tx.hash);
-
 			await tx.wait();
-			console.log('Deposit confirmed!');
-
-			// Refresh data
 			await this.fetchBondData();
 		},
 
-		/**
-		 * Withdraw CHESS from bond
-		 */
 		async withdrawChess(amount) {
-			const $wallet = get(wallet);
-			if (!$wallet.signer || !$wallet.chainId) {
-				throw new Error('Wallet not connected');
-			}
-
-			const bondingAddress = BONDING_MANAGER_ADDRESSES[$wallet.chainId];
-			if (!bondingAddress) {
-				throw new Error('Bonding not available on this network');
-			}
-
-			const bondingManagerAbi = await getBondingManagerAbi();
-			const bondingManager = new ethers.Contract(
-				bondingAddress,
-				bondingManagerAbi,
-				$wallet.signer
+			const amountWei = parseExactTokenAllowance(amount);
+			const context = await getVerifiedContracts({ includeFees: true });
+			const tx = await sendVerifiedBondingTransaction(
+				context,
+				context.bondingManager,
+				'withdrawBond',
+				[amountWei, 0]
 			);
-
-			const amountWei = ethers.utils.parseEther(amount.toString());
-			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
-			const tx = await bondingManager.withdrawBond(amountWei, 0, feeOverrides);
 			await tx.wait();
-
-			// Refresh data
 			await this.fetchBondData();
 		},
 
-		/**
-		 * Withdraw ETH from bond
-		 */
 		async withdrawEth(amount) {
-			const $wallet = get(wallet);
-			if (!$wallet.signer || !$wallet.chainId) {
-				throw new Error('Wallet not connected');
-			}
-
-			const bondingAddress = BONDING_MANAGER_ADDRESSES[$wallet.chainId];
-			if (!bondingAddress) {
-				throw new Error('Bonding not available on this network');
-			}
-
-			const bondingManagerAbi = await getBondingManagerAbi();
-			const bondingManager = new ethers.Contract(
-				bondingAddress,
-				bondingManagerAbi,
-				$wallet.signer
+			const amountWei = parseExactTokenAllowance(amount);
+			const context = await getVerifiedContracts({ includeFees: true });
+			const tx = await sendVerifiedBondingTransaction(
+				context,
+				context.bondingManager,
+				'withdrawBond',
+				[0, amountWei]
 			);
-
-			const amountWei = ethers.utils.parseEther(amount.toString());
-			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
-			const tx = await bondingManager.withdrawBond(0, amountWei, feeOverrides);
 			await tx.wait();
-
-			// Refresh data
 			await this.fetchBondData();
 		},
 
-		/**
-		 * Mint test CHESS tokens (admin only - for testnet)
-		 */
 		async mintTestTokens(amount) {
-			const $wallet = get(wallet);
-			if (!$wallet.signer || !$wallet.chainId) {
-				throw new Error('Wallet not connected');
-			}
-
-			const tokenAddress = CHESS_TOKEN_ADDRESSES[$wallet.chainId];
-			if (!tokenAddress) {
-				throw new Error('ChessToken not available on this network');
-			}
-
-			const chessTokenAbi = await getChessTokenAbi();
-			const chessToken = new ethers.Contract(
-				tokenAddress,
-				chessTokenAbi,
-				$wallet.signer
+			const amountWei = parseExactTokenAllowance(amount);
+			const context = await getVerifiedContracts({ includeFees: true });
+			const tx = await sendVerifiedBondingTransaction(
+				context,
+				context.chessToken,
+				'mintTreasury',
+				[context.verification.account, amountWei]
 			);
-
-			const amountWei = ethers.utils.parseEther(amount.toString());
-			const feeOverrides = await getTransactionFeeOverrides($wallet.provider, $wallet.chainId);
-			const tx = await chessToken.mintTreasury($wallet.account, amountWei, feeOverrides);
 			await tx.wait();
-
-			// Refresh data
 			await this.fetchBondData();
 		},
 
-		/**
-		 * Clear store state
-		 */
 		clear() {
-			set({
-				loading: false,
-				error: null,
-				chessDeposited: '0',
-				ethDeposited: '0',
-				chessLocked: '0',
-				ethLocked: '0',
-				chessAvailable: '0',
-				ethAvailable: '0',
-				chessBalance: '0',
-				chessAllowance: '0',
-				chessPrice: '0',
-				chessMultiplier: '0',
-				ethMultiplier: '0',
-				minBondEthValue: '0',
-				isPaused: false
-			});
+			requestGuard.invalidate();
+			set({ ...initialState });
 		}
 	};
 }
 
 export const bonding = createBondingStore();
 
-// Derived store for bonding manager address
-export const bondingManagerAddress = derived(wallet, $wallet => {
-	if (!$wallet.chainId) return null;
-	return BONDING_MANAGER_ADDRESSES[$wallet.chainId] || null;
-});
+export const bondingManagerAddress = derived(wallet, $wallet =>
+	getConfiguredAddress(BONDING_MANAGER_ADDRESSES, $wallet.chainId)
+);
 
-// Derived store for CHESS token address
-export const chessTokenAddress = derived(wallet, $wallet => {
-	if (!$wallet.chainId) return null;
-	return CHESS_TOKEN_ADDRESSES[$wallet.chainId] || null;
-});
+export const chessTokenAddress = derived(wallet, $wallet =>
+	getConfiguredAddress(CHESS_TOKEN_ADDRESSES, $wallet.chainId)
+);
 
-// Derived store to check if bonding is available on current network
-export const bondingAvailable = derived(wallet, $wallet => {
-	if (!$wallet.chainId) return false;
-	return !!BONDING_MANAGER_ADDRESSES[$wallet.chainId];
-});
+export const bondingAvailable = derived(
+	[wallet, contractAddress],
+	([$wallet, $factoryAddress]) => Boolean(
+		$factoryAddress &&
+		getConfiguredAddress(BONDING_MANAGER_ADDRESSES, $wallet.chainId) &&
+		getConfiguredAddress(CHESS_TOKEN_ADDRESSES, $wallet.chainId)
+	)
+);
 
-// Helper to format CHESS amount with symbol
 export function formatChess(amount) {
 	const num = parseFloat(amount);
-	if (num >= 1000000) {
-		return (num / 1000000).toFixed(2) + 'M CHESS';
-	} else if (num >= 1000) {
-		return (num / 1000).toFixed(2) + 'K CHESS';
-	}
+	if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M CHESS';
+	if (num >= 1000) return (num / 1000).toFixed(2) + 'K CHESS';
 	return num.toFixed(2) + ' CHESS';
 }

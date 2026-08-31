@@ -2,6 +2,7 @@ import { writable, get } from 'svelte/store';
 import { wallet, contractAddress } from './wallet.js';
 import { ethers } from 'ethers';
 import { loadContractAbi } from '../contracts/loadAbi.js';
+import { fetchAllRatingEntries, sortRatingEntries } from '../utils/ratingLeaderboard.js';
 
 const RATING_ADDRESSES = {
 	1337: import.meta.env.VITE_PLAYER_RATING_LOCAL || '',
@@ -69,15 +70,12 @@ function createLeaderboardStore() {
 async function fetchFromRating(signer, ratingAddress) {
 	const playerRatingAbi = await getPlayerRatingAbi();
 	const contract = new ethers.Contract(ratingAddress, playerRatingAbi, signer);
-	const [count, page] = await Promise.all([
-		contract.getRankedPlayerCount(),
-		contract.getTopPlayers(0, LEADERBOARD_SAMPLE)
-	]);
+	const count = await contract.getRankedPlayerCount();
 
 	if (Number(count) === 0) return [];
-
-	const addresses = page.addresses || page[0] || [];
-	const stats = await Promise.all(addresses.map(async (address) => {
+	const allEntries = await fetchAllRatingEntries(contract, count);
+	const leaders = sortRatingEntries(allEntries).slice(0, 20);
+	const stats = await Promise.all(leaders.map(async ({ address, rating }) => {
 		try {
 			const player = await contract.getPlayerStats(address);
 			const gamesPlayed = Number(player.gamesPlayed);
@@ -90,7 +88,7 @@ async function fetchFromRating(signer, ratingAddress) {
 				losses,
 				draws: Number(player.draws),
 				gamesPlayed,
-				rating: Number(player.rating),
+				rating,
 				winRatio: ((wins / gamesPlayed) * 100).toFixed(1)
 			};
 		} catch {
@@ -98,14 +96,7 @@ async function fetchFromRating(signer, ratingAddress) {
 		}
 	}));
 
-	return stats
-		.filter(Boolean)
-		.sort((a, b) => {
-			if (b.rating !== a.rating) return b.rating - a.rating;
-			if (b.wins !== a.wins) return b.wins - a.wins;
-			return parseFloat(b.winRatio) - parseFloat(a.winRatio);
-		})
-		.slice(0, 20);
+	return stats.filter(Boolean);
 }
 
 async function fetchFromRecentGames($wallet, factoryAddress) {

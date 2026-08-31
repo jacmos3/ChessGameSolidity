@@ -13,6 +13,8 @@ contract ChessFactory {
     using Clones for address;
 
     address[] public deployedChessGames;
+    /// @notice Canonical registry used by clients to reject look-alike game contracts.
+    mapping(address => bool) public isDeployedGame;
     address public addressNFT;
     uint256 public totalChessGames;
 
@@ -114,6 +116,10 @@ contract ChessFactory {
         // If bonding is enabled, verify white player has sufficient bond
         if (bondingManager != address(0)) {
             require(
+                !BondingManager(payable(bondingManager)).paused(),
+                "Bonding manager paused"
+            );
+            require(
                 BondingManager(payable(bondingManager)).hasSufficientBond(msg.sender, msg.value),
                 "Insufficient bond - deposit more CHESS and ETH"
             );
@@ -145,6 +151,7 @@ contract ChessFactory {
         );
 
         deployedChessGames.push(clone);
+        isDeployedGame[clone] = true;
         totalChessGames++;
 
         // Register game contract with RewardPool and PlayerRating for O(1) validation

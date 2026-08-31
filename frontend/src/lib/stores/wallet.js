@@ -17,6 +17,12 @@ const CONTRACT_ADDRESSES = {
 	8453: import.meta.env.VITE_CONTRACT_ADDRESS_BASE || ''
 };
 
+export function getConfiguredFactoryAddress(chainId) {
+	const configured = CONTRACT_ADDRESSES[Number(chainId)] || '';
+	if (!ethers.utils.isAddress(configured) || configured === ethers.constants.AddressZero) return null;
+	return ethers.utils.getAddress(configured);
+}
+
 // Wallet state
 function createWalletStore() {
 	const { subscribe, set, update } = writable({
@@ -199,12 +205,12 @@ export const networkName = derived(wallet, $wallet => {
 
 export const isSupported = derived(wallet, $wallet => {
 	if (!$wallet.chainId) return false;
-	return !!NETWORKS[$wallet.chainId];
+	return !!NETWORKS[$wallet.chainId] && !!getConfiguredFactoryAddress($wallet.chainId);
 });
 
 export const contractAddress = derived(wallet, $wallet => {
 	if (!$wallet.chainId) return null;
-	return CONTRACT_ADDRESSES[$wallet.chainId] || null;
+	return getConfiguredFactoryAddress($wallet.chainId);
 });
 
 export const explorer = derived(wallet, $wallet => {

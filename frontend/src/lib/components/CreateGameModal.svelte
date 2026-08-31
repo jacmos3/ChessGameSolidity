@@ -1,8 +1,9 @@
 <script>
-	import { createEventDispatcher, onMount } from 'svelte';
+	import { createEventDispatcher } from 'svelte';
 	import { games } from '$lib/stores/game.js';
 	import { bonding, bondingAvailable } from '$lib/stores/bonding.js';
 	import { wallet } from '$lib/stores/wallet.js';
+	import { isPositiveTokenAmount, parseExactTokenAllowance } from '$lib/utils/tokenAllowance.js';
 
 	const dispatch = createEventDispatcher();
 
@@ -12,6 +13,7 @@
 	let creating = false;
 	let error = null;
 	let bondCheck = null;
+	let bondCheckGeneration = 0;
 
 	// Timeout presets matching contract constants (named after crypto pioneers)
 	const timeoutOptions = [
@@ -28,21 +30,38 @@
 
 	// Check bond requirements when bet amount changes
 	$: if ($wallet.connected && $bondingAvailable && betAmount) {
-		checkBondRequirements();
+		checkBondRequirements(betAmount);
+	} else {
+		invalidateBondCheck();
 	}
 
-	async function checkBondRequirements() {
-		const amount = parseFloat(betAmount);
-		if (isNaN(amount) || amount <= 0) {
+	function invalidateBondCheck() {
+		bondCheckGeneration += 1;
+		bondCheck = null;
+	}
+
+	async function checkBondRequirements(candidateAmount) {
+		const generation = ++bondCheckGeneration;
+		const amount = String(candidateAmount || '').trim();
+		if (!isPositiveTokenAmount(amount)) {
 			bondCheck = null;
 			return;
 		}
 
-		const hasBond = await bonding.hasSufficientBond(amount);
-		const required = await bonding.calculateRequiredBond(amount);
+		const [hasBond, required] = await Promise.all([
+			bonding.hasSufficientBond(amount),
+			bonding.calculateRequiredBond(amount)
+		]);
+		if (generation !== bondCheckGeneration ||
+			amount !== String(betAmount || '').trim() ||
+			!$wallet.connected || !$bondingAvailable) {
+			return;
+		}
 
 		bondCheck = {
-			sufficient: hasBond,
+			amount,
+			verified: required !== null,
+			sufficient: required !== null && hasBond,
 			required
 		};
 	}
@@ -50,12 +69,31 @@
 	async function handleCreate() {
 		creating = true;
 		error = null;
-
-		// Pre-check bond requirements
-		if ($bondingAvailable && bondCheck && !bondCheck.sufficient) {
-			error = `Insufficient bond. You need ${parseFloat(bondCheck.required?.chessRequired || 0).toFixed(0)} CHESS + ${parseFloat(bondCheck.required?.ethRequired || 0).toFixed(4)} ETH deposited. Go to Profile > Bond Management to deposit.`;
+		if (!isPositiveTokenAmount(betAmount)) {
+			error = 'Enter a valid ETH bet with at most 18 decimals.';
 			creating = false;
 			return;
+		}
+		const betWei = parseExactTokenAllowance(betAmount);
+		if (betWei.lt(parseExactTokenAllowance('0.001')) || betWei.gt(parseExactTokenAllowance('100'))) {
+			error = 'Bet must be between 0.001 and 100 ETH.';
+			creating = false;
+			return;
+		}
+
+		// Pre-check bond requirements against the same exact amount being submitted.
+		if ($bondingAvailable) {
+			const normalizedBet = String(betAmount).trim();
+			if (!bondCheck?.verified || bondCheck.amount !== normalizedBet) {
+				error = 'Bond verification is incomplete. Wait for verification and try again.';
+				creating = false;
+				return;
+			}
+			if (!bondCheck.sufficient) {
+				error = `Insufficient bond. You need ${parseFloat(bondCheck.required.chessRequired).toFixed(0)} CHESS + ${parseFloat(bondCheck.required.ethRequired).toFixed(4)} ETH deposited. Go to Profile > Bond Management to deposit.`;
+				creating = false;
+				return;
+			}
 		}
 
 		try {
@@ -103,10 +141,8 @@
 				</label>
 				<input
 					id="bet"
-					type="number"
-					step="0.001"
-					min="0.001"
-					max="100"
+					type="text"
+					inputmode="decimal"
 					bind:value={betAmount}
 					class="input"
 					placeholder="0.01"
@@ -118,10 +154,10 @@
 
 			<!-- Bond Requirement Status -->
 			{#if $bondingAvailable && bondCheck}
-				<div class="p-3 rounded-lg {bondCheck.sufficient ? 'bg-chess-success/10 border border-chess-success/30' : 'bg-chess-danger/10 border border-chess-danger/30'}">
-					<div class="flex items-center gap-2 text-sm {bondCheck.sufficient ? 'text-chess-success' : 'text-chess-danger'}">
-						<span>{bondCheck.sufficient ? '✓' : '✗'}</span>
-						<span>{bondCheck.sufficient ? 'Bond OK' : 'Insufficient Bond'}</span>
+				<div class="p-3 rounded-lg {bondCheck.verified && bondCheck.sufficient ? 'bg-chess-success/10 border border-chess-success/30' : 'bg-chess-danger/10 border border-chess-danger/30'}">
+					<div class="flex items-center gap-2 text-sm {bondCheck.verified && bondCheck.sufficient ? 'text-chess-success' : 'text-chess-danger'}">
+						<span>{bondCheck.verified && bondCheck.sufficient ? '✓' : '✗'}</span>
+						<span>{!bondCheck.verified ? 'Bond verification failed' : bondCheck.sufficient ? 'Bond OK' : 'Insufficient Bond'}</span>
 					</div>
 					{#if bondCheck.required}
 						<p class="text-xs mt-1 {bondCheck.sufficient ? 'text-chess-gray' : 'text-chess-danger/80'}">
@@ -206,7 +242,7 @@
 			<button
 				class="btn btn-primary"
 				on:click={handleCreate}
-				disabled={creating || ($bondingAvailable && bondCheck && !bondCheck.sufficient)}
+				disabled={creating || ($bondingAvailable && (!bondCheck?.verified || !bondCheck.sufficient))}
 			>
 				{creating ? 'Creating...' : `Create (${betAmount} ETH)`}
 			</button>

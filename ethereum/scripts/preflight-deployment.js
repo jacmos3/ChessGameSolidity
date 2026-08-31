@@ -1,7 +1,10 @@
 const path = require("path");
 const dotenv = require("dotenv");
 const HDWalletProvider = require("@truffle/hdwallet-provider");
-const { parseBaseMaxPriorityFeePerGas } = require("./base-fee-config");
+const {
+  PUBLIC_DEPLOYMENT_GAS_BUDGET,
+  parseBaseFeeConfig
+} = require("./base-fee-config");
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const VALID_MNEMONIC_LENGTHS = new Set([12, 15, 18, 21, 24]);
@@ -55,6 +58,36 @@ function formatUnits(value, decimals, precision = 6) {
   return fraction ? `${whole}.${fraction}` : whole.toString();
 }
 
+function parseRpcQuantity(value, label) {
+  if (typeof value !== "string" || !/^0x[0-9a-fA-F]+$/.test(value)) {
+    throw new Error(`RPC returned an invalid ${label}`);
+  }
+  return BigInt(value);
+}
+
+function assertFeeCapSufficient(config, gasPriceHex, baseFeeHex) {
+  const maxFee = BigInt(config.maxFeePerGas);
+  const priorityFee = BigInt(config.maxPriorityFeePerGas);
+  const gasPrice = parseRpcQuantity(gasPriceHex, "suggested gas price");
+  const baseFee = parseRpcQuantity(baseFeeHex, "latest block base fee");
+
+  if (baseFee + priorityFee > maxFee) {
+    throw new Error(
+      `Configured max total fee of ${formatUnits(maxFee, 9)} gwei cannot cover ` +
+      `the latest base fee of ${formatUnits(baseFee, 9)} gwei plus the configured ` +
+      `priority fee of ${formatUnits(priorityFee, 9)} gwei`
+    );
+  }
+  if (gasPrice > maxFee) {
+    throw new Error(
+      `Configured max total fee of ${formatUnits(maxFee, 9)} gwei is below ` +
+      `the RPC suggested gas price of ${formatUnits(gasPrice, 9)} gwei`
+    );
+  }
+
+  return { baseFee, gasPrice };
+}
+
 function deriveDeployer(mnemonic, rpcUrl) {
   let provider;
   try {
@@ -104,19 +137,21 @@ function validateEnvironment(env, networkName) {
     throw new Error("MNEMONIC must contain 12, 15, 18, 21, or 24 words");
   }
 
+  let parsedRpc;
   try {
-    const parsedRpc = new URL(env[network.rpcVariable]);
-    if (parsedRpc.protocol !== "https:" && parsedRpc.protocol !== "http:") {
-      throw new Error("unsupported protocol");
-    }
+    parsedRpc = new URL(env[network.rpcVariable]);
   } catch {
-    throw new Error(`${network.rpcVariable} must be a valid HTTP(S) URL`);
+    throw new Error(`${network.rpcVariable} must be a valid HTTPS URL`);
+  }
+  if (parsedRpc.protocol !== "https:") {
+    throw new Error(`${network.rpcVariable} must use HTTPS`);
   }
 
   for (const name of ["TEAM_WALLET", "TREASURY_WALLET", "FAUCET_SIGNER", "ORACLE_UPDATER"]) {
     if (!isAddress(env[name])) throw new Error(`${name} must be a valid non-zero address`);
   }
 
+  const feeConfig = parseBaseFeeConfig(env);
   return {
     network,
     rpcUrl: env[network.rpcVariable],
@@ -125,8 +160,35 @@ function validateEnvironment(env, networkName) {
     treasuryWallet: env.TREASURY_WALLET,
     faucetSigner: env.FAUCET_SIGNER,
     oracleUpdater: env.ORACLE_UPDATER,
-    maxPriorityFeePerGas: parseBaseMaxPriorityFeePerGas(env)
+    ...feeConfig
   };
+}
+
+function assertDeploymentBalanceReserve(balance, maxFeePerGas) {
+  const available = BigInt(balance);
+  const maximumMigrationCost =
+    BigInt(maxFeePerGas) * BigInt(PUBLIC_DEPLOYMENT_GAS_BUDGET);
+  if (available < maximumMigrationCost) {
+    throw new Error(
+      `Deployer balance cannot cover the conservative full-migration gas budget at the configured max fee; ` +
+      `requires at least ${formatUnits(maximumMigrationCost, 18)} ETH`
+    );
+  }
+  return maximumMigrationCost;
+}
+
+function assertHandoffPrincipalSeparation(config, deployer) {
+  if (!config.handoffGovernance) return;
+  const deployerAddress = deployer.toLowerCase();
+  if (config.treasuryWallet.toLowerCase() === deployerAddress) {
+    throw new Error("TREASURY_WALLET must differ from the deployer when governance handoff is enabled");
+  }
+  if (config.faucetSigner.toLowerCase() === deployerAddress) {
+    throw new Error("FAUCET_SIGNER must differ from the deployer when governance handoff is enabled");
+  }
+  if (config.oracleUpdater.toLowerCase() === deployerAddress) {
+    throw new Error("ORACLE_UPDATER must differ from the deployer when governance handoff is enabled");
+  }
 }
 
 async function run() {
@@ -137,14 +199,8 @@ async function run() {
   const deployer = deriveDeployer(process.env.MNEMONIC.trim(), config.rpcUrl);
   const warnings = [];
 
-  if (config.handoffGovernance) {
-    if (config.faucetSigner.toLowerCase() === deployer.toLowerCase()) {
-      throw new Error("FAUCET_SIGNER must differ from the deployer when governance handoff is enabled");
-    }
-    if (config.oracleUpdater.toLowerCase() === deployer.toLowerCase()) {
-      throw new Error("ORACLE_UPDATER must differ from the deployer when governance handoff is enabled");
-    }
-  } else {
+  assertHandoffPrincipalSeparation(config, deployer);
+  if (!config.handoffGovernance) {
     warnings.push("Governance handoff is disabled; the deployer will retain protocol administration");
   }
 
@@ -155,11 +211,11 @@ async function run() {
     warnings.push("FAUCET_SIGNER and ORACLE_UPDATER are the same address; operational duties are not isolated");
   }
 
-  const [chainIdHex, balanceHex, gasPriceHex, blockNumberHex] = await Promise.all([
+  const [chainIdHex, balanceHex, gasPriceHex, latestBlock] = await Promise.all([
     rpcCall(config.rpcUrl, "eth_chainId"),
     rpcCall(config.rpcUrl, "eth_getBalance", [deployer, "latest"]),
     rpcCall(config.rpcUrl, "eth_gasPrice"),
-    rpcCall(config.rpcUrl, "eth_blockNumber")
+    rpcCall(config.rpcUrl, "eth_getBlockByNumber", ["latest", false])
   ]);
 
   const chainId = Number(BigInt(chainIdHex));
@@ -168,15 +224,30 @@ async function run() {
   }
   const balance = BigInt(balanceHex);
   if (balance === 0n) throw new Error("The deployer has no native ETH for gas");
-  if (balance < 10n ** 16n) warnings.push("Deployer balance is below 0.01 ETH; it may be insufficient for the full migration");
+  const fullMigrationReserve = assertDeploymentBalanceReserve(
+    balance,
+    config.maxFeePerGas
+  );
+  if (!latestBlock || typeof latestBlock !== "object") {
+    throw new Error("RPC returned an invalid latest block");
+  }
+  const blockNumber = parseRpcQuantity(latestBlock.number, "latest block number");
+  const { baseFee, gasPrice } = assertFeeCapSufficient(
+    config,
+    gasPriceHex,
+    latestBlock.baseFeePerGas
+  );
 
   console.log(`Deployment preflight: ${config.network.label}`);
   console.log(`  Chain ID: ${chainId}`);
-  console.log(`  Latest block: ${Number(BigInt(blockNumberHex))}`);
+  console.log(`  Latest block: ${blockNumber}`);
   console.log(`  Deployer: ${deployer}`);
   console.log(`  Deployer balance: ${formatUnits(balance, 18)} ETH`);
-  console.log(`  Gas price: ${formatUnits(BigInt(gasPriceHex), 9)} gwei`);
+  console.log(`  Full-migration reserve: ${formatUnits(fullMigrationReserve, 18)} ETH`);
+  console.log(`  Base fee: ${formatUnits(baseFee, 9)} gwei`);
+  console.log(`  Gas price: ${formatUnits(gasPrice, 9)} gwei`);
   console.log(`  Max priority fee: ${formatUnits(BigInt(config.maxPriorityFeePerGas), 9)} gwei`);
+  console.log(`  Max total fee: ${formatUnits(BigInt(config.maxFeePerGas), 9)} gwei`);
   console.log(`  Governance handoff: ${config.handoffGovernance ? "enabled" : "disabled"}`);
   console.log(`  Team wallet: ${config.teamWallet}`);
   console.log(`  Treasury wallet: ${config.treasuryWallet}`);
@@ -189,6 +260,9 @@ async function run() {
 
 module.exports = {
   NETWORKS,
+  assertDeploymentBalanceReserve,
+  assertHandoffPrincipalSeparation,
+  assertFeeCapSufficient,
   formatUnits,
   isAddress,
   parseGovernanceHandoff,

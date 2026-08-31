@@ -42,6 +42,8 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     error InvalidPromotionPiece();
     error CustomBoardUnconfirmed();
     error BoardHashMismatch();
+    error InvalidPiece();
+    error ArbitrationUnavailable();
 
     // ========== ENUMS (must be declared before state variables) ==========
     enum TimeoutPreset { Finney, Buterin, Nakamoto }
@@ -54,6 +56,7 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     uint48 public constant BUTERIN_TIMEOUT = 7 hours;
     uint48 public constant NAKAMOTO_TIMEOUT = 7 days;
     uint48 public constant CANCEL_UNJOINED_TIMEOUT = 1 days;
+    bytes32 private constant BOARD_SETUP_DOMAIN = keccak256("ChessCore.BoardSetup.v2");
 
     // ========== STORAGE LAYOUT OPTIMIZED FOR GAS ==========
     // Slot 1: betting (32 bytes)
@@ -89,9 +92,9 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     bool private initialized;              // 1 byte
     bool private rewardsDistributed;       // 1 byte
     // Game end tracking for rewards
-    bool private wasCheckmate;             // 1 byte
-    bool private wasResign;                // 1 byte
-    bool private wasTimeout;               // 1 byte
+    bool internal wasCheckmate;            // 1 byte
+    bool internal wasResign;               // 1 byte
+    bool internal wasTimeout;              // 1 byte
     bool public cancelled;                 // 1 byte
     uint16 public plyCount;                // 2 bytes
     // Total: 32 bytes (fits exactly in 1 slot)
@@ -127,6 +130,8 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     event DrawByFiftyMoveRule(address indexed claimant);
     event GameCancelled(address indexed player, uint256 refundAmount);
     event RatingReportFailed(address white, address black, uint8 result);
+    event RewardDistributionFailed(address white, address black, uint8 result);
+    event IllegalMoveLoss(address indexed player, address indexed winner);
 
     // Slot 7: Player addresses
     address whitePlayer;
@@ -210,11 +215,8 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
             timeoutSeconds = NAKAMOTO_TIMEOUT;
         }
 
-        // Record initial position for threefold repetition
-        bytes32 initialPosition = _computePositionHash(true);
-        positionCount[initialPosition] = 1;
-        positionHistory.push(initialPosition);
-        maxPositionRepetitions = 1;
+        // Repetition history is intentionally left empty until Black joins.
+        // Friendly setup edits are not game positions and must never be counted.
     }
 
     /// @notice Return the current board and metadata for this game's NFT
@@ -246,8 +248,31 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     }
 
     function getBoardSetupHash() public view returns (bytes32) {
+        (uint8 canonicalWhiteRow, uint8 canonicalWhiteCol, uint8 canonicalBlackRow, uint8 canonicalBlackCol) =
+            _validateBoardAndLocateKings();
         int8[BOARD_SIZE][BOARD_SIZE] memory snapshot = board;
-        return keccak256(abi.encode(snapshot));
+        uint8 canonicalCastlingFlags = _deriveCanonicalCastlingFlags(snapshot);
+
+        // Commit to every rule-relevant value that will be installed by setup
+        // finalization. Chain and game address prevent reusing an approval for a
+        // different deployment with an identical-looking board.
+        return keccak256(abi.encode(
+            BOARD_SETUP_DOMAIN,
+            block.chainid,
+            address(this),
+            gameMode,
+            snapshot,
+            canonicalWhiteRow,
+            canonicalWhiteCol,
+            canonicalBlackRow,
+            canonicalBlackCol,
+            canonicalCastlingFlags,
+            int8(-1), // no en passant target in a finalized initial setup
+            uint8(0),
+            uint16(0), // half-move clock
+            true,      // White always moves first
+            uint8(1)   // the finalized initial position is seeded exactly once
+        ));
     }
 
     function _joinGameAsBlack() internal {
@@ -257,9 +282,17 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         if (msg.value != betting) revert WrongBetAmount();
         if (blackPlayer != address(0)) revert BlackPlayerTaken();
 
+        // Validate and canonicalize before making any external bonding call.
+        // This is the trust boundary for both standard and Friendly setups.
+        _finalizeBoardSetup();
+
         // If bonding is enabled, lock bonds for both players (single external call)
         if (address(bondingManager) != address(0)) {
             bondingManager.lockBondsForGame(gameId, whitePlayer, msg.sender, betting);
+            if (
+                address(disputeDAO) != address(0) &&
+                !_prepareGameArbitration(msg.sender)
+            ) revert ArbitrationUnavailable();
             bondsLocked = true;
         }
 
@@ -271,6 +304,72 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
 
         emit GameStarted(whitePlayer, blackPlayer, betting);
         emit GameStateChanged(GameState.InProgress);
+    }
+
+    function _prepareGameArbitration(address prospectiveBlack)
+        internal
+        returns (bool)
+    {
+        try disputeDAO.prepareGameArbitration(
+            gameId,
+            whitePlayer,
+            prospectiveBlack
+        ) {
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    function _finalizeBoardSetup() internal {
+        (whiteKingRow, whiteKingCol, blackKingRow, blackKingCol) = _validateBoardAndLocateKings();
+
+        int8[BOARD_SIZE][BOARD_SIZE] memory snapshot = board;
+        uint8 canonicalFlags = _deriveCanonicalCastlingFlags(snapshot);
+        whiteKingMoved = canonicalFlags & (1 << 0) != 0;
+        whiteShortRookMoved = canonicalFlags & (1 << 1) != 0;
+        whiteLongRookMoved = canonicalFlags & (1 << 2) != 0;
+        blackKingMoved = canonicalFlags & (1 << 3) != 0;
+        blackLongRookMoved = canonicalFlags & (1 << 4) != 0;
+        blackShortRookMoved = canonicalFlags & (1 << 5) != 0;
+
+        enPassantCol = -1;
+        enPassantRow = 0;
+        halfMoveClock = 0;
+        plyCount = 0;
+        currentPlayer = whitePlayer;
+        _resetAndSeedPositionHistory(true);
+    }
+
+    function _deriveCanonicalCastlingFlags(int8[BOARD_SIZE][BOARD_SIZE] memory snapshot)
+        internal
+        pure
+        returns (uint8 flags)
+    {
+        if (snapshot[ROW_WHITE_PIECES][COL_KING] != KING) flags |= 1 << 0;
+        if (snapshot[ROW_WHITE_PIECES][COL_SHORTW_LONGB_ROOK] != ROOK) flags |= 1 << 1;
+        if (snapshot[ROW_WHITE_PIECES][COL_LONGW_SHORTB_ROOK] != ROOK) flags |= 1 << 2;
+        if (snapshot[ROW_BLACK_PIECES][COL_KING] != -KING) flags |= 1 << 3;
+        if (snapshot[ROW_BLACK_PIECES][COL_LONGW_SHORTB_ROOK] != -ROOK) flags |= 1 << 4;
+        if (snapshot[ROW_BLACK_PIECES][COL_SHORTW_LONGB_ROOK] != -ROOK) flags |= 1 << 5;
+    }
+
+    function _canonicalEnPassantForPosition(bool isWhiteTurn)
+        internal
+        view
+        override
+        returns (int8 canonicalCol, uint8 canonicalRow)
+    {
+        return rulesEngine.canonicalEnPassantForPosition(
+            board,
+            isWhiteTurn,
+            whiteKingRow,
+            whiteKingCol,
+            blackKingRow,
+            blackKingCol,
+            enPassantCol,
+            enPassantRow
+        );
     }
 
     /// @notice Register game completion in DisputeDAO for challenge window
@@ -296,40 +395,50 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         ) {
             return;
         }
-        rewardsDistributed = true;
+        // Friendly games permit custom board construction and are intentionally
+        // outside the token economy. Mark the terminal reward path as processed,
+        // but never let a debug-created position mint Tournament rewards.
+        if (gameMode == GameMode.Friendly) {
+            rewardsDistributed = true;
+            return;
+        }
 
         uint256 moveCount = plyCount;
         bool isDraw = (settledState == GameState.Draw);
         bool whiteWins = (settledState == GameState.WhiteWins);
-        bool clearBehaviorPenalties = _getResolvedDisputeCheater() != address(0);
+        address resolvedCheater = _getResolvedDisputeCheater();
+        bool clearBehaviorPenalties = resolvedCheater != address(0);
         bool whiteWasResign = !clearBehaviorPenalties && wasResign && !whiteWins && !isDraw;
         bool blackWasResign = !clearBehaviorPenalties && wasResign && whiteWins;
         bool whiteWasTimeout = !clearBehaviorPenalties && wasTimeout && !whiteWins && !isDraw;
         bool blackWasTimeout = !clearBehaviorPenalties && wasTimeout && whiteWins;
+        // A successful challenge can reverse the provisional winner. The honest
+        // replacement winner did not deliver the original checkmate and must not
+        // inherit its bonus; an unchanged result keeps the legitimate bonus.
+        bool rewardIsCheckmate = wasCheckmate && settledState == gameState;
 
-        // Distribute to white player
-        rewardPool.distributeReward(
+        uint8 rewardResult = isDraw ? 0 : (whiteWins ? 1 : 2);
+        // Both payouts consume one atomic game budget. A side found to have
+        // cheated is explicitly disqualified rather than receiving a loser reward.
+        // Reward delivery is an incentive side effect, not a prerequisite for
+        // releasing player bonds or ETH prizes. Keep transient downstream
+        // failures retryable instead of coupling them to the principal funds.
+        try rewardPool.distributeGameRewards(
             whitePlayer,
             blackPlayer,
-            whiteWins,                    // isWinner
-            isDraw,                       // isDraw
-            wasCheckmate && whiteWins,    // isCheckmate (only for winner)
+            rewardResult,
+            rewardIsCheckmate,
             moveCount,
             whiteWasResign,
-            whiteWasTimeout
-        );
-
-        // Distribute to black player
-        rewardPool.distributeReward(
-            blackPlayer,
-            whitePlayer,
-            !whiteWins && !isDraw,        // isWinner
-            isDraw,                       // isDraw
-            wasCheckmate && !whiteWins && !isDraw,  // isCheckmate (only for winner)
-            moveCount,
+            whiteWasTimeout,
             blackWasResign,
-            blackWasTimeout
-        );
+            blackWasTimeout,
+            resolvedCheater
+        ) {
+            rewardsDistributed = true;
+        } catch {
+            emit RewardDistributionFailed(whitePlayer, blackPlayer, rewardResult);
+        }
     }
 
     /// @notice Release bonds after challenge window (no dispute)
@@ -372,8 +481,8 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         (
             ,
             ,
-            address accusedPlayer,
             DisputeDAO.DisputeState state,
+            ,
             ,
             ,
             DisputeDAO.Vote finalDecision,
@@ -381,8 +490,14 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         ) = disputeDAO.getDispute(disputeId);
         _ignoredEscalationLevel;
 
-        if (state == DisputeDAO.DisputeState.Resolved && finalDecision == DisputeDAO.Vote.Cheat) {
-            return accusedPlayer;
+        if (state != DisputeDAO.DisputeState.Resolved) {
+            return address(0);
+        }
+        if (finalDecision == DisputeDAO.Vote.WhiteCheat) {
+            return whitePlayer;
+        }
+        if (finalDecision == DisputeDAO.Vote.BlackCheat) {
+            return blackPlayer;
         }
 
         return address(0);
@@ -435,11 +550,51 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
                 return; // Game not finished
             }
 
-            ratingReported = true;
-            try playerRating.reportGame(whitePlayer, blackPlayer, result) {} catch {
+            try playerRating.reportCanonicalGame(
+                whitePlayer,
+                blackPlayer,
+                result,
+                plyCount,
+                uint8(gameMode)
+            ) returns (bool rated) {
+                rated;
+                // A canonical game is processed exactly once. Ineligible Friendly,
+                // short, or repeated-pair results are accepted as intentionally
+                // unrated rather than retried later after policy conditions change.
+                ratingReported = true;
+            } catch {
                 emit RatingReportFailed(whitePlayer, blackPlayer, result);
             }
         }
+    }
+
+    /// @notice Retry a rating report that previously failed after the game settled.
+    /// @dev Permissionless after prize/dispute finalization because callers cannot choose the result.
+    function retryRatingReport() external nonReentrant {
+        // Do not publish the provisional on-board result while a challenge can
+        // still reverse it. Both prize finalization paths set this only after
+        // dispute gating has completed.
+        if (!prizeClaimed) revert CannotClaimYet();
+        if (
+            gameState != GameState.WhiteWins &&
+            gameState != GameState.BlackWins &&
+            gameState != GameState.Draw
+        ) revert GameNotFinished();
+
+        _reportRating();
+    }
+
+    /// @notice Retry a reward delivery that failed after the game settled.
+    /// @dev Permissionless and idempotent: callers cannot choose the result or recipients.
+    function retryRewardDistribution() external nonReentrant {
+        if (!prizeClaimed) revert CannotClaimYet();
+        if (
+            gameState != GameState.WhiteWins &&
+            gameState != GameState.BlackWins &&
+            gameState != GameState.Draw
+        ) revert GameNotFinished();
+
+        _distributeRewards();
     }
 
     /// @notice Check if the challenge window has passed and no dispute is active
@@ -456,10 +611,10 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         (
             ,  // gameId
             ,  // challenger
-            ,  // accusedPlayer
             DisputeDAO.DisputeState state,
             ,  // legitVotes
-            ,  // cheatVotes
+            ,  // whiteCheatVotes
+            ,  // blackCheatVotes
             ,  // finalDecision
                // escalationLevel
         ) = disputeDAO.getDispute(disputeId);
@@ -759,11 +914,10 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
     }
 
     modifier onlyOwnPieces(uint8 startX, uint8 startY){
-        int8 playerColor = 1;
-        if (currentPlayer == blackPlayer){
-            playerColor *= PLAYER_BLACK;
-        }
-        if (board[startX][startY] * playerColor <= 0) revert InvalidMove();
+        if (startX >= BOARD_SIZE || startY >= BOARD_SIZE) revert InvalidCoordinates();
+        int8 piece = board[startX][startY];
+        bool ownsPiece = currentPlayer == blackPlayer ? piece < 0 : piece > 0;
+        if (!ownsPiece) revert InvalidMove();
         _;
     }
 
@@ -815,6 +969,10 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         // Store the piece being moved before clearing the start position
         int8 movingPiece = board[startX][startY];
         int8 targetPiece = board[endX][endY];
+
+        // Capturing an original, unmoved corner rook irrevocably removes the
+        // corresponding castling right. A promoted replacement cannot restore it.
+        _revokeCastlingRightForCapturedRook(endX, endY, targetPiece);
 
         // Make the move
         board[endX][endY] = movingPiece;
@@ -886,6 +1044,7 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         // Reset en passant if this was not a double pawn move
         if (!isDoublePawnMove) {
             enPassantCol = -1;
+            enPassantRow = 0;
         }
 
         // Track king moves (any king move prevents future castling)
@@ -941,7 +1100,10 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
 
         // FIDE 75-move rule: automatic draw after 75 full moves without progress
         // This prevents unbounded game length and positionHistory growth
-        if (halfMoveClock >= MAX_HALF_MOVES_WITHOUT_PROGRESS) {
+        if (
+            gameState == GameState.InProgress &&
+            halfMoveClock >= MAX_HALF_MOVES_WITHOUT_PROGRESS
+        ) {
             gameState = GameState.Draw;
             _registerGameForDispute();
             emit GameStateChanged(gameState);
@@ -968,6 +1130,22 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         }
     }
 
+    function _revokeCastlingRightForCapturedRook(uint8 row, uint8 col, int8 capturedPiece) internal {
+        if (capturedPiece == ROOK && row == ROW_WHITE_PIECES) {
+            if (col == COL_SHORTW_LONGB_ROOK) {
+                whiteShortRookMoved = true;
+            } else if (col == COL_LONGW_SHORTB_ROOK) {
+                whiteLongRookMoved = true;
+            }
+        } else if (capturedPiece == -ROOK && row == ROW_BLACK_PIECES) {
+            if (col == COL_SHORTW_LONGB_ROOK) {
+                blackShortRookMoved = true;
+            } else if (col == COL_LONGW_SHORTB_ROOK) {
+                blackLongRookMoved = true;
+            }
+        }
+    }
+
     /// @notice Handle move result: check/mate detection, events, and dispute registration
     function _handleMoveResult(
         uint8 startX, uint8 startY, uint8 endX, uint8 endY,
@@ -986,8 +1164,17 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         GameState previousState = gameState;
         gameState = newState;
 
-        // Track checkmate for reward bonus
-        if (isMate) {
+        bool isIllegalMoveLoss = gameMode == GameMode.Tournament && leavesKingInCheck;
+
+        // Tournament deliberately permits a move that exposes the mover's king,
+        // but that loss is a rule violation, not a checkmate. Apply the existing
+        // behavioral penalty used for a voluntary concession while preserving a
+        // distinct public event and withholding the checkmate bonus.
+        if (isIllegalMoveLoss) {
+            wasResign = true;
+            address winner = currentPlayer == whitePlayer ? blackPlayer : whitePlayer;
+            emit IllegalMoveLoss(currentPlayer, winner);
+        } else if (isMate) {
             wasCheckmate = true;
         }
 
@@ -1037,17 +1224,12 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
         if (msg.sender != whitePlayer) revert OnlyWhitePlayer();
         if (gameState != GameState.NotStarted) revert GameAlreadyStarted();
         if (x >= BOARD_SIZE || y >= BOARD_SIZE) revert InvalidCoordinates();
+        if (!_isSupportedPiece(piece)) revert InvalidPiece();
 
         boardCustomized = true;
         board[x][y] = piece;
-        // Update king position cache if placing a king
-        if (piece == KING) {
-            whiteKingRow = x;
-            whiteKingCol = y;
-        } else if (piece == -KING) {
-            blackKingRow = x;
-            blackKingCol = y;
-        }
+        // King caches are intentionally not maintained incrementally: the final
+        // board is scanned and canonicalized atomically when Black joins.
         return "";
     }
 
@@ -1098,11 +1280,21 @@ contract ChessCore is ChessBoard, ReentrancyGuard {
 
     function getGameState () external view returns (uint8) {
         if (cancelled) return 6;
-        if (gameState == GameState.NotStarted) return 1;
-        if (gameState == GameState.InProgress) return 2;
-        if (gameState == GameState.Draw) return 3;
-        if (gameState == GameState.WhiteWins) return 4;
-        if (gameState == GameState.BlackWins) return 5;
+        GameState visibleState = gameState;
+        if (
+            gameState == GameState.Draw ||
+            gameState == GameState.WhiteWins ||
+            gameState == GameState.BlackWins
+        ) {
+            // Once arbitration resolves, public consumers must observe the same
+            // canonical winner used for prizes, rewards, bonds and rating.
+            visibleState = _getSettledOutcome();
+        }
+        if (visibleState == GameState.NotStarted) return 1;
+        if (visibleState == GameState.InProgress) return 2;
+        if (visibleState == GameState.Draw) return 3;
+        if (visibleState == GameState.WhiteWins) return 4;
+        if (visibleState == GameState.BlackWins) return 5;
 
         return 0;
     }

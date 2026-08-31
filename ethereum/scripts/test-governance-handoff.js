@@ -118,6 +118,7 @@ async function main() {
       GOVERNANCE_HANDOFF: "true",
       FAUCET_SIGNER: accounts[3],
       ORACLE_UPDATER: accounts[4],
+      DEPLOYMENT_MANIFEST_SHA256: "",
       DEPLOYMENTS_DIR: deploymentDir,
       DEPLOYMENT_FILE: path.join(deploymentDir, "latest-development.json")
     };

@@ -2,6 +2,8 @@
 pragma solidity ^0.8.24;
 
 contract ChessRulesEngine {
+    error InvalidBoardPiece(int8 piece, uint8 row, uint8 col);
+
     uint8 internal constant BOARD_SIZE = 8;
 
     int8 internal constant EMPTY = 0;
@@ -53,6 +55,9 @@ contract ChessRulesEngine {
         uint8 endX,
         uint8 endY
     ) external pure returns (bool) {
+        if (!_areBoardCoordinates(startX, startY) || !_areBoardCoordinates(endX, endY)) {
+            return false;
+        }
         return _isValidMoveView(board, enPassantCol, enPassantRow, castlingFlags, startX, startY, endX, endY);
     }
 
@@ -67,7 +72,112 @@ contract ChessRulesEngine {
         uint8 endX,
         uint8 endY
     ) external pure returns (bool) {
+        if (
+            !_areBoardCoordinates(whiteKingRow, whiteKingCol) ||
+            !_areBoardCoordinates(blackKingRow, blackKingCol) ||
+            !_areBoardCoordinates(startX, startY) ||
+            !_areBoardCoordinates(endX, endY)
+        ) {
+            return true;
+        }
         return _wouldMoveLeaveKingInCheck(board, whiteKingRow, whiteKingCol, blackKingRow, blackKingCol, startX, startY, endX, endY);
+    }
+
+    /// @notice Return an en-passant marker only when it enables a legal capture.
+    /// @dev A pinned adjacent pawn is not enough: at least one capture must leave
+    ///      the moving side's king safe for the positions to be distinct.
+    function canonicalEnPassantForPosition(
+        int8[8][8] memory board,
+        bool isWhiteTurn,
+        uint8 whiteKingRow,
+        uint8 whiteKingCol,
+        uint8 blackKingRow,
+        uint8 blackKingCol,
+        int8 enPassantCol,
+        uint8 enPassantRow
+    ) external pure returns (int8 canonicalCol, uint8 canonicalRow) {
+        if (
+            !_areBoardCoordinates(whiteKingRow, whiteKingCol) ||
+            !_areBoardCoordinates(blackKingRow, blackKingCol) ||
+            enPassantCol < 0 ||
+            enPassantCol >= int8(BOARD_SIZE)
+        ) {
+            return (-1, 0);
+        }
+
+        uint8 col = uint8(enPassantCol);
+        uint8 pawnRow = isWhiteTurn
+            ? ROW_BLACK_PAWNS_LONG_OPENING
+            : ROW_WHITE_PAWNS_LONG_OPENING;
+        uint8 targetRow = isWhiteTurn ? pawnRow - 1 : pawnRow + 1;
+        int8 movedPawn = isWhiteTurn ? -PAWN : PAWN;
+        int8 capturingPawn = isWhiteTurn ? PAWN : -PAWN;
+
+        if (
+            enPassantRow != pawnRow ||
+            board[pawnRow][col] != movedPawn ||
+            board[targetRow][col] != EMPTY
+        ) {
+            return (-1, 0);
+        }
+
+        if (
+            col > 0 &&
+            board[pawnRow][col - 1] == capturingPawn &&
+            _isValidMoveView(
+                board,
+                enPassantCol,
+                enPassantRow,
+                0,
+                pawnRow,
+                col - 1,
+                targetRow,
+                col
+            ) &&
+            !_wouldMoveLeaveKingInCheck(
+                board,
+                whiteKingRow,
+                whiteKingCol,
+                blackKingRow,
+                blackKingCol,
+                pawnRow,
+                col - 1,
+                targetRow,
+                col
+            )
+        ) {
+            return (enPassantCol, enPassantRow);
+        }
+
+        if (
+            col < BOARD_SIZE - 1 &&
+            board[pawnRow][col + 1] == capturingPawn &&
+            _isValidMoveView(
+                board,
+                enPassantCol,
+                enPassantRow,
+                0,
+                pawnRow,
+                col + 1,
+                targetRow,
+                col
+            ) &&
+            !_wouldMoveLeaveKingInCheck(
+                board,
+                whiteKingRow,
+                whiteKingCol,
+                blackKingRow,
+                blackKingCol,
+                pawnRow,
+                col + 1,
+                targetRow,
+                col
+            )
+        ) {
+            return (enPassantCol, enPassantRow);
+        }
+
+        return (-1, 0);
     }
 
     function _wouldMoveLeaveKingInCheck(
@@ -82,6 +192,9 @@ contract ChessRulesEngine {
         uint8 endY
     ) internal pure returns (bool) {
         int8 piece = board[startX][startY];
+        if (!_isSupportedNonEmptyPiece(piece)) {
+            return true;
+        }
         int8 player = (piece > 0) ? PLAYER_WHITE : PLAYER_BLACK;
         uint8 kingX = (_abs(piece) == uint8(KING)) ? endX : (player == PLAYER_WHITE ? whiteKingRow : blackKingRow);
         uint8 kingY = (_abs(piece) == uint8(KING)) ? endY : (player == PLAYER_WHITE ? whiteKingCol : blackKingCol);
@@ -104,7 +217,15 @@ contract ChessRulesEngine {
                 }
 
                 int8 boardPiece = board[row][col];
-                if (boardPiece * player >= 0) {
+                if (boardPiece == EMPTY) {
+                    continue;
+                }
+
+                if (!_isSupportedNonEmptyPiece(boardPiece)) {
+                    return true;
+                }
+
+                if (_isSameColor(boardPiece, player)) {
                     continue;
                 }
 
@@ -145,8 +266,12 @@ contract ChessRulesEngine {
         uint8,
         uint8
     ) external pure returns (bool isCheck, bool isMate, uint8 newState) {
+        _validateBoardPieces(board);
+
         if (tournamentMode && leavesKingInCheck) {
-            return (false, true, moverIsWhite ? STATE_BLACK_WINS : STATE_WHITE_WINS);
+            // An illegal self-check move loses in Tournament mode, but it is not
+            // checkmate and must not receive checkmate rewards or metadata.
+            return (false, false, moverIsWhite ? STATE_BLACK_WINS : STATE_WHITE_WINS);
         }
 
         if (_isKingInCheck(board, PLAYER_BLACK, whiteKingRow, whiteKingCol, blackKingRow, blackKingCol, enPassantCol, enPassantRow, castlingFlags)) {
@@ -205,7 +330,8 @@ contract ChessRulesEngine {
 
         for (uint8 row = 0; row < BOARD_SIZE; row++) {
             for (uint8 col = 0; col < BOARD_SIZE; col++) {
-                if (player * board[row][col] < 0) {
+                int8 candidate = board[row][col];
+                if (candidate != EMPTY && !_isSameColor(candidate, player)) {
                     if (_isValidMoveView(board, enPassantCol, enPassantRow, castlingFlags, row, col, kingX, kingY)) {
                         return true;
                     }
@@ -229,7 +355,18 @@ contract ChessRulesEngine {
         int8 piece = board[startX][startY];
         int8 target = board[endX][endY];
 
+        if (!_isSupportedNonEmptyPiece(piece) || !_isSupportedPiece(target)) {
+            return false;
+        }
+
         if (_abs(int8(endY) - int8(startY)) == COL_BISHOP && _abs(piece) == uint8(KING)) {
+            // Castling is a same-rank move to an empty square. Checking this
+            // before the special branch prevents a king teleport/capture from
+            // bypassing the ordinary same-color target guard below.
+            if (startX != endX || target != EMPTY) {
+                return false;
+            }
+
             if (piece == KING) {
                 if (startX == ROW_WHITE_PIECES && startY == COL_KING && !_hasFlag(castlingFlags, FLAG_WHITE_KING_MOVED)) {
                     if (_abs(board[startX][COL_LONGW_SHORTB_ROOK]) == uint8(ROOK) && endY == COL_KNIGHT && !_hasFlag(castlingFlags, FLAG_WHITE_LONG_ROOK_MOVED)) {
@@ -256,7 +393,7 @@ contract ChessRulesEngine {
             return false;
         }
 
-        if (target != EMPTY && piece * target >= 0) {
+        if (target != EMPTY && _isSameColor(piece, target)) {
             return false;
         }
 
@@ -296,7 +433,7 @@ contract ChessRulesEngine {
     ) internal pure returns (bool) {
         if (startY == endY && target == EMPTY) {
             if (piece == -PAWN) {
-                if (endX == startX + 1) {
+                if (startX < BOARD_SIZE - 1 && endX == startX + 1) {
                     return true;
                 }
                 if (
@@ -307,7 +444,7 @@ contract ChessRulesEngine {
                     return true;
                 }
             } else {
-                if (endX == startX - 1) {
+                if (startX > 0 && endX == startX - 1) {
                     return true;
                 }
                 if (
@@ -321,10 +458,10 @@ contract ChessRulesEngine {
         }
 
         if (_abs(int8(endY) - int8(startY)) == 1) {
-            if (piece == PAWN && endX == startX - 1 && target < 0) {
+            if (piece == PAWN && startX > 0 && endX == startX - 1 && target < 0) {
                 return true;
             }
-            if (piece == -PAWN && endX == startX + 1 && target > 0) {
+            if (piece == -PAWN && startX < BOARD_SIZE - 1 && endX == startX + 1 && target > 0) {
                 return true;
             }
         }
@@ -332,8 +469,8 @@ contract ChessRulesEngine {
         if (enPassantCol >= 0 && _abs(int8(endY) - int8(startY)) == 1 && target == EMPTY) {
             if (
                 piece == PAWN &&
-                endX == startX - 1 &&
                 startX == ROW_BLACK_PAWNS_LONG_OPENING &&
+                endX == startX - 1 &&
                 int8(endY) == enPassantCol &&
                 enPassantRow == startX
             ) {
@@ -342,8 +479,8 @@ contract ChessRulesEngine {
 
             if (
                 piece == -PAWN &&
-                endX == startX + 1 &&
                 startX == ROW_WHITE_PAWNS_LONG_OPENING &&
+                endX == startX + 1 &&
                 int8(endY) == enPassantCol &&
                 enPassantRow == startX
             ) {
@@ -364,7 +501,7 @@ contract ChessRulesEngine {
     ) internal pure returns (bool) {
         uint8 deltaX = _abs(int8(endX) - int8(startX));
         uint8 deltaY = _abs(int8(endY) - int8(startY));
-        return ((deltaX == 1 && deltaY == 2) || (deltaX == 2 && deltaY == 1)) && target * piece <= 0;
+        return ((deltaX == 1 && deltaY == 2) || (deltaX == 2 && deltaY == 1)) && !_isSameColor(piece, target);
     }
 
     function _isBishopMoveValid(
@@ -378,7 +515,7 @@ contract ChessRulesEngine {
     ) internal pure returns (bool) {
         uint8 deltaX = _abs(int8(endX) - int8(startX));
         uint8 deltaY = _abs(int8(endY) - int8(startY));
-        return deltaX == deltaY && _isPathClear(board, startX, startY, endX, endY) && target * piece <= 0;
+        return deltaX == deltaY && _isPathClear(board, startX, startY, endX, endY) && !_isSameColor(piece, target);
     }
 
     function _isRookMoveValid(
@@ -390,7 +527,7 @@ contract ChessRulesEngine {
         uint8 endX,
         uint8 endY
     ) internal pure returns (bool) {
-        return (startX == endX || startY == endY) && _isPathClear(board, startX, startY, endX, endY) && target * piece <= 0;
+        return (startX == endX || startY == endY) && _isPathClear(board, startX, startY, endX, endY) && !_isSameColor(piece, target);
     }
 
     function _isQueenMoveValid(
@@ -404,7 +541,7 @@ contract ChessRulesEngine {
     ) internal pure returns (bool) {
         uint8 deltaX = _abs(int8(endX) - int8(startX));
         uint8 deltaY = _abs(int8(endY) - int8(startY));
-        return (deltaX == deltaY || startX == endX || startY == endY) && _isPathClear(board, startX, startY, endX, endY) && target * piece <= 0;
+        return (deltaX == deltaY || startX == endX || startY == endY) && _isPathClear(board, startX, startY, endX, endY) && !_isSameColor(piece, target);
     }
 
     function _isKingMoveValid(
@@ -417,7 +554,7 @@ contract ChessRulesEngine {
     ) internal pure returns (bool) {
         uint8 deltaX = _abs(int8(endX) - int8(startX));
         uint8 deltaY = _abs(int8(endY) - int8(startY));
-        return deltaX <= 1 && deltaY <= 1 && target * piece <= 0;
+        return deltaX <= 1 && deltaY <= 1 && !_isSameColor(piece, target);
     }
 
     function _isCastlingPathClear(
@@ -547,7 +684,7 @@ contract ChessRulesEngine {
                 }
 
                 int8 piece = board[row][col];
-                if (piece * player < 0 && _canPieceAttackSquare(board, row, col, targetX, targetY, fromX, fromY)) {
+                if (piece != EMPTY && !_isSameColor(piece, player) && _canPieceAttackSquare(board, row, col, targetX, targetY, fromX, fromY)) {
                     return true;
                 }
             }
@@ -566,6 +703,9 @@ contract ChessRulesEngine {
         uint8 ignoreCol
     ) internal pure returns (bool) {
         int8 piece = board[pieceRow][pieceCol];
+        if (!_isSupportedNonEmptyPiece(piece)) {
+            return false;
+        }
         uint8 absPiece = _abs(piece);
 
         if (absPiece == uint8(PAWN)) {
@@ -583,6 +723,10 @@ contract ChessRulesEngine {
             return _abs(int8(targetRow) - int8(pieceRow)) <= 1 && _abs(int8(targetCol) - int8(pieceCol)) <= 1;
         }
 
+        if (absPiece != uint8(BISHOP) && absPiece != uint8(ROOK) && absPiece != uint8(QUEEN)) {
+            return false;
+        }
+
         return _canSlidingPieceAttack(board, pieceRow, pieceCol, targetRow, targetCol, ignoreRow, ignoreCol, absPiece);
     }
 
@@ -596,6 +740,10 @@ contract ChessRulesEngine {
         uint8 ignoreCol,
         uint8 absPiece
     ) internal pure returns (bool) {
+        if (absPiece != uint8(BISHOP) && absPiece != uint8(ROOK) && absPiece != uint8(QUEEN)) {
+            return false;
+        }
+
         int8 deltaRow = int8(targetRow) - int8(pieceRow);
         int8 deltaCol = int8(targetCol) - int8(pieceCol);
         uint8 absDeltaRow = _abs(deltaRow);
@@ -674,7 +822,7 @@ contract ChessRulesEngine {
     ) internal pure returns (bool) {
         for (uint8 rowPiece = 0; rowPiece < BOARD_SIZE; rowPiece++) {
             for (uint8 colPiece = 0; colPiece < BOARD_SIZE; colPiece++) {
-                if (board[rowPiece][colPiece] * player <= 0) {
+                if (board[rowPiece][colPiece] == EMPTY || !_isSameColor(board[rowPiece][colPiece], player)) {
                     continue;
                 }
 
@@ -722,6 +870,9 @@ contract ChessRulesEngine {
         uint8 clearedRow,
         uint8 clearedCol
     ) internal pure returns (bool) {
+        if (!_isSupportedNonEmptyPiece(attackerPiece)) {
+            return false;
+        }
         uint8 absPiece = _abs(attackerPiece);
         if (absPiece == uint8(PAWN)) {
             int8 direction = (attackerPiece > 0) ? int8(-1) : int8(1);
@@ -736,6 +887,10 @@ contract ChessRulesEngine {
 
         if (absPiece == uint8(KING)) {
             return _abs(int8(kingRow) - int8(attackerRow)) <= 1 && _abs(int8(kingCol) - int8(attackerCol)) <= 1;
+        }
+
+        if (absPiece != uint8(BISHOP) && absPiece != uint8(ROOK) && absPiece != uint8(QUEEN)) {
+            return false;
         }
 
         int8 deltaRow = int8(kingRow) - int8(attackerRow);
@@ -780,7 +935,35 @@ contract ChessRulesEngine {
         return flags & flag != 0;
     }
 
+    function _areBoardCoordinates(uint8 row, uint8 col) internal pure returns (bool) {
+        return row < BOARD_SIZE && col < BOARD_SIZE;
+    }
+
+    function _validateBoardPieces(int8[8][8] memory board) internal pure {
+        for (uint8 row = 0; row < BOARD_SIZE; row++) {
+            for (uint8 col = 0; col < BOARD_SIZE; col++) {
+                int8 piece = board[row][col];
+                if (!_isSupportedPiece(piece)) {
+                    revert InvalidBoardPiece(piece, row, col);
+                }
+            }
+        }
+    }
+
+    function _isSupportedPiece(int8 piece) internal pure returns (bool) {
+        return piece >= -KING && piece <= KING;
+    }
+
+    function _isSupportedNonEmptyPiece(int8 piece) internal pure returns (bool) {
+        return piece != EMPTY && _isSupportedPiece(piece);
+    }
+
+    function _isSameColor(int8 first, int8 second) internal pure returns (bool) {
+        return first != EMPTY && second != EMPTY && ((first > 0) == (second > 0));
+    }
+
     function _abs(int8 value) internal pure returns (uint8) {
-        return value >= 0 ? uint8(value) : uint8(-value);
+        // Widen first so int8.min (-128) cannot overflow while being negated.
+        return value >= 0 ? uint8(value) : uint8(uint16(-int16(value)));
     }
 }

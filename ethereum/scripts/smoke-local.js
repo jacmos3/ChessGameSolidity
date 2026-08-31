@@ -38,7 +38,6 @@ module.exports = async function (callback) {
     const admin = accounts[0];
     const whitePlayer = accounts[3];
     const blackPlayer = accounts[4];
-    const challenger = accounts[5];
     const arb1 = accounts[6];
     const arb2 = accounts[7];
     const arb3 = accounts[8];
@@ -48,7 +47,6 @@ module.exports = async function (callback) {
     const BOND_ETH = web3.utils.toWei("1", "ether");
     const TIER1_STAKE = web3.utils.toWei("1000", "ether");
     const MINT_AMOUNT = web3.utils.toWei("100000", "ether");
-    const CHALLENGE_DEPOSIT = web3.utils.toWei("50", "ether");
 
     console.log("");
     console.log("=== Local Smoke Test ===");
@@ -64,13 +62,12 @@ module.exports = async function (callback) {
     console.log(" - BondingManager:", bondingManager.address);
     console.log(" - DisputeDAO:", disputeDAO.address);
 
-    for (const recipient of [whitePlayer, blackPlayer, challenger, arb1, arb2, arb3]) {
+    for (const recipient of [whitePlayer, blackPlayer, arb1, arb2, arb3]) {
       await chessToken.mintPlayToEarn(recipient, MINT_AMOUNT, { from: admin });
     }
 
     await chessToken.approve(bondingManager.address, MINT_AMOUNT, { from: whitePlayer });
     await chessToken.approve(bondingManager.address, MINT_AMOUNT, { from: blackPlayer });
-    await chessToken.approve(disputeDAO.address, CHALLENGE_DEPOSIT, { from: challenger });
     await chessToken.approve(arbitratorRegistry.address, MINT_AMOUNT, { from: arb1 });
     await chessToken.approve(arbitratorRegistry.address, MINT_AMOUNT, { from: arb2 });
     await chessToken.approve(arbitratorRegistry.address, MINT_AMOUNT, { from: arb3 });
@@ -111,8 +108,15 @@ module.exports = async function (callback) {
     await chessCore.resign({ from: whitePlayer });
 
     console.log("Opening dispute...");
-    await disputeDAO.challenge(gameId, blackPlayer, { from: challenger });
+    const requiredDeposit = await disputeDAO.getRequiredChallengeDepositForGame(gameId);
+    await chessToken.approve(disputeDAO.address, requiredDeposit, { from: blackPlayer });
+    await disputeDAO.challenge(gameId, { from: blackPlayer });
     const disputeId = await disputeDAO.gameToDispute(gameId);
+    const selectionBlock = Number(await disputeDAO.panelSelectionBlock(disputeId));
+    while (Number(await web3.eth.getBlockNumber()) <= selectionBlock) {
+      await advanceTime(1);
+    }
+    await disputeDAO.finalizePanel(disputeId, { from: blackPlayer });
     const selectedArbitrators = await disputeDAO.getSelectedArbitrators(disputeId);
     const revealData = [];
 
@@ -121,10 +125,11 @@ module.exports = async function (callback) {
     for (let i = 0; i < selectedArbitrators.length; i++) {
       const arbitrator = selectedArbitrators[i];
       const salt = web3.utils.soliditySha3(`smoke-local-${i}`);
-      const commitHash = web3.utils.soliditySha3(
-        { type: "uint8", value: 2 },
-        { type: "bytes32", value: salt },
-        { type: "address", value: arbitrator }
+      const commitHash = await disputeDAO.computeVoteCommitment(
+        disputeId,
+        2,
+        salt,
+        arbitrator
       );
       await disputeDAO.commitVote(disputeId, commitHash, { from: arbitrator });
       revealData.push({ arbitrator, salt });
@@ -137,8 +142,8 @@ module.exports = async function (callback) {
     }
 
     await advanceTime(24 * 60 * 60 + 1);
-    await disputeDAO.resolveDispute(disputeId, { from: challenger });
-    await chessCore.finalizePrizes({ from: whitePlayer });
+    await disputeDAO.resolveDispute(disputeId, { from: blackPlayer });
+    await chessCore.finalizePrizes({ from: blackPlayer });
 
     const whitePendingPrize = await chessCore.pendingPrize(whitePlayer);
     const blackPendingPrize = await chessCore.pendingPrize(blackPlayer);

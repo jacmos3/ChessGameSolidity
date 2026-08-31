@@ -1,7 +1,12 @@
 <script>
 	import { onMount } from 'svelte';
 	import { wallet } from '$lib/stores/wallet.js';
-	import { bonding, bondingAvailable, formatChess } from '$lib/stores/bonding.js';
+	import { bonding, bondingAvailable } from '$lib/stores/bonding.js';
+	import {
+		isExactFormattedTokenAllowance,
+		isPositiveTokenAmount,
+		isValidNonNegativeTokenAmount
+	} from '$lib/utils/tokenAllowance.js';
 
 	let activeTab = 'deposit'; // 'deposit' | 'withdraw'
 	let chessAmount = '';
@@ -27,7 +32,7 @@
 	}
 
 	async function calculateCommonRequirements() {
-		const amounts = [0.01, 0.1, 1];
+		const amounts = ['0.01', '0.1', '1'];
 		requirements = {};
 		for (const amt of amounts) {
 			requirements[amt] = await bonding.calculateRequiredBond(amt);
@@ -35,7 +40,10 @@
 	}
 
 	async function handleApprove() {
-		if (!chessAmount || parseFloat(chessAmount) <= 0) return;
+		if (!isPositiveTokenAmount(chessAmount)) {
+			error = 'Enter a valid CHESS amount with at most 18 decimals';
+			return;
+		}
 
 		processing = true;
 		error = null;
@@ -43,7 +51,7 @@
 
 		try {
 			await bonding.approveChess(chessAmount);
-			success = 'CHESS approved for unlimited spending. You can now deposit.';
+			success = `${chessAmount} CHESS approved. You can now deposit that amount.`;
 		} catch (err) {
 			console.error('Approval error:', err);
 			if (err.code === 'ACTION_REJECTED' || err.code === 4001) {
@@ -56,12 +64,35 @@
 		processing = false;
 	}
 
-	async function handleDeposit() {
-		const chess = parseFloat(chessAmount) || 0;
-		const eth = parseFloat(ethAmount) || 0;
+	async function handleRevokeApproval() {
+		processing = true;
+		error = null;
+		success = null;
 
-		if (chess <= 0 && eth <= 0) {
-			error = 'Enter an amount to deposit';
+		try {
+			await bonding.revokeChessApproval();
+			success = 'CHESS allowance revoked.';
+		} catch (err) {
+			error = err.code === 'ACTION_REJECTED' || err.code === 4001
+				? 'Transaction rejected by user'
+				: err.message || 'Failed to revoke allowance';
+		}
+
+		processing = false;
+	}
+
+	async function handleDeposit() {
+		const chess = String(chessAmount || '').trim();
+		const eth = String(ethAmount || '').trim();
+		if (!isValidNonNegativeTokenAmount(chess) || !isValidNonNegativeTokenAmount(eth)) {
+			error = 'Amounts must be non-negative decimals with at most 18 decimal places';
+			return;
+		}
+		const hasChess = isPositiveTokenAmount(chess);
+		const hasEth = isPositiveTokenAmount(eth);
+
+		if (!hasChess && !hasEth) {
+			error = 'Enter a valid amount with at most 18 decimals';
 			return;
 		}
 
@@ -70,8 +101,8 @@
 		success = null;
 
 		try {
-			await bonding.depositBond(chess, eth);
-			success = `Deposited ${chess > 0 ? chess + ' CHESS' : ''} ${chess > 0 && eth > 0 ? '+' : ''} ${eth > 0 ? eth + ' ETH' : ''}`;
+			await bonding.depositBond(hasChess ? chess : '0', hasEth ? eth : '0');
+			success = `Deposited ${hasChess ? chess + ' CHESS' : ''} ${hasChess && hasEth ? '+' : ''} ${hasEth ? eth + ' ETH' : ''}`;
 			chessAmount = '';
 			ethAmount = '';
 		} catch (err) {
@@ -91,7 +122,7 @@
 	}
 
 	async function handleWithdrawChess() {
-		if (!chessAmount || parseFloat(chessAmount) <= 0) return;
+		if (!isPositiveTokenAmount(chessAmount)) return;
 
 		processing = true;
 		error = null;
@@ -109,7 +140,7 @@
 	}
 
 	async function handleWithdrawEth() {
-		if (!ethAmount || parseFloat(ethAmount) <= 0) return;
+		if (!isPositiveTokenAmount(ethAmount)) return;
 
 		processing = true;
 		error = null;
@@ -146,7 +177,7 @@
 		success = null;
 
 		try {
-			await bonding.mintTestTokens(1000);
+			await bonding.mintTestTokens('1000');
 			success = 'Minted 1000 CHESS tokens!';
 		} catch (err) {
 			error = err.message || 'Failed to mint tokens. Only admin can mint.';
@@ -157,8 +188,8 @@
 
 	// Check if we need approval for the chess amount
 	$: needsApproval = activeTab === 'deposit' &&
-		parseFloat(chessAmount || '0') > 0 &&
-		parseFloat($bonding.chessAllowance) < parseFloat(chessAmount || '0');
+		isPositiveTokenAmount(chessAmount) &&
+		!isExactFormattedTokenAllowance($bonding.chessAllowance, chessAmount);
 </script>
 
 <div class="card">
@@ -184,6 +215,13 @@
 	{:else if $bonding.loading}
 		<div class="p-6 text-center text-chess-gray">
 			<div class="animate-pulse">Loading bond data...</div>
+		</div>
+	{:else if $bonding.error}
+		<div class="p-6 text-center text-chess-danger">
+			<p>Bonding verification failed: {$bonding.error}</p>
+			<button class="btn btn-secondary text-xs mt-3" on:click={() => bonding.fetchBondData()}>
+				Retry verification
+			</button>
 		</div>
 	{:else}
 		<!-- Bond Overview -->
@@ -225,9 +263,18 @@
 				</div>
 				<div class="flex justify-between text-sm mt-1">
 					<span class="text-chess-gray">CHESS Allowance:</span>
-					<span class="{parseFloat($bonding.chessAllowance) > 1000000 ? 'text-chess-success' : 'text-chess-gray'}">
-						{parseFloat($bonding.chessAllowance) > 1000000 ? 'Unlimited' : parseFloat($bonding.chessAllowance).toFixed(2)}
-					</span>
+					<div class="flex items-center gap-2">
+						<span class="text-chess-gray">{parseFloat($bonding.chessAllowance).toFixed(2)}</span>
+						{#if parseFloat($bonding.chessAllowance) > 0}
+							<button
+								class="text-xs text-chess-danger hover:text-red-300"
+								on:click={handleRevokeApproval}
+								disabled={processing}
+							>
+								Revoke
+							</button>
+						{/if}
+					</div>
 				</div>
 				<div class="flex justify-between text-sm mt-1">
 					<span class="text-chess-gray">CHESS Price:</span>
@@ -300,12 +347,11 @@
 					</button>
 				</label>
 				<input
-					type="number"
+					type="text"
+					inputmode="decimal"
 					bind:value={chessAmount}
 					class="input"
 					placeholder="0.00"
-					min="0"
-					step="any"
 					disabled={processing}
 				/>
 			</div>
@@ -324,12 +370,11 @@
 					{/if}
 				</label>
 				<input
-					type="number"
+					type="text"
+					inputmode="decimal"
 					bind:value={ethAmount}
 					class="input"
 					placeholder="0.00"
-					min="0"
-					step="any"
 					disabled={processing}
 				/>
 			</div>
@@ -369,14 +414,14 @@
 					<button
 						class="btn btn-secondary flex-1"
 						on:click={handleWithdrawChess}
-						disabled={processing || !chessAmount || parseFloat(chessAmount) <= 0}
+						disabled={processing || !isPositiveTokenAmount(chessAmount)}
 					>
 						{processing ? 'Withdrawing...' : 'Withdraw CHESS'}
 					</button>
 					<button
 						class="btn btn-primary flex-1"
 						on:click={handleWithdrawEth}
-						disabled={processing || !ethAmount || parseFloat(ethAmount) <= 0}
+						disabled={processing || !isPositiveTokenAmount(ethAmount)}
 					>
 						{processing ? 'Withdrawing...' : 'Withdraw ETH'}
 					</button>

@@ -1,6 +1,6 @@
 # Vulnerabilita e Mitigazioni - Sistema Anti-Cheating
 
-> **Historical threat-model document:** examples and proposed mitigations below are not proof that every mechanism is implemented. Use the Solidity contracts and root README for current behavior and residual risks.
+> **Unsupported historical threat model:** examples below include obsolete commitment, selection, staking, and oracle designs. Do not copy them into clients or operations. Use the root README and [`SECURITY_REMEDIATION.md`](SECURITY_REMEDIATION.md) for implemented controls and residual risks; contract source is authoritative.
 
 ## Analisi delle Vulnerabilita
 

@@ -381,6 +381,12 @@
 		actionLoading = false;
 	}
 
+	async function handleDisputeSettled() {
+		// The verdict is emitted by DisputeDAO, not ChessCore. Reload so the
+		// canonical dispute-aware winner controls claim actions immediately.
+		await activeGame.load(address);
+	}
+
 	async function handleCancelUnjoined() {
 		actionLoading = true;
 		actionError = null;
@@ -1124,10 +1130,12 @@
 					<!-- Dispute Panel (for finished games) -->
 					{#if isGameFinished}
 						<DisputePanel
-							gameId={data.gameId || 0}
+							gameId={data.gameId}
+							gameAddress={$activeGame.address}
 							whitePlayer={data.whitePlayer}
 							blackPlayer={data.blackPlayer}
 							gameState={data.state}
+							on:settled={handleDisputeSettled}
 						/>
 					{/if}
 				</div>

@@ -1,6 +1,46 @@
 const PlayerRating = artifacts.require("PlayerRating");
 const ChessCore = artifacts.require("ChessCore");
 const ChessFactory = artifacts.require("ChessFactory");
+const RatingGameMock = artifacts.require("RatingGameMock");
+const RatingFactoryMock = artifacts.require("RatingFactoryMock");
+const RatingEligibilityMock = artifacts.require("RatingEligibilityMock");
+
+async function expectRevert(promise) {
+    let caught;
+    try {
+        await promise;
+    } catch (error) {
+        caught = error;
+    }
+
+    assert.exists(caught, "Expected transaction to revert");
+    assert.match(caught.message, /revert|custom error|invalid opcode/i);
+}
+
+async function advanceTime(seconds) {
+    await new Promise((resolve, reject) => {
+        web3.currentProvider.send(
+            {
+                jsonrpc: "2.0",
+                method: "evm_increaseTime",
+                params: [seconds],
+                id: Date.now()
+            },
+            (error) => error ? reject(error) : resolve()
+        );
+    });
+    await new Promise((resolve, reject) => {
+        web3.currentProvider.send(
+            {
+                jsonrpc: "2.0",
+                method: "evm_mine",
+                params: [],
+                id: Date.now() + 1
+            },
+            (error) => error ? reject(error) : resolve()
+        );
+    });
+}
 
 contract("PlayerRating - ELO System", accounts => {
     const [admin, player1, player2, player3, unauthorized] = accounts;
@@ -38,14 +78,14 @@ contract("PlayerRating - ELO System", accounts => {
 
     describe("Player Registration", () => {
         it("should register new player with default rating", async () => {
-            await rating.registerPlayer(player1);
+            await rating.registerPlayer(player1, { from: player1 });
             const stats = await rating.getPlayerStats(player1);
             assert.equal(stats.rating.toString(), "1200", "Rating should be 1200");
             assert.equal(stats.peakRating.toString(), "1200", "Peak rating should be 1200");
         });
 
         it("should not re-register existing player", async () => {
-            await rating.registerPlayer(player1);
+            await rating.registerPlayer(player1, { from: player1 });
 
             // Grant GAME_REPORTER_ROLE to admin for testing
             const GAME_REPORTER_ROLE = await rating.GAME_REPORTER_ROLE();
@@ -58,16 +98,31 @@ contract("PlayerRating - ELO System", accounts => {
             const rating1 = stats1.rating.toString();
 
             // Try to re-register
-            await rating.registerPlayer(player1);
+            await rating.registerPlayer(player1, { from: player1 });
 
             const stats2 = await rating.getPlayerStats(player1);
             assert.equal(stats2.rating.toString(), rating1, "Rating should not reset on re-registration");
         });
 
-        it("should add player to ranked list", async () => {
-            await rating.registerPlayer(player1);
+        it("should not consume a ranked slot before a rated result", async () => {
+            await rating.registerPlayer(player1, { from: player1 });
             const count = await rating.getRankedPlayerCount();
-            assert.equal(count.toString(), "1", "Should have 1 ranked player");
+            assert.equal(count.toString(), "0", "Self-registration must not fill the leaderboard");
+            assert.isFalse(await rating.isRanked(player1));
+        });
+
+        it("should reject registration of an arbitrary third-party address", async () => {
+            await expectRevert(rating.registerPlayer(player2, { from: unauthorized }));
+
+            assert.equal((await rating.getRankedPlayerCount()).toString(), "0");
+            assert.isFalse(await rating.isRanked(player2));
+        });
+
+        it("should reject the zero address", async () => {
+            await expectRevert(rating.registerPlayer(
+                "0x0000000000000000000000000000000000000000",
+                { from: player1 }
+            ));
         });
     });
 
@@ -181,6 +236,20 @@ contract("PlayerRating - ELO System", accounts => {
             }
         });
 
+        it("should reject zero-address participants", async () => {
+            try {
+                await rating.reportGame(
+                    "0x0000000000000000000000000000000000000000",
+                    player2,
+                    1,
+                    { from: admin }
+                );
+                assert.fail("Should have thrown error");
+            } catch (error) {
+                assert(error.message.includes("revert"), "Expected revert error");
+            }
+        });
+
         it("should reject unauthorized reporter", async () => {
             try {
                 await rating.reportGame(player1, player2, 1, { from: unauthorized });
@@ -271,6 +340,105 @@ contract("PlayerRating - ELO System", accounts => {
         });
     });
 
+    describe("Canonical rated-game policy", () => {
+        let ratingFactory;
+        let eligibility;
+
+        beforeEach(async () => {
+            ratingFactory = await RatingFactoryMock.new({ from: admin });
+            eligibility = await RatingEligibilityMock.new({ from: admin });
+            await rating.setChessFactory(ratingFactory.address, { from: admin });
+            await rating.setEligibilityRegistry(eligibility.address, { from: admin });
+            for (const player of [player1, player2, player3]) {
+                await eligibility.setEligible(player, true, { from: admin });
+            }
+        });
+
+        async function registeredGame(gameId) {
+            const game = await RatingGameMock.new(rating.address, gameId, { from: admin });
+            await ratingFactory.register(rating.address, game.address, { from: admin });
+            return game;
+        }
+
+        it("rejects unlisted registrations and stale reporters after factory rotation", async () => {
+            const game = await RatingGameMock.new(rating.address, 76, { from: admin });
+            await expectRevert(
+                ratingFactory.registerUnlisted(rating.address, game.address, { from: admin })
+            );
+
+            await ratingFactory.register(rating.address, game.address, { from: admin });
+            assert.isTrue(await rating.validGameContracts(game.address));
+            const replacementFactory = await RatingFactoryMock.new({ from: admin });
+            await rating.setChessFactory(replacementFactory.address, { from: admin });
+
+            await expectRevert(game.report(player1, player2, 1, 20, 0));
+            assert.equal((await rating.getPlayerStats(player1)).gamesPlayed.toString(), "0");
+        });
+
+        it("should process a zero-ply result once without rating it", async () => {
+            const game = await registeredGame(77);
+            assert.isFalse(await game.report.call(player1, player2, 1, 0, 0));
+
+            await game.report(player1, player2, 1, 0, 0);
+
+            assert.isTrue(await rating.processedGameContracts(game.address));
+            assert.equal((await rating.getPlayerStats(player1)).gamesPlayed.toString(), "0");
+            await expectRevert(game.report(player1, player2, 1, 20, 0));
+        });
+
+        it("should never rate Friendly games", async () => {
+            const game = await registeredGame(78);
+            assert.isFalse(await game.report.call(player1, player2, 1, 40, 1));
+            await game.report(player1, player2, 1, 40, 1);
+            assert.equal((await rating.getPlayerStats(player1)).gamesPlayed.toString(), "0");
+        });
+
+        it("should rate one eligible Tournament game and suppress pair farming", async () => {
+            const first = await registeredGame(79);
+            assert.isTrue(await first.report.call(player1, player2, 1, 20, 0));
+            await first.report(player1, player2, 1, 20, 0);
+            assert.equal((await rating.getPlayerStats(player1)).gamesPlayed.toString(), "1");
+
+            const rematch = await registeredGame(80);
+            assert.isFalse(await rematch.report.call(player2, player1, 2, 20, 0));
+            await rematch.report(player2, player1, 2, 20, 0);
+            assert.equal((await rating.getPlayerStats(player1)).gamesPlayed.toString(), "1");
+
+            const independent = await registeredGame(81);
+            assert.isTrue(await independent.report.call(player1, player3, 1, 20, 0));
+            await independent.report(player1, player3, 1, 20, 0);
+            assert.equal((await rating.getPlayerStats(player1)).gamesPlayed.toString(), "2");
+
+            await advanceTime(7 * 24 * 60 * 60);
+            const postCooldownRematch = await registeredGame(82);
+            assert.isTrue(await postCooldownRematch.report.call(player2, player1, 2, 20, 0));
+            await postCooldownRematch.report(player2, player1, 2, 20, 0);
+            assert.equal(
+                (await rating.getPlayerStats(player1)).gamesPlayed.toString(),
+                "3",
+                "The unordered pair should become rateable again at the cooldown boundary"
+            );
+        });
+
+        it("should reject fresh unverified opponents instead of allowing rotating-wallet ELO farming", async () => {
+            const first = await registeredGame(83);
+            await first.report(player1, player2, 1, 20, 0);
+            const ratingAfterVerifiedGame = await rating.getRating(player1);
+
+            const unverifiedPeer = accounts[8];
+            const sybilGame = await registeredGame(84);
+            assert.isFalse(await sybilGame.report.call(player1, unverifiedPeer, 1, 20, 0));
+            await sybilGame.report(player1, unverifiedPeer, 1, 20, 0);
+
+            assert.equal(
+                (await rating.getRating(player1)).toString(),
+                ratingAfterVerifiedGame.toString(),
+                "A new wallet without signer-backed eligibility must not move ELO"
+            );
+            assert.equal((await rating.getPlayerStats(unverifiedPeer)).gamesPlayed.toString(), "0");
+        });
+    });
+
     describe("Admin Functions", () => {
         it("should allow admin to set chess factory", async () => {
             const chessCoreImpl = await ChessCore.new({ from: admin });
@@ -300,15 +468,15 @@ contract("PlayerRating - ELO System", accounts => {
             // This verifies that players can still have ratings tracked
             // even if they can't be added to the leaderboard (when cap is reached)
             // We can't easily test the cap being reached, but we verify the mechanism works
-            await rating.registerPlayer(player1, { from: admin });
+            await rating.registerPlayer(player1, { from: player1 });
 
             // Verify player has rating but we check the cap exists
             const playerRating = await rating.getRating(player1);
             assert.equal(playerRating.toString(), "1200", "Player should have default rating");
 
-            // Verify they're in the ranked list (under cap)
+            // Registration alone cannot be used to exhaust permanent leaderboard slots.
             const isRanked = await rating.isRanked(player1);
-            assert.isTrue(isRanked, "Player should be ranked when under cap");
+            assert.isFalse(isRanked, "Player should be ranked only after a rated game");
         });
     });
 });

@@ -3,6 +3,7 @@ const ChessRulesEngine = artifacts.require("ChessRulesEngine");
 contract("ChessRulesEngine regressions", () => {
   const EMPTY = 0;
   const PAWN = 1;
+  const KNIGHT = 2;
   const ROOK = 4;
   const QUEEN = 5;
   const KING = 6;
@@ -35,6 +36,29 @@ contract("ChessRulesEngine regressions", () => {
     const isValid = await rulesEngine.isValidMoveView(board, -1, 0, 0, 7, 4, 7, 6);
 
     assert.isFalse(isValid, "The king cannot castle through check on f1");
+  });
+
+  it("rejects a castling-shaped king move to another rank", async () => {
+    const board = emptyBoard();
+    board[7][4] = KING;
+    board[7][7] = ROOK;
+    board[0][4] = -KING;
+
+    const isValid = await rulesEngine.isValidMoveView(board, -1, 0, 0, 7, 4, 6, 6);
+
+    assert.isFalse(isValid, "Castling cannot move the king from e1 to g2");
+  });
+
+  it("does not let castling overwrite a friendly destination", async () => {
+    const board = emptyBoard();
+    board[7][4] = KING;
+    board[7][7] = ROOK;
+    board[7][6] = KNIGHT;
+    board[0][4] = -KING;
+
+    const isValid = await rulesEngine.isValidMoveView(board, -1, 0, 0, 7, 4, 7, 6);
+
+    assert.isFalse(isValid, "A castling branch must never bypass friendly-target protection");
   });
 
   it("detects a discovered rook check caused by an en passant capture", async () => {

@@ -2,6 +2,7 @@ import { writable, derived, get } from 'svelte/store';
 import { wallet } from './wallet.js';
 import { ethers } from 'ethers';
 import { loadContractAbi } from '../contracts/loadAbi.js';
+import { fetchAllRatingEntries, sortRatingEntries } from '../utils/ratingLeaderboard.js';
 
 // Contract addresses per network
 const RATING_ADDRESSES = {
@@ -129,22 +130,9 @@ function createRatingStore() {
 				const playerRatingAbi = await getPlayerRatingAbi();
 				const contract = new ethers.Contract(ratingAddress, playerRatingAbi, $wallet.signer);
 
-				const [totalPlayers, topPlayersData] = await Promise.all([
-					contract.getRankedPlayerCount(),
-					contract.getTopPlayers(offset, limit)
-				]);
-
-				// Combine addresses and ratings
-				const topPlayers = [];
-				for (let i = 0; i < topPlayersData.addresses.length; i++) {
-					topPlayers.push({
-						address: topPlayersData.addresses[i],
-						rating: Number(topPlayersData.ratings[i])
-					});
-				}
-
-				// Sort by rating (descending)
-				topPlayers.sort((a, b) => b.rating - a.rating);
+				const totalPlayers = await contract.getRankedPlayerCount();
+				const allEntries = await fetchAllRatingEntries(contract, totalPlayers);
+				const topPlayers = sortRatingEntries(allEntries).slice(offset, offset + limit);
 
 				update(s => ({
 					...s,
