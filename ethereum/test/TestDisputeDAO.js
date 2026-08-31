@@ -1563,7 +1563,21 @@ contract("DisputeDAO", (accounts) => {
   });
 
   describe("Bounded Population Gas", () => {
-    it("should estimate capped scheduling, finalization, and escalation below the local block gas limit", async () => {
+    it("should execute capped scheduling, finalization, and escalation below the local block gas limit", async () => {
+      const executeBelowOperationalCeiling = async (label, sendTransaction) => {
+        const latestBlock = await web3.eth.getBlock("latest");
+        const blockGasLimit = web3.utils.toBN(latestBlock.gasLimit);
+        const operationalCeiling = blockGasLimit.mul(web3.utils.toBN("9")).div(web3.utils.toBN("10"));
+        const tx = await sendTransaction(operationalCeiling.toNumber());
+        assert.isTrue(tx.receipt.status, `${label} transaction must succeed`);
+        const gasUsed = web3.utils.toBN(tx.receipt.gasUsed);
+        assert.isTrue(
+          gasUsed.lt(operationalCeiling),
+          `${label} gas ${gasUsed} must stay below 90% of block limit ${blockGasLimit}`
+        );
+        return tx;
+      };
+
       const cappedRegistry = await ArbitratorRegistryHarness.new(chessToken.address, { from: admin });
       const cappedDAO = await DisputeDAO.new(
         chessToken.address,
@@ -1593,8 +1607,8 @@ contract("DisputeDAO", (accounts) => {
       await cappedRegistry.accountSeededPopulationForTest({ from: admin });
 
       // Synthetic positions used by the gas harness must obey the same aggregate
-      // and token-backing invariants as production stakes before the simulated
-      // non-reveal slashes run inside estimateGas.
+      // and token-backing invariants as production stakes before the measured
+      // escalation transaction applies its non-reveal slashes.
       const accountedStake = web3.utils.toBN(await cappedRegistry.totalStaked());
       const registryBalance = web3.utils.toBN(await chessToken.balanceOf(cappedRegistry.address));
       await chessToken.transfer(
@@ -1623,45 +1637,24 @@ contract("DisputeDAO", (accounts) => {
       );
       await chessToken.approve(cappedDAO.address, CHALLENGE_DEPOSIT, { from: player1 });
 
-      const latestBlock = await web3.eth.getBlock("latest");
-      const blockGasLimit = web3.utils.toBN(latestBlock.gasLimit);
-      const operationalCeiling = blockGasLimit.mul(web3.utils.toBN("9")).div(web3.utils.toBN("10"));
-      const scheduleGas = web3.utils.toBN(
-        await cappedDAO.challenge.estimateGas(gasGameId, { from: player1 })
+      await executeBelowOperationalCeiling(
+        "Capped schedule",
+        (gas) => cappedDAO.challenge(gasGameId, { from: player1, gas })
       );
-      assert.isTrue(
-        scheduleGas.lt(operationalCeiling),
-        `Capped schedule gas ${scheduleGas} must stay below 90% of block limit ${blockGasLimit}`
-      );
-      await cappedDAO.challenge(gasGameId, {
-        from: player1,
-        gas: scheduleGas.mul(web3.utils.toBN("11")).div(web3.utils.toBN("10")).toNumber()
-      });
 
       const target = web3.utils.toBN(await cappedDAO.panelSelectionBlock(1));
       while (web3.utils.toBN(await web3.eth.getBlockNumber()).lt(target)) await mineBlock();
-      const finalizeGas = web3.utils.toBN(
-        await cappedDAO.finalizePanel.estimateGas(1, { from: challenger })
+      await executeBelowOperationalCeiling(
+        "Capped finalize",
+        (gas) => cappedDAO.finalizePanel(1, { from: challenger, gas })
       );
-      assert.isTrue(
-        finalizeGas.lt(operationalCeiling),
-        `Capped finalize gas ${finalizeGas} must stay below 90% of block limit ${blockGasLimit}`
-      );
-      await cappedDAO.finalizePanel(1, {
-        from: challenger,
-        gas: finalizeGas.mul(web3.utils.toBN("11")).div(web3.utils.toBN("10")).toNumber()
-      });
+
+      const initialPanel = await cappedDAO.getSelectedArbitrators(1);
+      assert.equal(initialPanel.length, 15, "The measured escalation must process a full capped panel");
 
       // Exercise the heaviest recovery path too: penalize/release a full initial
       // panel and snapshot the remaining capped population for the next round.
       await advanceTime(48 * 3600 + 1);
-      const escalationGas = web3.utils.toBN(
-        await cappedDAO.resolveDispute.estimateGas(1, { from: challenger })
-      );
-      assert.isTrue(
-        escalationGas.lt(operationalCeiling),
-        `Capped escalation gas ${escalationGas} must stay below 90% of block limit ${blockGasLimit}`
-      );
       assert.equal(
         (await cappedDAO.panelSnapshotEligibleCount(1)).toString(),
         "15",
@@ -1677,6 +1670,47 @@ contract("DisputeDAO", (accounts) => {
       assert.equal(tierCounts.t1.toString(), "128");
       assert.equal(tierCounts.t2.toString(), "128");
       assert.equal(tierCounts.t3.toString(), "128");
+
+      const slashBps = web3.utils.toBN(await cappedRegistry.NON_REVEAL_SLASH_BPS());
+      const basisPoints = web3.utils.toBN("10000");
+      const panelStakes = await Promise.all(
+        initialPanel.map((arbitrator) => cappedRegistry.getSlashableStake(arbitrator))
+      );
+      const expectedSlash = panelStakes.reduce(
+        (total, stake) => total.add(web3.utils.toBN(stake).mul(slashBps).div(basisPoints)),
+        web3.utils.toBN("0")
+      );
+      const totalStakedBeforeEscalation = web3.utils.toBN(await cappedRegistry.totalStaked());
+      const registryBalanceBeforeEscalation = web3.utils.toBN(
+        await chessToken.balanceOf(cappedRegistry.address)
+      );
+
+      await executeBelowOperationalCeiling(
+        "Capped escalation",
+        (gas) => cappedDAO.resolveDispute(1, { from: challenger, gas })
+      );
+
+      const escalated = await cappedDAO.getDispute(1);
+      assert.equal(escalated.state.toString(), "6", "Escalation must schedule the next panel");
+      assert.equal(escalated.escalationLevel.toString(), "1");
+      assert.equal((await cappedDAO.getSelectedArbitrators(1)).length, 0);
+      assert.isTrue(web3.utils.toBN(await cappedDAO.panelSelectionBlock(1)).gt(web3.utils.toBN("0")));
+      assert.equal((await cappedRegistry.activePanelSelection()).toString(), "1");
+      assert.equal(
+        (await cappedRegistry.totalStaked()).toString(),
+        totalStakedBeforeEscalation.sub(expectedSlash).toString(),
+        "Escalation must account for every non-reveal slash"
+      );
+      assert.equal(
+        (await chessToken.balanceOf(cappedRegistry.address)).toString(),
+        registryBalanceBeforeEscalation.sub(expectedSlash).toString(),
+        "Registry backing must decrease by the exact burned slash amount"
+      );
+      for (const arbitrator of initialPanel) {
+        assert.isTrue(await cappedRegistry.nonRevealPenalized(1, arbitrator));
+        assert.isTrue(await cappedRegistry.priorRoundExcluded(1, arbitrator));
+        assert.equal((await cappedRegistry.activeAssignments(arbitrator)).toString(), "0");
+      }
     });
   });
 
