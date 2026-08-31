@@ -245,6 +245,7 @@ MNEMONIC=
 BASE_SEPOLIA_RPC_URL=
 BASE_RPC_URL=
 BASE_MAX_PRIORITY_FEE_PER_GAS_WEI=1000000
+BASE_MAX_FEE_PER_GAS_WEI=5000000000
 TEAM_WALLET=
 TREASURY_WALLET=
 FAUCET_SIGNER=
@@ -263,7 +264,7 @@ npx truffle migrate --network base_sepolia --reset
 npm run verify:deployment -- --network base_sepolia
 ```
 
-Public RPC values must be valid HTTPS URLs. `BASE_MAX_PRIORITY_FEE_PER_GAS_WEI` defaults to `1000000` (`0.001 gwei`) and cannot exceed `0.1 gwei`; the total EIP-1559 max fee is capped at `5 gwei`. These limits prevent accidental or malicious overpayment but can deliberately make deployment unavailable during a fee spike. `FAUCET_SIGNER` authorizes eligible faucet beneficiaries and may be either an EOA or an ERC-1271 contract wallet. `ORACLE_UPDATER` receives only `ORACLE_ROLE` and must submit a fresh CHESS/ETH price at least once every seven days; stale prices block bond calculation and new bonded games.
+Public RPC values must be valid HTTPS URLs. `BASE_MAX_PRIORITY_FEE_PER_GAS_WEI` defaults to `1000000` (`0.001 gwei`) and cannot exceed `0.1 gwei`. `BASE_MAX_FEE_PER_GAS_WEI` defaults to the absolute `5 gwei` ceiling but may be lowered for a deployment wallet with a smaller balance; it cannot be lower than the priority fee. Preflight then requires current fee headroom and enough balance for a conservative 100-million-gas full-migration budget at the chosen maximum. These limits prevent accidental or malicious overpayment but can deliberately make deployment unavailable during a fee spike. `FAUCET_SIGNER` authorizes eligible faucet beneficiaries and may be either an EOA or an ERC-1271 contract wallet. `ORACLE_UPDATER` receives only `ORACLE_ROLE` and must submit a fresh CHESS/ETH price at least once every seven days; stale prices block bond calculation and new bonded games.
 
 The preflight compiles the canonical sources, enforces EIP-170, derives only the public deployer address, verifies the RPC chain, checks the deployer's native balance, and validates operational addresses. It never prints the mnemonic or sends a transaction. For a public verification, copy the migration's printed SHA-256 into `DEPLOYMENT_MANIFEST_SHA256` and provide the same four principal addresses as independent environment anchors.
 

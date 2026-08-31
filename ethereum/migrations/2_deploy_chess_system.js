@@ -13,9 +13,12 @@ const PlayerRating = artifacts.require("PlayerRating");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const {
+  MAX_PUBLIC_DEPLOYMENT_TRANSACTION_GAS
+} = require("../scripts/base-fee-config");
 
 // Current linked bytecode estimates at roughly 6.5M gas on Base.
-const CHESS_CORE_DEPLOY_GAS = 8_000_000;
+const CHESS_CORE_DEPLOY_GAS = MAX_PUBLIC_DEPLOYMENT_TRANSACTION_GAS;
 
 async function captureDeploymentProvenance(entries, expectedDeployer) {
   const networkId = String(await web3.eth.net.getId());

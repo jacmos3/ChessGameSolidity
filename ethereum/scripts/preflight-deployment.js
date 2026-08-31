@@ -2,8 +2,8 @@ const path = require("path");
 const dotenv = require("dotenv");
 const HDWalletProvider = require("@truffle/hdwallet-provider");
 const {
-  MAX_BASE_MAX_FEE_PER_GAS_WEI,
-  parseBaseMaxPriorityFeePerGas
+  PUBLIC_DEPLOYMENT_GAS_BUDGET,
+  parseBaseFeeConfig
 } = require("./base-fee-config");
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -151,6 +151,7 @@ function validateEnvironment(env, networkName) {
     if (!isAddress(env[name])) throw new Error(`${name} must be a valid non-zero address`);
   }
 
+  const feeConfig = parseBaseFeeConfig(env);
   return {
     network,
     rpcUrl: env[network.rpcVariable],
@@ -159,9 +160,21 @@ function validateEnvironment(env, networkName) {
     treasuryWallet: env.TREASURY_WALLET,
     faucetSigner: env.FAUCET_SIGNER,
     oracleUpdater: env.ORACLE_UPDATER,
-    maxPriorityFeePerGas: parseBaseMaxPriorityFeePerGas(env),
-    maxFeePerGas: MAX_BASE_MAX_FEE_PER_GAS_WEI
+    ...feeConfig
   };
+}
+
+function assertDeploymentBalanceReserve(balance, maxFeePerGas) {
+  const available = BigInt(balance);
+  const maximumMigrationCost =
+    BigInt(maxFeePerGas) * BigInt(PUBLIC_DEPLOYMENT_GAS_BUDGET);
+  if (available < maximumMigrationCost) {
+    throw new Error(
+      `Deployer balance cannot cover the conservative full-migration gas budget at the configured max fee; ` +
+      `requires at least ${formatUnits(maximumMigrationCost, 18)} ETH`
+    );
+  }
+  return maximumMigrationCost;
 }
 
 function assertHandoffPrincipalSeparation(config, deployer) {
@@ -211,7 +224,10 @@ async function run() {
   }
   const balance = BigInt(balanceHex);
   if (balance === 0n) throw new Error("The deployer has no native ETH for gas");
-  if (balance < 10n ** 16n) warnings.push("Deployer balance is below 0.01 ETH; it may be insufficient for the full migration");
+  const fullMigrationReserve = assertDeploymentBalanceReserve(
+    balance,
+    config.maxFeePerGas
+  );
   if (!latestBlock || typeof latestBlock !== "object") {
     throw new Error("RPC returned an invalid latest block");
   }
@@ -227,6 +243,7 @@ async function run() {
   console.log(`  Latest block: ${blockNumber}`);
   console.log(`  Deployer: ${deployer}`);
   console.log(`  Deployer balance: ${formatUnits(balance, 18)} ETH`);
+  console.log(`  Full-migration reserve: ${formatUnits(fullMigrationReserve, 18)} ETH`);
   console.log(`  Base fee: ${formatUnits(baseFee, 9)} gwei`);
   console.log(`  Gas price: ${formatUnits(gasPrice, 9)} gwei`);
   console.log(`  Max priority fee: ${formatUnits(BigInt(config.maxPriorityFeePerGas), 9)} gwei`);
@@ -243,6 +260,7 @@ async function run() {
 
 module.exports = {
   NETWORKS,
+  assertDeploymentBalanceReserve,
   assertHandoffPrincipalSeparation,
   assertFeeCapSufficient,
   formatUnits,

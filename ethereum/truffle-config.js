@@ -26,10 +26,12 @@
  const baseSepoliaRpcUrl = process.env["BASE_SEPOLIA_RPC_URL"];
  const baseRpcUrl = process.env["BASE_RPC_URL"];
  const {
-   MAX_BASE_MAX_FEE_PER_GAS_WEI,
-   parseBaseMaxPriorityFeePerGas
+   parseBaseFeeConfig
  } = require('./scripts/base-fee-config');
- const baseMaxPriorityFeePerGas = parseBaseMaxPriorityFeePerGas();
+ const {
+   maxPriorityFeePerGas: baseMaxPriorityFeePerGas,
+   maxFeePerGas: baseMaxFeePerGas
+ } = parseBaseFeeConfig();
  
  const HDWalletProvider = require('@truffle/hdwallet-provider');
  const Web3 = require('web3');
@@ -98,7 +100,7 @@ module.exports = {
        network_id: 84532,
        chain_id: 84532,
        maxPriorityFeePerGas: baseMaxPriorityFeePerGas,
-       maxFeePerGas: MAX_BASE_MAX_FEE_PER_GAS_WEI,
+       maxFeePerGas: baseMaxFeePerGas,
        confirmations: 2,
        timeoutBlocks: 200,
        skipDryRun: true
@@ -108,7 +110,7 @@ module.exports = {
        network_id: 8453,
        chain_id: 8453,
        maxPriorityFeePerGas: baseMaxPriorityFeePerGas,
-       maxFeePerGas: MAX_BASE_MAX_FEE_PER_GAS_WEI,
+       maxFeePerGas: baseMaxFeePerGas,
        confirmations: 2,
        timeoutBlocks: 200,
        skipDryRun: false
