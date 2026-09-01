@@ -8,8 +8,79 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # PR diffs are cumulative, so obsolete PR runs may be canceled. Push diffs
+  # are per-event, so distinct push revisions must never share a group.
+  group: chess-ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'latest' || github.sha }}
+  cancel-in-progress: true
+
 jobs:
+  changes:
+    name: Detect relevant changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      contracts: ${{ steps.filter.outputs.contracts }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - name: Select required jobs
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          contracts=true
+          frontend=true
+
+          if [[ "$EVENT_NAME" == "push" || "$EVENT_NAME" == "pull_request" ]]; then
+            if [[ -n "$BASE_SHA" && ! "$BASE_SHA" =~ ^0+$ ]] &&
+              git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+              contracts=false
+              frontend=false
+              changed_file_found=false
+              changed_files_path="$RUNNER_TEMP/chess-ci-changed-files"
+              git diff --name-only -z "$BASE_SHA" "$GITHUB_SHA" > "$changed_files_path"
+
+              while IFS= read -r -d '' changed_path; do
+                changed_file_found=true
+                case "$changed_path" in
+                  AGENTS.md|*/AGENTS.md|.codex/*|README.md|LICENSE.md|docs/*)
+                    ;;
+                  frontend/*)
+                    frontend=true
+                    ;;
+                  ethereum/*)
+                    contracts=true
+                    frontend=true
+                    ;;
+                  *)
+                    contracts=true
+                    frontend=true
+                    ;;
+                esac
+              done < "$changed_files_path"
+
+              if [[ "$changed_file_found" != true ]]; then
+                contracts=true
+                frontend=true
+              fi
+            fi
+          fi
+
+          echo "contracts=$contracts" >> "$GITHUB_OUTPUT"
+          echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
+
   contracts:
+    needs: changes
+    if: needs.changes.outputs.contracts == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -25,6 +96,8 @@ jobs:
         working-directory: ethereum
 
   frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
