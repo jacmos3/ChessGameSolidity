@@ -43,7 +43,7 @@
 
 ## Resource safety
 
-- This machine has 8 GB of RAM. Serialize memory-intensive operations.
+- Before starting memory- or CPU-intensive work, inspect the current machine's available resources and active workload. If resource headroom is limited or unknown, run builds, browser automation, simulators, dependency installation, repository-wide scans, and heavy verification sequentially.
 - Prefer `rg -I` restricted to relevant text source and configuration files. Never run an unrestricted multithreaded `git grep` for broad or secret scanning.
 - If `git grep` is necessary, use `--threads=1 -I` and exclude dependencies, generated files, build artifacts, images, and media.
 - If a command reaches its timeout, do not assume it stopped. Check the exact process and terminate only that orphan before continuing.
