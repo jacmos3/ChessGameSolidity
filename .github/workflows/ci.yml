@@ -3,6 +3,15 @@ name: CI
 on:
   push:
     branches: [main]
+    # Do not allocate even the lightweight change-detector runner for files
+    # that are already classified as documentation or Codex-only metadata.
+    paths-ignore:
+      - AGENTS.md
+      - "**/AGENTS.md"
+      - ".codex/**"
+      - README.md
+      - LICENSE.md
+      - "docs/**"
   pull_request:
 
 permissions:
