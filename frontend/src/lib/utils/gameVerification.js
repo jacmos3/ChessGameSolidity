@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
 
-export const SUPPORTED_GAME_CHAIN_IDS = new Set([1337, 5777, 8453, 84532]);
+export const SUPPORTED_GAME_CHAIN_IDS = new Set([1337, 5777, 84532]);
 
 const GAME_REGISTRY_ABI = [
 	'function isDeployedGame(address game) view returns (bool)',

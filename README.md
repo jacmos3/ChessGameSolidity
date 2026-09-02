@@ -1,5 +1,7 @@
 # MyChess.onchain
 
+> **Frozen protocol-lab archive:** this repository preserves the original economic protocol and its history for research. Base mainnet deployment and frontend support are disabled. Base Sepolia is retained only as an experimental, non-material laboratory. Read [`docs/ARCHIVE_NOTICE.md`](docs/ARCHIVE_NOTICE.md) before using any code or instructions below.
+
 MyChess.onchain is a decentralized chess platform with on-chain game state, hybrid ETH + CHESS bonding, commit-reveal dispute resolution, ratings, rewards, and token-governed protocol controls. The repository and some historical documents still use the original name, Solidity Chess.
 
 ![Solidity](https://img.shields.io/badge/Solidity-0.8.24-blue)
@@ -24,16 +26,18 @@ At a high level, the system does four things:
 
 ## Current Status
 
+This codebase is frozen and is not the production basis of the successor project. The detailed architecture, remediation results, and commands below describe the archived protocol baseline; they are retained for reproducibility, not as a launch recommendation.
+
 - The final remediation verification passed `459/459` Truffle cases across four isolated Ganache batches, including arbitration concurrency, whole-game adjudication, reward/rating authorization, and capped-population gas regressions.
-- Deployment-script checks passed `50/50`; the frontend runner passed `93/93` tests; the production build, governance-handoff migration/verifiers, EIP-170 gate, and deterministic ABI drift check also passed.
+- Deployment-script checks passed `51/51`; the frontend runner passed `93/93` tests; the production build, governance-handoff migration/verifiers, EIP-170 gate, and deterministic ABI drift check also passed.
 - `ChessCore` uses EIP-1167 clones. Heavy rule evaluation lives in one `ChessRulesEngine` deployed by the implementation and shared by the clones through the implementation's immutable reference.
 - The frontend is configured for static/IPFS deployment and now lazy-loads ABI-only artifacts.
 - Solidity compilation is pinned to `solc 0.8.24`, generates validated Truffle-compatible artifacts, and enforces the EIP-170 bytecode limit.
 - GitHub Actions recompiles, checks bytecode size, runs all contract and frontend utility tests, audits high-severity frontend dependencies, builds the static app, and checks generated ABI drift.
-- The supported deployment path is `ethereum/migrations/2_deploy_chess_system.js`; public Base deployments can transfer protocol control to `ChessTimelock` and remove deployer privileges.
+- The migration supports local development and an explicitly experimental Base Sepolia laboratory. Base mainnet is rejected by configuration and preflight.
 - The system is still not formally audited.
 
-The repository is suitable for source publication, local use, and a clearly labelled Base Sepolia beta. It is not approved for a permissionless production launch with material user funds.
+The repository is suitable for source publication, local use, and a clearly labelled non-material Base Sepolia laboratory. It is not approved for a permissionless production launch with material user funds.
 
 Important limitations:
 
@@ -110,7 +114,7 @@ A challenged dispute follows `Pending -> Selecting -> Challenged -> Revealing`. 
 
 - capped `CHESS` ERC20Votes token with permit, delegation, controlled minting, and two-year team vesting
 - governor + timelock governance flow
-- automatic deployer-role removal on the canonical `base` production deployment
+- optional governance handoff in local or experimental Base Sepolia deployments
 - configurable dispute and bonding parameters
 
 ### Ratings / Rewards
@@ -144,16 +148,14 @@ A challenged dispute follows `Pending -> Selecting -> Challenged -> Revealing`. 
 Canonical Truffle profiles:
 
 - `development`: local RPC, default `127.0.0.1:7545`, configurable through `LOCAL_RPC_HOST` and `LOCAL_RPC_PORT`
-- `base_sepolia`: Base Sepolia (`84532`)
-- `base`: Base mainnet (`8453`)
+- `base_sepolia`: Base Sepolia (`84532`), experimental non-material laboratory only
 
 The frontend recognizes:
 
 - `1337` / `5777`: local Ganache
-- `84532`: Base Sepolia
-- `8453`: Base mainnet
+- `84532`: Base Sepolia, experimental only
 
-No Goerli, Ethereum Mainnet, Arbitrum, or Optimism Truffle profile is shipped. Historical documents that mention Goerli, Sepolia, Holesky, Linea, or other networks are not authoritative for the current Base-focused deployment.
+Base mainnet (`8453`) and other public production networks are unsupported. Historical documents that mention them are not operational instructions.
 
 ## Getting Started
 
@@ -236,14 +238,13 @@ LOCAL_RPC_PORT=8545 npx truffle migrate --reset
 
 The migration writes the latest addresses to `ethereum/deployments/latest-development.json`.
 
-### Public deployment configuration
+### Experimental Base Sepolia configuration
 
-Truffle includes `base_sepolia` and `base` network profiles. Configure these variables before a public migration:
+The only public-chain profile retained is `base_sepolia`, strictly for non-material experiments. Configure these variables before a laboratory migration:
 
 ```dotenv
 MNEMONIC=
 BASE_SEPOLIA_RPC_URL=
-BASE_RPC_URL=
 BASE_MAX_PRIORITY_FEE_PER_GAS_WEI=1000000
 BASE_MAX_FEE_PER_GAS_WEI=5000000000
 TEAM_WALLET=
@@ -264,7 +265,7 @@ npx truffle migrate --network base_sepolia --reset
 npm run verify:deployment -- --network base_sepolia
 ```
 
-Public RPC values must be valid HTTPS URLs. `BASE_MAX_PRIORITY_FEE_PER_GAS_WEI` defaults to `1000000` (`0.001 gwei`) and cannot exceed `0.1 gwei`. `BASE_MAX_FEE_PER_GAS_WEI` defaults to the absolute `5 gwei` ceiling but may be lowered for a deployment wallet with a smaller balance; it cannot be lower than the priority fee. Preflight then requires current fee headroom and enough balance for a conservative 100-million-gas full-migration budget at the chosen maximum. These limits prevent accidental or malicious overpayment but can deliberately make deployment unavailable during a fee spike. `FAUCET_SIGNER` authorizes eligible faucet beneficiaries and may be either an EOA or an ERC-1271 contract wallet. `ORACLE_UPDATER` receives only `ORACLE_ROLE` and must submit a fresh CHESS/ETH price at least once every seven days; stale prices block bond calculation and new bonded games.
+The RPC value must be a valid HTTPS URL. `BASE_MAX_PRIORITY_FEE_PER_GAS_WEI` defaults to `1000000` (`0.001 gwei`) and cannot exceed `0.1 gwei`. `BASE_MAX_FEE_PER_GAS_WEI` defaults to the absolute `5 gwei` ceiling but may be lowered; it cannot be lower than the priority fee. Preflight requires current fee headroom and enough test ETH for its conservative full-migration budget. Do not use a funded production mnemonic.
 
 The preflight compiles the canonical sources, enforces EIP-170, derives only the public deployer address, verifies the RPC chain, checks the deployer's native balance, and validates operational addresses. It never prints the mnemonic or sends a transaction. For a public verification, copy the migration's printed SHA-256 into `DEPLOYMENT_MANIFEST_SHA256` and provide the same four principal addresses as independent environment anchors.
 
@@ -272,13 +273,13 @@ The post-deployment verifier pins every read and log scan to one finalized block
 
 > **Migration warning:** this remediation changes contract interfaces, state semantics, and clone membership. It is not an in-place upgrade. Deploy the complete coordinated suite, resolve or explicitly account for all positions in the old deployment, regenerate ABIs, and switch every frontend address atomically. Do not mix old and new protocol addresses.
 
-The `base` profile automatically transfers ownership and admin roles to `ChessTimelock`, then removes deployer privileges. Base Sepolia keeps the deployer as admin unless `GOVERNANCE_HANDOFF=true` is set. When handoff is enabled, `TREASURY_WALLET`, `FAUCET_SIGNER`, and `ORACLE_UPDATER` must differ from the deployer. For mainnet, the treasury must be an independently controlled, out-of-band verified multisig; code cannot prove the owners, threshold, or absence of undisclosed offline signatures.
+Base Sepolia keeps the deployer as admin unless `GOVERNANCE_HANDOFF=true` is set. When handoff is enabled, `TREASURY_WALLET`, `FAUCET_SIGNER`, and `ORACLE_UPDATER` must differ from the deployer.
 
 Verify a handoff against the selected network:
 
 ```bash
 cd ethereum
-npm run verify:handoff -- --network base
+npm run verify:handoff -- --network base_sepolia
 ```
 
 Post-deployment operations are required:
@@ -315,7 +316,7 @@ VITE_PLAYER_RATING_LOCAL=
 VITE_BASE_MAX_PRIORITY_FEE_PER_GAS_WEI=1000000
 ```
 
-For Base Sepolia / Base, use the corresponding `..._BASE_SEPOLIA` and `..._BASE` variables.
+For the experimental Base Sepolia laboratory, use the corresponding `..._BASE_SEPOLIA` variables. There are no Base mainnet frontend variables.
 Factory, bonding manager, and CHESS token addresses must come from the same new deployment. Legacy factories that do not expose `isDeployedGame(address)` and old clones without a canonical registry entry fail closed. All protocol addresses should be updated as one coordinated release; the `VITE_*` factory remains a build-time trust anchor.
 
 The current UI does not expose every operational recovery call. In particular, `activatePendingStake()`, `resetCircuitBreaker(trustedPrice)`, `retryRatingReport()`, and `resolveByBackstop()` need an audited operator/governance workflow until dedicated UI paths exist.

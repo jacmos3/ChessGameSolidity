@@ -1,5 +1,7 @@
 # Security Remediation Round 2 — Final Review
 
+> **Archived security record:** this report describes a historical protocol baseline. It is not a current deployment approval. Base mainnet support has since been disabled; Base Sepolia remains available only for non-material experimentation. See [`ARCHIVE_NOTICE.md`](ARCHIVE_NOTICE.md).
+
 Review date: 2026-08-31
 
 Reviewed baseline: `0fff8f36922d8a36b12304faab6b3c99e536a812`

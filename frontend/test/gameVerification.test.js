@@ -56,6 +56,10 @@ test('supported game context rejects unknown networks and malformed addresses', 
 		/Unsupported network/
 	);
 	assert.throws(
+		() => assertSupportedGameContext({ chainId: 8453, factoryAddress: FACTORY, gameAddress: GAME }),
+		/Unsupported network/
+	);
+	assert.throws(
 		() => assertSupportedGameContext({ chainId: 84532, factoryAddress: '', gameAddress: GAME }),
 		/ChessFactory is not configured/
 	);

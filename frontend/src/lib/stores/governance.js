@@ -8,22 +8,19 @@ import { getTransactionFeeOverrides } from '../utils/transactionFees.js';
 const GOVERNOR_ADDRESSES = {
 	1337: import.meta.env.VITE_CHESS_GOVERNOR_LOCAL || '',
 	5777: import.meta.env.VITE_CHESS_GOVERNOR_LOCAL || '',
-	84532: import.meta.env.VITE_CHESS_GOVERNOR_BASE_SEPOLIA || '',
-	8453: import.meta.env.VITE_CHESS_GOVERNOR_BASE || ''
+	84532: import.meta.env.VITE_CHESS_GOVERNOR_BASE_SEPOLIA || ''
 };
 
 const TIMELOCK_ADDRESSES = {
 	1337: import.meta.env.VITE_CHESS_TIMELOCK_LOCAL || '',
 	5777: import.meta.env.VITE_CHESS_TIMELOCK_LOCAL || '',
-	84532: import.meta.env.VITE_CHESS_TIMELOCK_BASE_SEPOLIA || '',
-	8453: import.meta.env.VITE_CHESS_TIMELOCK_BASE || ''
+	84532: import.meta.env.VITE_CHESS_TIMELOCK_BASE_SEPOLIA || ''
 };
 
 const CHESS_TOKEN_ADDRESSES = {
 	1337: import.meta.env.VITE_CHESS_TOKEN_LOCAL || '',
 	5777: import.meta.env.VITE_CHESS_TOKEN_LOCAL || '',
-	84532: import.meta.env.VITE_CHESS_TOKEN_BASE_SEPOLIA || '',
-	8453: import.meta.env.VITE_CHESS_TOKEN_BASE || ''
+	84532: import.meta.env.VITE_CHESS_TOKEN_BASE_SEPOLIA || ''
 };
 
 const getChessGovernorAbi = () => loadContractAbi('ChessGovernor');

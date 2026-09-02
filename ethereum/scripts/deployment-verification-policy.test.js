@@ -334,11 +334,10 @@ test("runtime authentication rejects missing link metadata or addresses", () => 
   );
 });
 
-test("network policy independently requires governance handoff on Base mainnet", () => {
-  assert.doesNotThrow(() => assertDeploymentNetworkPolicy(deployment("base", true), 8453));
+test("network policy rejects Base mainnet", () => {
   assert.throws(
-    () => assertDeploymentNetworkPolicy(deployment("base", false), 8453),
-    /requires governance handoff/
+    () => assertDeploymentNetworkPolicy(deployment("base", true), 8453),
+    /Unsupported deployment network/
   );
 });
 
@@ -415,18 +414,22 @@ test("bonding verification rejects drift and stale or paused release state", () 
     paused: false,
     circuitBreakerTripped: false
   };
-  assert.doesNotThrow(() => assertBondingSecurityPolicy(canonical, "base", 2_000));
+  assert.doesNotThrow(() => assertBondingSecurityPolicy(canonical, "development", 2_000));
   assert.throws(
-    () => assertBondingSecurityPolicy({ ...canonical, chessMultiplier: 1 }, "base", 2_000),
+    () => assertBondingSecurityPolicy({ ...canonical, chessMultiplier: 1 }, "development", 2_000),
     /CHESS multiplier/
   );
   assert.throws(
-    () => assertBondingSecurityPolicy({ ...canonical, paused: true }, "base", 2_000),
+    () => assertBondingSecurityPolicy({ ...canonical, paused: true }, "development", 2_000),
     /must not be paused/
   );
   assert.throws(
-    () => assertBondingSecurityPolicy(canonical, "base", 700_000),
+    () => assertBondingSecurityPolicy(canonical, "development", 700_000),
     /stale or future-dated/
+  );
+  assert.throws(
+    () => assertBondingSecurityPolicy(canonical, "base", 2_000),
+    /Unsupported bonding policy network/
   );
 });
 

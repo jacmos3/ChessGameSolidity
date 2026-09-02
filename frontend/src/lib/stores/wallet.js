@@ -5,16 +5,14 @@ import { ethers } from 'ethers';
 export const NETWORKS = {
 	1337: { name: 'Ganache', explorer: '' },
 	5777: { name: 'Ganache', explorer: '' },
-	84532: { name: 'Base Sepolia', explorer: 'https://sepolia.basescan.org' },
-	8453: { name: 'Base', explorer: 'https://basescan.org' }
+	84532: { name: 'Base Sepolia (experimental)', explorer: 'https://sepolia.basescan.org' }
 };
 
 // Contract addresses per network
 const CONTRACT_ADDRESSES = {
 	1337: import.meta.env.VITE_CONTRACT_ADDRESS_LOCAL || '',
 	5777: import.meta.env.VITE_CONTRACT_ADDRESS_LOCAL || '',
-	84532: import.meta.env.VITE_CONTRACT_ADDRESS_BASE_SEPOLIA || '',
-	8453: import.meta.env.VITE_CONTRACT_ADDRESS_BASE || ''
+	84532: import.meta.env.VITE_CONTRACT_ADDRESS_BASE_SEPOLIA || ''
 };
 
 export function getConfiguredFactoryAddress(chainId) {

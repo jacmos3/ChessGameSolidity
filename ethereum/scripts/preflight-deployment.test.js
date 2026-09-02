@@ -26,7 +26,7 @@ const rpcQuantity = (value) => `0x${BigInt(value).toString(16)}`;
 
 test("selectedNetwork accepts split and inline arguments", () => {
   assert.equal(selectedNetwork(["--network", "base_sepolia"]), "base_sepolia");
-  assert.equal(selectedNetwork(["--network=base"]), "base");
+  assert.equal(selectedNetwork(["--network=base_sepolia"]), "base_sepolia");
 });
 
 test("address validation rejects zero and malformed addresses", () => {
@@ -41,9 +41,9 @@ test("Base Sepolia requires an explicit governance decision", () => {
   assert.throws(() => parseGovernanceHandoff("base_sepolia", undefined), /explicitly/);
 });
 
-test("Base mainnet cannot disable governance handoff", () => {
-  assert.equal(parseGovernanceHandoff("base", "true"), true);
-  assert.throws(() => parseGovernanceHandoff("base", "false"), /must be true/);
+test("Base mainnet deployment target is rejected", () => {
+  assert.throws(() => validateEnvironment(VALID_ENV, "base"), /Unsupported network: base/);
+  assert.throws(() => parseGovernanceHandoff("base", "true"), /Unsupported network: base/);
 });
 
 test("environment validation selects only the requested RPC", () => {

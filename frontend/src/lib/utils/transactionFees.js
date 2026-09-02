@@ -7,7 +7,7 @@ export const DEFAULT_BASE_MAX_PRIORITY_FEE_PER_GAS_WEI = '1000000';
 export const MAX_BASE_PRIORITY_FEE_PER_GAS_WEI = '100000000'; // 0.1 gwei
 export const MAX_BASE_MAX_FEE_PER_GAS_WEI = '5000000000'; // 5 gwei total max fee
 
-const BASE_CHAIN_IDS = new Set([8453, 84532]);
+const BASE_CHAIN_IDS = new Set([84532]);
 
 export function parseBaseMaxPriorityFeePerGas(rawValue) {
 	const normalized = rawValue === undefined || rawValue === null || String(rawValue).trim() === ''

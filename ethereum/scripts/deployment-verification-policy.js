@@ -1,7 +1,6 @@
 const EXPECTED_CHAIN_IDS = Object.freeze({
   development: null,
-  base_sepolia: 84532,
-  base: 8453
+  base_sepolia: 84532
 });
 const LOCAL_DEVELOPMENT_CHAIN_IDS = new Set([1337, 5777, 31337]);
 
@@ -12,8 +11,7 @@ const EXPECTED_INITIAL_TOKEN_SUPPLY = 20_000_000n * 10n ** 18n;
 const EXPECTED_INITIAL_ALLOCATION = 10_000_000n * 10n ** 18n;
 const EXPECTED_BONDING_PRICE = Object.freeze({
   development: 1_000_000_000_000_000n,
-  base_sepolia: 100_000_000_000_000n,
-  base: 1_000_000_000_000_000n
+  base_sepolia: 100_000_000_000_000n
 });
 const EIP1167_RUNTIME_PREFIX = "363d3d373d3d3d363d73";
 const EIP1167_RUNTIME_SUFFIX = "5af43d82803e903d91602b57fd5bf3";
@@ -286,10 +284,6 @@ function assertDeploymentNetworkPolicy(deployment, chainId) {
     throw new Error(
       `Connected public chain ${chainId} must use deployment network ${publicNetworkForChain[0]}`
     );
-  }
-  if ((deployment.network === "base" || chainId === EXPECTED_CHAIN_IDS.base) &&
-      deployment.config.handoffGovernance !== true) {
-    throw new Error("Base mainnet requires governance handoff");
   }
 }
 

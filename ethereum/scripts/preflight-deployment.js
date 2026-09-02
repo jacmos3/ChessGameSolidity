@@ -12,14 +12,7 @@ const NETWORKS = {
   base_sepolia: {
     label: "Base Sepolia",
     chainId: 84532,
-    rpcVariable: "BASE_SEPOLIA_RPC_URL",
-    forceGovernanceHandoff: false
-  },
-  base: {
-    label: "Base",
-    chainId: 8453,
-    rpcVariable: "BASE_RPC_URL",
-    forceGovernanceHandoff: true
+    rpcVariable: "BASE_SEPOLIA_RPC_URL"
   }
 };
 
@@ -37,12 +30,7 @@ function isAddress(value) {
 
 function parseGovernanceHandoff(networkName, rawValue) {
   const network = NETWORKS[networkName];
-  if (network.forceGovernanceHandoff) {
-    if (rawValue !== undefined && rawValue !== "true") {
-      throw new Error("GOVERNANCE_HANDOFF must be true for Base mainnet");
-    }
-    return true;
-  }
+  if (!network) throw new Error(`Unsupported network: ${networkName || "missing"}`);
 
   if (rawValue !== "true" && rawValue !== "false") {
     throw new Error("GOVERNANCE_HANDOFF must explicitly be true or false for Base Sepolia");

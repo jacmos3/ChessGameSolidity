@@ -2,6 +2,14 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
+const SUPPORTED_DEPLOYMENT_NETWORKS = new Set(["development", "base_sepolia"]);
+
+function assertSupportedDeploymentNetwork(network) {
+  if (!SUPPORTED_DEPLOYMENT_NETWORKS.has(network)) {
+    throw new Error(`Unsupported deployment network: ${network || "missing"}`);
+  }
+}
+
 function networkFromArguments(argv = process.argv.slice(2)) {
   const inline = argv.find((argument) => argument.startsWith("--network="));
   if (inline) return inline.slice("--network=".length);
@@ -15,9 +23,11 @@ function resolveDeploymentPath(options = {}) {
   const argv = options.argv || process.argv.slice(2);
   const deploymentsDirectory = options.deploymentsDirectory || path.join(__dirname, "..", "deployments");
 
+  const network = networkFromArguments(argv) || env.DEPLOYMENT_NETWORK || "development";
+  assertSupportedDeploymentNetwork(network);
+
   if (env.DEPLOYMENT_FILE) return path.resolve(process.cwd(), env.DEPLOYMENT_FILE);
 
-  const network = networkFromArguments(argv) || env.DEPLOYMENT_NETWORK || "development";
   return path.join(deploymentsDirectory, `latest-${network}.json`);
 }
 
@@ -28,9 +38,10 @@ function loadDeployment(options = {}) {
   const deploymentBytes = fs.readFileSync(deploymentPath);
   const deploymentSha256 = crypto.createHash("sha256").update(deploymentBytes).digest("hex");
   const deployment = JSON.parse(deploymentBytes.toString("utf8"));
+  assertSupportedDeploymentNetwork(deployment.network);
   const env = options.env || process.env;
   const expectedDigest = env.DEPLOYMENT_MANIFEST_SHA256;
-  const publicNetwork = deployment.network === "base" || deployment.network === "base_sepolia";
+  const publicNetwork = deployment.network === "base_sepolia";
   if (publicNetwork && !expectedDigest) {
     throw new Error("DEPLOYMENT_MANIFEST_SHA256 is required for public-network verification");
   }
@@ -53,6 +64,7 @@ function loadDeployment(options = {}) {
 }
 
 module.exports = {
+  assertSupportedDeploymentNetwork,
   loadDeployment,
   networkFromArguments,
   resolveDeploymentPath

@@ -9,7 +9,7 @@ const { loadDeployment, networkFromArguments, resolveDeploymentPath } = require(
 
 test("networkFromArguments handles Truffle network syntax", () => {
   assert.equal(networkFromArguments(["--network", "base_sepolia"]), "base_sepolia");
-  assert.equal(networkFromArguments(["--network=base"]), "base");
+  assert.equal(networkFromArguments(["--network=base_sepolia"]), "base_sepolia");
 });
 
 test("deployment output follows the selected network", () => {
@@ -22,7 +22,7 @@ test("deployment output follows the selected network", () => {
 
 test("DEPLOYMENT_FILE overrides network-derived output", () => {
   const resolved = resolveDeploymentPath({
-    argv: ["--network", "base"],
+    argv: ["--network", "base_sepolia"],
     env: { DEPLOYMENT_FILE: "custom/deployment.json" }
   });
   assert.equal(resolved, path.resolve(process.cwd(), "custom/deployment.json"));
@@ -32,7 +32,7 @@ test("public deployment output requires and verifies an external manifest digest
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "deployment-output-"));
   try {
     const deploymentPath = path.join(directory, "manifest.json");
-    const bytes = Buffer.from(JSON.stringify({ network: "base", config: {} }));
+    const bytes = Buffer.from(JSON.stringify({ network: "base_sepolia", config: {} }));
     fs.writeFileSync(deploymentPath, bytes);
     const digest = crypto.createHash("sha256").update(bytes).digest("hex");
 
@@ -53,6 +53,25 @@ test("public deployment output requires and verifies an external manifest digest
         argv: []
       }).deploymentSha256,
       digest
+    );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("Base mainnet deployment output is rejected", () => {
+  assert.throws(
+    () => resolveDeploymentPath({ argv: ["--network", "base"], env: {} }),
+    /Unsupported deployment network: base/
+  );
+
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "deployment-output-"));
+  try {
+    const deploymentPath = path.join(directory, "manifest.json");
+    fs.writeFileSync(deploymentPath, JSON.stringify({ network: "base", config: {} }));
+    assert.throws(
+      () => loadDeployment({ env: { DEPLOYMENT_FILE: deploymentPath }, argv: [] }),
+      /Unsupported deployment network: base/
     );
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });

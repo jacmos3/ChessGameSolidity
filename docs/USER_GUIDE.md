@@ -1,6 +1,6 @@
 # Solidity Chess - User Guide
 
-> **Unsupported historical guide:** network, dispute, arbitrator, reward, and operational instructions below are not current and must not be used for deployment or fund handling. Use the root README and [`SECURITY_REMEDIATION.md`](SECURITY_REMEDIATION.md). Contract source and the canonical migration are authoritative.
+> **Unsupported historical guide:** network, dispute, arbitrator, reward, and operational instructions below are not current and must not be used for deployment or fund handling. Base mainnet support is disabled; Base Sepolia is experimental only. See [`ARCHIVE_NOTICE.md`](ARCHIVE_NOTICE.md).
 
 Welcome to Solidity Chess, a decentralized chess platform where you can play, earn, and participate in governance.
 

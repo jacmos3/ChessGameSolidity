@@ -57,7 +57,7 @@ const DELEGATE_CHANGED_TOPIC = web3.utils.keccak256(
 const PROPOSAL_CREATED_TOPIC = web3.utils.keccak256(
   "ProposalCreated(uint256,address,address[],uint256[],string[],bytes[],uint256,uint256,string)"
 );
-const PUBLIC_NETWORKS = new Set(["base", "base_sepolia"]);
+const PUBLIC_NETWORKS = new Set(["base_sepolia"]);
 const TOP_LEVEL_DEPLOYMENTS = [
   ["ChessToken", "ChessToken"],
   ["BondingManager", "BondingManager"],

@@ -15,15 +15,13 @@ import {
 const BONDING_MANAGER_ADDRESSES = {
 	1337: import.meta.env.VITE_BONDING_MANAGER_LOCAL || '',
 	5777: import.meta.env.VITE_BONDING_MANAGER_LOCAL || '',
-	84532: import.meta.env.VITE_BONDING_MANAGER_BASE_SEPOLIA || '',
-	8453: import.meta.env.VITE_BONDING_MANAGER_BASE || ''
+	84532: import.meta.env.VITE_BONDING_MANAGER_BASE_SEPOLIA || ''
 };
 
 const CHESS_TOKEN_ADDRESSES = {
 	1337: import.meta.env.VITE_CHESS_TOKEN_LOCAL || '',
 	5777: import.meta.env.VITE_CHESS_TOKEN_LOCAL || '',
-	84532: import.meta.env.VITE_CHESS_TOKEN_BASE_SEPOLIA || '',
-	8453: import.meta.env.VITE_CHESS_TOKEN_BASE || ''
+	84532: import.meta.env.VITE_CHESS_TOKEN_BASE_SEPOLIA || ''
 };
 
 const getBondingManagerAbi = () => loadContractAbi('BondingManager');

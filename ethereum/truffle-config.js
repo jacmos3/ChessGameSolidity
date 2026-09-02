@@ -24,7 +24,6 @@
  const localRpcPort = Number(process.env["LOCAL_RPC_PORT"] || "7545");
  const localRpcGas = Number(process.env["LOCAL_RPC_GAS"] || "25000000");
  const baseSepoliaRpcUrl = process.env["BASE_SEPOLIA_RPC_URL"];
- const baseRpcUrl = process.env["BASE_RPC_URL"];
  const {
    parseBaseFeeConfig
  } = require('./scripts/base-fee-config');
@@ -37,8 +36,7 @@
  const Web3 = require('web3');
 
  const publicChainIds = {
-   BASE_SEPOLIA: 84532,
-   BASE: 8453
+   BASE_SEPOLIA: 84532
  };
 
  const publicProvider = (rpcUrl, networkName) => {
@@ -104,16 +102,6 @@ module.exports = {
        confirmations: 2,
        timeoutBlocks: 200,
        skipDryRun: true
-     },
-     base: {
-       provider: () => publicProvider(baseRpcUrl, "BASE"),
-       network_id: 8453,
-       chain_id: 8453,
-       maxPriorityFeePerGas: baseMaxPriorityFeePerGas,
-       maxFeePerGas: baseMaxFeePerGas,
-       confirmations: 2,
-       timeoutBlocks: 200,
-       skipDryRun: false
      }
   },
 

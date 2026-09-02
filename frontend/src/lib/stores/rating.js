@@ -8,8 +8,7 @@ import { fetchAllRatingEntries, sortRatingEntries } from '../utils/ratingLeaderb
 const RATING_ADDRESSES = {
 	1337: import.meta.env.VITE_PLAYER_RATING_LOCAL || '',
 	5777: import.meta.env.VITE_PLAYER_RATING_LOCAL || '',
-	84532: import.meta.env.VITE_PLAYER_RATING_BASE_SEPOLIA || '',
-	8453: import.meta.env.VITE_PLAYER_RATING_BASE || ''
+	84532: import.meta.env.VITE_PLAYER_RATING_BASE_SEPOLIA || ''
 };
 
 const getPlayerRatingAbi = () => loadContractAbi('PlayerRating');

@@ -66,6 +66,7 @@ test('non-Base networks keep provider-managed fees', async () => {
 	};
 
 	assert.deepEqual(await getTransactionFeeOverrides(provider, 1337), {});
+	assert.deepEqual(await getTransactionFeeOverrides(provider, 8453), {});
 	assert.equal(providerCalled, false);
 });
 
@@ -82,11 +83,11 @@ test('Base fee overrides are derived from the latest block', async () => {
 	assert.equal(overrides.maxFeePerGas.toString(), '12000000');
 });
 
-test('Base transactions fail closed when EIP-1559 data is unavailable', async () => {
+test('Base Sepolia transactions fail closed when EIP-1559 data is unavailable', async () => {
 	const provider = { getBlock: async () => ({ baseFeePerGas: null }) };
 
 	await assert.rejects(
-		getTransactionFeeOverrides(provider, 8453),
+		getTransactionFeeOverrides(provider, 84532),
 		/Base provider did not return EIP-1559 fee data/
 	);
 });
